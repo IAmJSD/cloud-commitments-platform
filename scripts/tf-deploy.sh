@@ -4,6 +4,19 @@
 # Example: ./scripts/tf-deploy.sh aws dev
 # Example: ./scripts/tf-deploy.sh aws prod plan
 # Example: ./scripts/tf-deploy.sh aws dev apply -target=module.frontend
+#
+# Each provider is one flat Terraform root, terraform/environments/<provider>,
+# the same root the deploy workflows init and apply. The profile picks the
+# inputs, as the workflows do with -var-file and -backend-config:
+#   variables: terraform/profiles/<provider>/<profile>.tfvars
+#   backend:   terraform/environments/<provider>/backends/<profile>.tfbackend
+# Both are gitignored; copy them from the .example files next to them.
+#
+# The root is shared by every profile, so each profile gets its own Terraform
+# data directory (TF_DATA_DIR=<root>/.terraform/profiles/<profile>). That keeps
+# one profile's backend from being used for another: with a single .terraform,
+# `tf-deploy.sh aws prod` after `tf-deploy.sh aws dev` would apply the prod
+# variables to the dev state.
 
 set -euo pipefail
 
@@ -56,33 +69,62 @@ if [ -z "$PROVIDER" ] || [ -z "$PROFILE" ]; then
     exit 1
 fi
 
+# Both names become path components, so refuse anything that could leave the
+# intended directories.
+case "$PROVIDER" in
+    aws|azure|gcp) ;;
+    *)
+        log_error "Unknown provider: ${PROVIDER} (expected aws, azure or gcp)"
+        exit 1
+        ;;
+esac
+if ! [[ "$PROFILE" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+    log_error "Invalid profile name: ${PROFILE} (letters, digits, '-' and '_' only)"
+    exit 1
+fi
+
 # Paths
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE_FILE="${PROJECT_ROOT}/terraform/profiles/${PROVIDER}/${PROFILE}.tfvars"
-ENV_DIR="${PROJECT_ROOT}/terraform/environments/${PROVIDER}/${PROFILE}"
+ENV_DIR="${PROJECT_ROOT}/terraform/environments/${PROVIDER}"
+BACKEND_FILE="${ENV_DIR}/backends/${PROFILE}.tfbackend"
+DATA_DIR="${ENV_DIR}/.terraform/profiles/${PROFILE}"
 
 # Validate profile exists
 if [ ! -f "$PROFILE_FILE" ]; then
     log_error "Profile not found: $PROFILE_FILE"
     echo ""
     echo "Available ${PROVIDER} profiles:"
-    ls -1 "${PROJECT_ROOT}/terraform/profiles/${PROVIDER}/"*.tfvars 2>/dev/null | xargs -n1 basename | sed 's/.tfvars$//' || echo "  (none)"
+    found=0
+    for f in "${PROJECT_ROOT}/terraform/profiles/${PROVIDER}/"*.tfvars; do
+        [ -e "$f" ] || continue
+        echo "  $(basename "$f" .tfvars)"
+        found=1
+    done
+    [ "$found" -eq 1 ] || echo "  (none)"
     echo ""
     echo "Create a new profile:"
-    echo "  cp terraform/profiles/${PROVIDER}/dev.tfvars terraform/profiles/${PROVIDER}/${PROFILE}.tfvars"
+    echo "  cp terraform/profiles/${PROVIDER}/dev.tfvars.example terraform/profiles/${PROVIDER}/${PROFILE}.tfvars"
     exit 1
 fi
 
-# Validate environment directory exists
-if [ ! -d "$ENV_DIR" ]; then
-    log_warning "Environment directory not found: $ENV_DIR"
-    log_info "Creating environment directory..."
-    mkdir -p "$ENV_DIR"
+# The root is part of the repository; never create one.
+if [ ! -f "${ENV_DIR}/backend.tf" ]; then
+    log_error "Terraform root not found: ${ENV_DIR} (no backend.tf)"
+    exit 1
+fi
 
-    # Create symlink to provider main.tf
-    ln -sf "../../${PROVIDER}/main.tf" "${ENV_DIR}/main.tf"
-
-    log_success "Environment directory created"
+# Validate backend config exists
+if [ ! -f "$BACKEND_FILE" ]; then
+    log_error "Backend config not found: $BACKEND_FILE"
+    echo ""
+    echo "Create it from an example and fill in your state bucket/account:"
+    echo "  ls terraform/environments/${PROVIDER}/backends/*.tfbackend.example"
+    echo "  cp terraform/environments/${PROVIDER}/backends/dev.tfbackend.example terraform/environments/${PROVIDER}/backends/${PROFILE}.tfbackend"
+    if [ "$PROVIDER" = "aws" ]; then
+        echo "or have scripts/init-backend.sh create the bucket and write backends/<env>.tfbackend."
+    fi
+    exit 1
 fi
 
 # Display configuration
@@ -93,7 +135,9 @@ echo "Provider:     ${PROVIDER}"
 echo "Profile:      ${PROFILE}"
 echo "Action:       ${ACTION}"
 echo "Profile File: ${PROFILE_FILE}"
+echo "Backend:      ${BACKEND_FILE}"
 echo "Working Dir:  ${ENV_DIR}"
+echo "Data Dir:     ${DATA_DIR}"
 if [ -n "${AWS_PROFILE:-}" ]; then
     echo "AWS Profile:  ${AWS_PROFILE}"
 elif [ -n "${TF_VAR_aws_profile:-}" ]; then
@@ -106,11 +150,12 @@ echo ""
 
 # Change to environment directory
 cd "$ENV_DIR"
+export TF_DATA_DIR="$DATA_DIR"
 
 # Initialize Terraform if needed
-if [ ! -d ".terraform" ]; then
+if [ ! -d "$TF_DATA_DIR" ]; then
     log_info "Initializing Terraform..."
-    terraform init
+    terraform init -backend-config="$BACKEND_FILE"
     log_success "Terraform initialized"
     echo ""
 fi
@@ -130,7 +175,7 @@ case $ACTION in
         ;;
     destroy)
         log_warning "This will destroy all resources!"
-        read -p "Are you sure? (type 'yes' to confirm): " confirm
+        read -r -p "Are you sure? (type 'yes' to confirm): " confirm
         if [ "$confirm" = "yes" ]; then
             terraform destroy -var-file="$PROFILE_FILE" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
         else
@@ -152,8 +197,8 @@ case $ACTION in
         ;;
 esac
 
-# Show outputs after successful apply
-if [ $? -eq 0 ] && [ "$ACTION" = "apply" ]; then
+# Show outputs after successful apply (set -e has already exited on a failed one)
+if [ "$ACTION" = "apply" ]; then
     echo ""
     log_success "Deployment complete!"
     echo ""

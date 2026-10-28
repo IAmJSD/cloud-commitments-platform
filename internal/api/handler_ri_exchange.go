@@ -13,19 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/smithy-go"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
-	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
-	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
-	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
@@ -35,10 +29,9 @@ import (
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
 // getReshapeRecommendations needs. Scoped to this handler so mocks
-// stay small. The concrete *ec2svc.Client returned by
-// awsprovider.NewEC2ClientDirect already implements these methods
-// (Go structural typing), so the nil-factory fallback path casts it
-// directly.
+// stay small. The concrete EC2 client that newReshapeEC2Client
+// (provider_wiring.go) builds for the nil-factory fallback path
+// implements it.
 //
 // Cross-family alternatives no longer flow through here — they're
 // sourced from the cached AWS Cost Explorer purchase recommendations
@@ -47,7 +40,7 @@ import (
 // region's offered instance types (DescribeInstanceTypeOfferings), which
 // limit reshape targets to sizes the region actually sells.
 type reshapeEC2Client interface {
-	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	ListConvertibleReservedInstances(ctx context.Context) ([]ec2ConvertibleRI, error)
 	GetValidResourceTypes(ctx context.Context) ([]string, error)
 }
 
@@ -55,7 +48,7 @@ type reshapeEC2Client interface {
 // adapter that getReshapeRecommendations needs (the utilization
 // fetcher injected into the cache wrapper). Scoped identically.
 type reshapeRecsClient interface {
-	GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]recommendations.RIUtilization, error)
+	GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]riUtilization, error)
 }
 
 // buildReshapeEC2Client honors the injected factory when set, falling
@@ -65,7 +58,7 @@ func (h *Handler) buildReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
 	if h.reshapeEC2Factory != nil {
 		return h.reshapeEC2Factory(cfg)
 	}
-	return awsprovider.NewEC2ClientDirect(cfg)
+	return newReshapeEC2Client(cfg)
 }
 
 // buildReshapeRecsClient mirrors buildReshapeEC2Client for the
@@ -74,15 +67,15 @@ func (h *Handler) buildReshapeRecsClient(cfg aws.Config) reshapeRecsClient {
 	if h.reshapeRecsFactory != nil {
 		return h.reshapeRecsFactory(cfg)
 	}
-	return awsprovider.NewRecommendationsClientDirect(cfg)
+	return newReshapeRecsClient(cfg)
 }
 
 // targetOfferingsEC2Client is the narrow EC2 interface that
 // listTargetOfferings needs. Scoped here so tests can inject a tiny
-// stub without implementing the full ec2svc.Client surface.
+// stub without implementing the full concrete EC2 client surface.
 type targetOfferingsEC2Client interface {
-	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
-	ListTargetOfferings(ctx context.Context, params ec2svc.ListTargetOfferingsParams) ([]ec2svc.TargetOffering, error)
+	ListConvertibleReservedInstances(ctx context.Context) ([]ec2ConvertibleRI, error)
+	ListTargetOfferings(ctx context.Context, params ec2ListTargetOfferingsParams) ([]ec2TargetOffering, error)
 }
 
 // buildTargetOfferingsEC2Client honors the injected factory when set,
@@ -91,13 +84,13 @@ func (h *Handler) buildTargetOfferingsEC2Client(cfg aws.Config) targetOfferingsE
 	if h.targetOfferingsEC2Factory != nil {
 		return h.targetOfferingsEC2Factory(cfg)
 	}
-	return awsprovider.NewEC2ClientDirect(cfg)
+	return newTargetOfferingsEC2Client(cfg)
 }
 
 // TargetOfferingsResponse is the response for
 // GET /api/ri-exchange/target-offerings.
 type TargetOfferingsResponse struct {
-	Offerings []ec2svc.TargetOffering `json:"offerings"`
+	Offerings []ec2TargetOffering `json:"offerings"`
 }
 
 // offeringIDPattern matches a standard AWS offering UUID used for
@@ -112,7 +105,7 @@ var offeringIDPattern = regexp.MustCompile(
 //
 // The handler looks up the source RI from DescribeReservedInstances,
 // extracts its ProductDescription / Tenancy / Scope / Duration,
-// and passes those to ec2svc.ListTargetOfferings which
+// and passes those to the EC2 client's ListTargetOfferings, which
 // calls DescribeReservedInstancesOfferings with the same typed-field
 // shape used by PR #690. Instance type is intentionally omitted from
 // the query so AWS returns all valid target instance types -- the full
@@ -150,7 +143,7 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
 	}
 
-	var sourceRI *ec2svc.ConvertibleRI
+	var sourceRI *ec2ConvertibleRI
 	for i := range ris {
 		if ris[i].ReservedInstanceID == sourceRIID {
 			sourceRI = &ris[i]
@@ -172,8 +165,8 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 // targetOfferingsForSource lists the exchange targets for sourceRI, keeping a
 // zonal RI's targets in its own AZ. A zone refusal (the source RI's scope and
 // AZ disagree) is a 422.
-func targetOfferingsForSource(ctx context.Context, ec2Client targetOfferingsEC2Client, sourceRI *ec2svc.ConvertibleRI) ([]ec2svc.TargetOffering, error) {
-	offerings, err := ec2Client.ListTargetOfferings(ctx, ec2svc.ListTargetOfferingsParams{
+func targetOfferingsForSource(ctx context.Context, ec2Client targetOfferingsEC2Client, sourceRI *ec2ConvertibleRI) ([]ec2TargetOffering, error) {
+	offerings, err := ec2Client.ListTargetOfferings(ctx, ec2ListTargetOfferingsParams{
 		ProductDescription: sourceRI.ProductDescription,
 		Tenancy:            sourceRI.InstanceTenancy,
 		Scope:              sourceRI.Scope,
@@ -214,10 +207,11 @@ func isOfferingZoneRefusal(err error) bool {
 
 // azureExchangeClient is the narrow interface that listExchangeableAzureRIs,
 // getAzureCompatibleOfferings, and executeAzureExchange need from the Azure
-// compute client. Satisfied by *azurecompute.ComputeClient; a stub can be
-// injected via Handler.azureExchangeFactory for tests.
+// compute client. Satisfied by the compute client newAzureExchangeClient
+// (provider_wiring.go) builds; a stub can be injected via
+// Handler.azureExchangeFactory for tests.
 type azureExchangeClient interface {
-	ListExchangeableReservations(ctx context.Context) ([]azurecompute.ExchangeableReservation, error)
+	ListExchangeableReservations(ctx context.Context) ([]azureExchangeableReservation, error)
 
 	// CalculateExchange prices a proposed exchange without committing it.
 	// Both getAzureCompatibleOfferings (read-only quote) and
@@ -225,8 +219,8 @@ type azureExchangeClient interface {
 	// only executeAzureExchange ever calls ExecuteExchange, and only with
 	// the SessionID this same call just returned -- see executeAzureExchange's
 	// doc comment for why a client-supplied session is never trusted.
-	CalculateExchange(ctx context.Context, sources []azurecompute.ExchangeableReservation, targets []azurecompute.ExchangeTarget) (*azurecompute.ExchangePreview, []azurecompute.CompatibleOffering, error)
-	ExecuteExchange(ctx context.Context, sessionID string) (*azurecompute.ExchangeResult, error)
+	CalculateExchange(ctx context.Context, sources []azureExchangeableReservation, targets []azureExchangeTarget) (*azureExchangePreview, []azureCompatibleOffering, error)
+	ExecuteExchange(ctx context.Context, sessionID string) (*azureExchangeResult, error)
 }
 
 // buildAzureExchangeClient returns the injected factory result when one has
@@ -288,9 +282,7 @@ func (h *Handler) azureExchangeClientForAccount(ctx context.Context, subscriptio
 		return nil, fmt.Errorf("azure: resolve credentials for subscription %q: %w", subscriptionID, err)
 	}
 
-	// Region is left empty -- ListExchangeableReservations uses the tenant-
-	// wide armreservations API which is not scoped to a region.
-	return azurecompute.NewClient(cred, subscriptionID, ""), nil
+	return newAzureExchangeClient(cred, subscriptionID), nil
 }
 
 // listExchangeableAzureRIs returns active Azure VM reservations that are
@@ -362,7 +354,7 @@ func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.Lamb
 		// No Azure account configured for this subscription (or no Azure accounts
 		// registered at all). Return an empty list rather than a 500 so the page
 		// renders a "no reservations" state instead of an opaque error banner.
-		return &ExchangeableAzureRIsResponse{Reservations: []azurecompute.ExchangeableReservation{}}, nil
+		return &ExchangeableAzureRIsResponse{Reservations: []azureExchangeableReservation{}}, nil
 	}
 
 	reservations, err := client.ListExchangeableReservations(ctx)
@@ -394,9 +386,9 @@ func (h *Handler) listExchangeableAzureRIs(ctx context.Context, req *events.Lamb
 // (requireAzureSourceOwnership refuses cross-subscription sources), so
 // returning the wider tenant listing here would just be the enumeration leak
 // issue #1656 describes.
-func filterAzureReservationsBySubscription(reservations []azurecompute.ExchangeableReservation, subscriptionID string) []azurecompute.ExchangeableReservation {
+func filterAzureReservationsBySubscription(reservations []azureExchangeableReservation, subscriptionID string) []azureExchangeableReservation {
 	scope := azureBillingScopeID(subscriptionID)
-	filtered := make([]azurecompute.ExchangeableReservation, 0, len(reservations))
+	filtered := make([]azureExchangeableReservation, 0, len(reservations))
 	for i := range reservations {
 		if strings.EqualFold(reservations[i].BillingScopeID, scope) {
 			filtered = append(filtered, reservations[i])
@@ -422,7 +414,7 @@ func filterAzureReservationsBySubscription(reservations []azurecompute.Exchangea
 // the dropped reservation/billing-scope identifiers, are safe to log --
 // logging the identifiers would just relocate the disclosure this filter
 // exists to prevent.
-func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *Session, reservations []azurecompute.ExchangeableReservation) ([]azurecompute.ExchangeableReservation, error) {
+func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *Session, reservations []azureExchangeableReservation) ([]azureExchangeableReservation, error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
@@ -433,7 +425,7 @@ func (h *Handler) filterAzureReservationsByScope(ctx context.Context, session *S
 		// normalize here too rather than letting an admin session alone see
 		// {"reservations": null}.
 		if reservations == nil {
-			reservations = []azurecompute.ExchangeableReservation{}
+			reservations = []azureExchangeableReservation{}
 		}
 		return reservations, nil
 	}
@@ -476,8 +468,8 @@ func azureScopeIndex(accounts []config.CloudAccount) map[string]config.CloudAcco
 // scope allows (AccountScope.Allows). Fails closed: a reservation with no
 // BillingScopeID, or one that resolves to no registered CloudAccount, is
 // dropped rather than kept.
-func filterReservationsByScopeIndex(reservations []azurecompute.ExchangeableReservation, scopeToAccount map[string]config.CloudAccount, allowed auth.AccountScope) []azurecompute.ExchangeableReservation {
-	filtered := make([]azurecompute.ExchangeableReservation, 0, len(reservations))
+func filterReservationsByScopeIndex(reservations []azureExchangeableReservation, scopeToAccount map[string]config.CloudAccount, allowed auth.AccountScope) []azureExchangeableReservation {
+	filtered := make([]azureExchangeableReservation, 0, len(reservations))
 	for i := range reservations {
 		r := reservations[i]
 		if r.BillingScopeID == "" {
@@ -540,8 +532,8 @@ type AzureCompatibleOfferingsRequestBody struct {
 // though execute never trusts a client-supplied session -- see
 // executeAzureExchange).
 type AzureCompatibleOfferingsResponse struct {
-	Offerings []azurecompute.CompatibleOffering `json:"offerings"`
-	Preview   *azurecompute.ExchangePreview     `json:"preview"`
+	Offerings []azureCompatibleOffering `json:"offerings"`
+	Preview   *azureExchangePreview     `json:"preview"`
 }
 
 // AzureExecuteExchangeRequestBody is the request body for the execute
@@ -565,20 +557,6 @@ type AzureExecuteExchangeResponse struct {
 	NetPayableCurrency string   `json:"net_payable_currency,omitempty"`
 	RefundsTotal       *float64 `json:"refunds_total"`
 	PurchasesTotal     *float64 `json:"purchases_total"`
-}
-
-// azureReservationTermFromString converts the HTTP-layer term string to the
-// typed SDK enum, rejecting anything outside armreservations'
-// PossibleReservationTermValues(). No fallback: an unrecognized term is a
-// 400, never silently coerced to a default term (feedback_sdk_enum_string_literals).
-func azureReservationTermFromString(s string) (armreservations.ReservationTerm, error) {
-	term := armreservations.ReservationTerm(s)
-	for _, t := range armreservations.PossibleReservationTermValues() {
-		if t == term {
-			return term, nil
-		}
-	}
-	return "", fmt.Errorf("unsupported term %q", s)
 }
 
 // validateAzureExchangeSources checks the shared sources[] shape for both
@@ -695,12 +673,12 @@ func validateAzureExecuteBody(body AzureExecuteExchangeRequestBody) error {
 
 // toAzureExchangeSources keeps the server-listed reservation metadata and
 // applies the requested quantities after requireAzureSourceOwnership succeeds.
-func toAzureExchangeSources(sources []AzureExchangeSourceBody, owned []azurecompute.ExchangeableReservation) []azurecompute.ExchangeableReservation {
-	byID := make(map[string]azurecompute.ExchangeableReservation, len(owned))
+func toAzureExchangeSources(sources []AzureExchangeSourceBody, owned []azureExchangeableReservation) []azureExchangeableReservation {
+	byID := make(map[string]azureExchangeableReservation, len(owned))
 	for i := range owned {
 		byID[strings.ToLower(owned[i].ReservationID)] = owned[i]
 	}
-	out := make([]azurecompute.ExchangeableReservation, len(sources))
+	out := make([]azureExchangeableReservation, len(sources))
 	for i, s := range sources {
 		out[i] = byID[strings.ToLower(s.ReservationID)]
 		out[i].Quantity = s.Quantity
@@ -714,15 +692,15 @@ func toAzureExchangeSources(sources []AzureExchangeSourceBody, owned []azurecomp
 // body (see azureBillingScopeID). validateAzureExchangeTargets must be
 // called first; a term error here indicates an internal invariant break
 // rather than a fresh client mistake.
-func toAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) ([]azurecompute.ExchangeTarget, error) {
-	out := make([]azurecompute.ExchangeTarget, len(targets))
+func toAzureExchangeTargets(targets []AzureExchangeTargetBody, subscriptionID string) ([]azureExchangeTarget, error) {
+	out := make([]azureExchangeTarget, len(targets))
 	scope := azureBillingScopeID(subscriptionID)
 	for i, t := range targets {
 		term, err := azureReservationTermFromString(t.Term)
 		if err != nil {
 			return nil, fmt.Errorf("targets[%d]: %w", i, err)
 		}
-		out[i] = azurecompute.ExchangeTarget{
+		out[i] = azureExchangeTarget{
 			SKU:            t.SKU,
 			Location:       t.Location,
 			Term:           term,
@@ -822,7 +800,7 @@ const unknownRegionConstraint = "unknown-region"
 // means specifically "owned, but Azure reported no region". The missing-source
 // branch is kept as a fail-closed default for any future caller that reaches
 // this function without that guarantee.
-func exchangeRegions(targets []AzureExchangeTargetBody, sources []AzureExchangeSourceBody, owned []azurecompute.ExchangeableReservation) []string {
+func exchangeRegions(targets []AzureExchangeTargetBody, sources []AzureExchangeSourceBody, owned []azureExchangeableReservation) []string {
 	regionByID := make(map[string]string, len(owned))
 	for i := range owned {
 		regionByID[strings.ToLower(owned[i].ReservationID)] = owned[i].Region
@@ -934,7 +912,7 @@ func (h *Handler) lookupAzureAccount(ctx context.Context, subscriptionID string)
 // "belongs to someone else", so this cannot be used to enumerate another
 // subscription's reservation IDs (same posture as
 // requireAzureSubscriptionScope).
-func requireAzureSourceOwnership(owned []azurecompute.ExchangeableReservation, sources []AzureExchangeSourceBody, subscriptionID string) error {
+func requireAzureSourceOwnership(owned []azureExchangeableReservation, sources []AzureExchangeSourceBody, subscriptionID string) error {
 	scope := azureBillingScopeID(subscriptionID)
 	byID := make(map[string]string, len(owned))
 	for i := range owned {
@@ -955,7 +933,7 @@ func requireAzureSourceOwnership(owned []azurecompute.ExchangeableReservation, s
 // applies requireAzureSourceOwnership. Split from the pure check so the
 // authorization rule itself is testable without a client, and so both the
 // pricing and execute endpoints share one code path.
-func checkAzureSourceOwnership(ctx context.Context, client azureExchangeClient, sources []AzureExchangeSourceBody, subscriptionID string) ([]azurecompute.ExchangeableReservation, error) {
+func checkAzureSourceOwnership(ctx context.Context, client azureExchangeClient, sources []AzureExchangeSourceBody, subscriptionID string) ([]azureExchangeableReservation, error) {
 	owned, err := listOwnedAzureReservations(ctx, client)
 	if err != nil {
 		return nil, err
@@ -976,7 +954,7 @@ func checkAzureSourceOwnership(ctx context.Context, client azureExchangeClient, 
 // region, and permitting the exchange would restore the very gaps those
 // checks exist to close. 502 rather than 500 because the upstream dependency,
 // not this service, is what failed.
-func listOwnedAzureReservations(ctx context.Context, client azureExchangeClient) ([]azurecompute.ExchangeableReservation, error) {
+func listOwnedAzureReservations(ctx context.Context, client azureExchangeClient) ([]azureExchangeableReservation, error) {
 	owned, err := client.ListExchangeableReservations(ctx)
 	if err != nil {
 		logging.Errorf("azure exchange source ownership lookup failed: %v", err)
@@ -1076,7 +1054,7 @@ const azureMaxPurchaseAmountCurrency = "USD"
 //     It also sharpens exchangeRegions: every source reaching it is
 //     known-owned, so unknownRegionConstraint means only "owned, but Azure
 //     reported no region" rather than doubling as "not yours" or "not real".
-func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, string, error) {
+func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (client azureExchangeClient, sources []azureExchangeableReservation, accountID string, err error) {
 	// The subscription's CloudAccount is resolved once and that one row
 	// feeds the scope check, the client's credentials and the constraint
 	// AccountIDs (issue #311), so the three cannot see different rows.
@@ -1096,7 +1074,7 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 		return nil, nil, "", scopeErr
 	}
 
-	client, err := h.azureExchangeClientForAccount(ctx, body.SubscriptionID, account)
+	client, err = h.azureExchangeClientForAccount(ctx, body.SubscriptionID, account)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
@@ -1113,7 +1091,7 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 		return nil, nil, "", ownErr
 	}
 
-	accountID := azureExchangeAccountID(account)
+	accountID = azureExchangeAccountID(account)
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
 		return nil, nil, "", err
 	}
@@ -1204,7 +1182,7 @@ func (h *Handler) checkAzureExecuteConstraints(ctx context.Context, session *Ses
 // azureExchangeClient.CalculateExchange contract never returns (nil, nil,
 // nil), but a future implementation of the interface making that mistake
 // must not panic this handler.
-func checkAzureExchangeMoneyGuardrails(preview *azurecompute.ExchangePreview, maxRat *big.Rat, currency string) error {
+func checkAzureExchangeMoneyGuardrails(preview *azureExchangePreview, maxRat *big.Rat, currency string) error {
 	if preview == nil {
 		return fmt.Errorf("internal error: CalculateExchange returned a nil preview")
 	}
@@ -1399,10 +1377,6 @@ func (h *Handler) getBaseAWSConfig(ctx context.Context) (aws.Config, error) {
 	return h.awsCfg, h.awsCfgErr
 }
 
-func loadDefaultAWSConfig(ctx context.Context) (aws.Config, error) {
-	return awsconfig.LoadDefaultConfig(ctx)
-}
-
 // loadAWSConfigWithRegion returns the cached base config, optionally overriding the region.
 func (h *Handler) loadAWSConfigWithRegion(ctx context.Context, region string) (aws.Config, error) {
 	cfg, err := h.getBaseAWSConfig(ctx)
@@ -1554,13 +1528,13 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
 		return nil, sErr
 	} else if !inScope {
-		return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
+		return &ConvertibleRIsResponse{Instances: []ec2ConvertibleRI{}}, nil
 	}
 
 	if inScope, sErr := h.checkListRIsAccountIDParam(ctx, req.QueryStringParameters); sErr != nil {
 		return nil, sErr
 	} else if !inScope {
-		return &ConvertibleRIsResponse{Instances: []ec2svc.ConvertibleRI{}}, nil
+		return &ConvertibleRIsResponse{Instances: []ec2ConvertibleRI{}}, nil
 	}
 
 	region := req.QueryStringParameters["region"]
@@ -1569,7 +1543,7 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	ec2Client := awsprovider.NewEC2ClientDirect(cfg)
+	ec2Client := newReshapeEC2Client(cfg)
 	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
@@ -1598,7 +1572,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	if sErr != nil {
 		return nil, sErr
 	} else if !inScope {
-		return &RIUtilizationResponse{Utilization: []recommendations.RIUtilization{}}, nil
+		return &RIUtilizationResponse{Utilization: []riUtilization{}}, nil
 	}
 
 	region := req.QueryStringParameters["region"]
@@ -1614,7 +1588,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	}
 
 	recsAdapter := h.buildReshapeRecsClient(cfg)
-	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
+	fetch := func(fetchCtx context.Context, days int) ([]riUtilization, error) {
 		return recsAdapter.GetRIUtilization(fetchCtx, days, region)
 	}
 	cacheKey := config.RIUtilizationCacheKey{CloudAccountID: cloudAccountID, Region: region, LookbackDays: lookbackDays}
@@ -1640,7 +1614,7 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 // only rows the scope gate in the caller has authorized; unknown ids are
 // dropped, so an unregistered or out-of-scope member's RIs stay hidden.
 // Unrestricted sessions keep every row and make no extra AWS call.
-func (h *Handler) restrictUtilizationToDeploymentRIs(ctx context.Context, session *Session, cfg aws.Config, utilization []recommendations.RIUtilization) ([]recommendations.RIUtilization, error) {
+func (h *Handler) restrictUtilizationToDeploymentRIs(ctx context.Context, session *Session, cfg aws.Config, utilization []riUtilization) ([]riUtilization, error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
@@ -1656,7 +1630,7 @@ func (h *Handler) restrictUtilizationToDeploymentRIs(ctx context.Context, sessio
 	for i := range own {
 		ownIDs[own[i].ReservedInstanceID] = struct{}{}
 	}
-	visible := make([]recommendations.RIUtilization, 0, len(utilization))
+	visible := make([]riUtilization, 0, len(utilization))
 	for i := range utilization {
 		if _, ok := ownIDs[utilization[i].ReservedInstanceID]; ok {
 			visible = append(visible, utilization[i])
@@ -1696,7 +1670,7 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 // the single implementation of the convertible RI monthly cost formula shared
 // with internal/server. Its error wraps ricost.ErrNonPositiveDuration or
 // ricost.ErrNoPricing, and callers must exclude the RI.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
+func monthlyCostFromConvertibleRI(ri ec2ConvertibleRI) (float64, error) {
 	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
@@ -1712,7 +1686,7 @@ func excludedRIReason(err error) string {
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
 // RIs whose monthly cost cannot be computed are returned as excluded rather
 // than dropped silently, so the response can surface them.
-func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, []ExcludedRI) {
+func convertToExchangeTypes(instances []ec2ConvertibleRI, utilData []riUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, []ExcludedRI) {
 	var excluded []ExcludedRI
 	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	for i := range instances {
@@ -1822,7 +1796,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 
 	recsAdapter := h.buildReshapeRecsClient(cfg)
-	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
+	fetch := func(fetchCtx context.Context, days int) ([]riUtilization, error) {
 		return recsAdapter.GetRIUtilization(fetchCtx, days, p.region)
 	}
 	cacheKey := config.RIUtilizationCacheKey{CloudAccountID: cloudAccountID, Region: p.region, LookbackDays: p.lookbackDays}
@@ -1876,7 +1850,7 @@ func (h *Handler) attachReshapeStaleness(ctx context.Context, resp *ReshapeRecom
 
 // firstNonEmptyCurrency returns the first RI CurrencyCode set, or "" when none
 // is, so the response omits currency_code instead of claiming USD (#361).
-func firstNonEmptyCurrency(instances []ec2svc.ConvertibleRI) string {
+func firstNonEmptyCurrency(instances []ec2ConvertibleRI) string {
 	for _rvc := range instances {
 		inst := instances[_rvc]
 		if inst.CurrencyCode != "" {
@@ -2134,18 +2108,18 @@ func mapAWSExchangeError(opMsg string, err error) error {
 
 // ConvertibleRIsResponse holds the list of convertible RIs.
 type ConvertibleRIsResponse struct {
-	Instances []ec2svc.ConvertibleRI `json:"instances"`
+	Instances []ec2ConvertibleRI `json:"instances"`
 }
 
 // ExchangeableAzureRIsResponse holds the list of Azure VM reservations that
 // are eligible for the cross-SKU/cross-region exchange flow.
 type ExchangeableAzureRIsResponse struct {
-	Reservations []azurecompute.ExchangeableReservation `json:"reservations"`
+	Reservations []azureExchangeableReservation `json:"reservations"`
 }
 
 // RIUtilizationResponse holds per-RI utilization data.
 type RIUtilizationResponse struct {
-	Utilization []recommendations.RIUtilization `json:"utilization"`
+	Utilization []riUtilization `json:"utilization"`
 }
 
 // ReshapeRecommendationsResponse holds reshape recommendations.

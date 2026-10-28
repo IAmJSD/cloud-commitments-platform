@@ -49,6 +49,7 @@ jest.mock('../state', () => ({
 
 import * as api from '../api';
 import * as state from '../state';
+import { flushPromises } from './flush-promises';
 
 // Mock toast so alert() -> showToast() migrations (finding 11-L3) don't
 // require a real DOM toast implementation in jsdom.
@@ -124,7 +125,7 @@ describe('Auth Module', () => {
 
       loginForm?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.login).toHaveBeenCalledWith('test@example.com', 'password123');
     });
@@ -142,7 +143,7 @@ describe('Auth Module', () => {
 
       loginForm?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const errorDiv = document.getElementById('login-error');
       expect(errorDiv?.classList.contains('hidden')).toBe(false);
@@ -160,7 +161,7 @@ describe('Auth Module', () => {
       emailInput.value = email;
       passwordInput.value = password;
       loginForm?.dispatchEvent(new Event('submit', { cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
       const errorDiv = document.getElementById('login-error');
       return errorDiv?.textContent;
     }
@@ -257,7 +258,7 @@ describe('Auth Module', () => {
 
       loginForm?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(reloadPage).toHaveBeenCalled();
     });
@@ -279,7 +280,7 @@ describe('Auth Module', () => {
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const resetEmail = document.getElementById('reset-email');
       const sendBtn = document.getElementById('send-reset-btn');
@@ -292,11 +293,11 @@ describe('Auth Module', () => {
       await showLoginModal();
       document.getElementById('forgot-password-link')
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       (document.getElementById('reset-email') as HTMLInputElement).value = 'test@example.com';
       document.getElementById('login-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.requestPasswordReset).toHaveBeenCalledWith('test@example.com');
       expect(api.login).not.toHaveBeenCalled();
@@ -307,7 +308,7 @@ describe('Auth Module', () => {
       await showLoginModal();
       document.getElementById('forgot-password-link')
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // Both handlers write synchronously and the reset handler writes last,
       // so a stale login handler is only visible in the mutation records.
@@ -317,7 +318,7 @@ describe('Auth Module', () => {
       });
       observer.observe(document.getElementById('login-modal')!, { childList: true, characterData: true, subtree: true });
       document.getElementById('login-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await flushPromises();
       observer.disconnect();
 
       expect(writes.some(text => /Enter email|Enter password/.test(text))).toBe(false);
@@ -331,7 +332,7 @@ describe('Auth Module', () => {
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const resetEmail = document.getElementById('reset-email') as HTMLInputElement;
       const sendBtn = document.getElementById('send-reset-btn');
@@ -339,7 +340,7 @@ describe('Auth Module', () => {
       resetEmail.value = 'test@example.com';
       sendBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.requestPasswordReset).toHaveBeenCalledWith('test@example.com');
       // No alert(): the lingering-modal bug came from stacking an
@@ -361,12 +362,12 @@ describe('Auth Module', () => {
 
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const resetEmail = document.getElementById('reset-email') as HTMLInputElement;
       resetEmail.value = 'test@example.com';
       document.getElementById('send-reset-btn')?.click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       document.getElementById('reset-confirmation-close')?.click();
 
@@ -379,12 +380,12 @@ describe('Auth Module', () => {
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const sendBtn = document.getElementById('send-reset-btn');
       sendBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // Issue #457: error is now inline in the modal, not via alert().
       const errorDiv = document.getElementById('login-error');
@@ -402,7 +403,7 @@ describe('Auth Module', () => {
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const resetEmail = document.getElementById('reset-email') as HTMLInputElement;
       const sendBtn = document.getElementById('send-reset-btn');
@@ -410,7 +411,7 @@ describe('Auth Module', () => {
       resetEmail.value = 'test@example.com';
       sendBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const errorDiv = document.getElementById('login-error');
       expect(errorDiv?.textContent).toBe('Failed to send reset email. Please try again.');
@@ -424,12 +425,12 @@ describe('Auth Module', () => {
       const forgotLink = document.getElementById('forgot-password-link');
       forgotLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const backLink = document.getElementById('back-to-login-link');
       backLink?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       expect(reloadPage).toHaveBeenCalled();
     });
@@ -652,7 +653,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const modal = document.getElementById('profile-modal');
       expect(modal).toBeTruthy();
@@ -665,7 +666,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const emailInput = document.getElementById('profile-email') as HTMLInputElement;
       expect(emailInput.value).toBe('test@example.com');
@@ -677,7 +678,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const cancelBtn = document.getElementById('profile-cancel');
       cancelBtn?.click();
@@ -692,12 +693,12 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // alert() replaced by showToast() (finding 11-L3).
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Please enter your current password to save changes', kind: 'error' }));
@@ -710,7 +711,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
       const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
@@ -723,7 +724,7 @@ describe('Auth Module', () => {
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // Password mismatch is surfaced inline (parity with reset / setup
       // flows). `alert` must not fire for this path.
@@ -740,7 +741,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
       const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
@@ -754,7 +755,7 @@ describe('Auth Module', () => {
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const errorDiv = document.getElementById('profile-password-error') as HTMLElement;
       expect(errorDiv.textContent).toBe('Password must be at least 12 characters long');
@@ -769,7 +770,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // All five indicators must be present and prefixed `profile-req-`
       // so they cannot collide with the reset / setup flows.
@@ -786,7 +787,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
 
@@ -817,7 +818,7 @@ describe('Auth Module', () => {
 
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // Dirty the indicators and the inline error.
       const newPasswordInput = document.getElementById('profile-new-password') as HTMLInputElement;
@@ -831,7 +832,7 @@ describe('Auth Module', () => {
       const cancelBtn = document.getElementById('profile-cancel');
       cancelBtn?.click();
       userEmail.click();
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       // Re-query after reopen so we assert on the live DOM node, not a
       // potentially stale pre-close reference.
@@ -856,7 +857,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const emailInput = document.getElementById('profile-email') as HTMLInputElement;
       const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
@@ -867,7 +868,7 @@ describe('Auth Module', () => {
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await flushPromises();
 
       expect(api.apiRequest).toHaveBeenCalledWith('/auth/profile', expect.objectContaining({
         method: 'PUT',
@@ -888,7 +889,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const emailInput = document.getElementById('profile-email') as HTMLInputElement;
       const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
@@ -899,7 +900,7 @@ describe('Auth Module', () => {
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await flushPromises();
 
       // alert() replaced by showToast() (finding 11-L3).
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to update profile: Update failed', kind: 'error' }));
@@ -912,7 +913,7 @@ describe('Auth Module', () => {
       const userEmail = document.getElementById('user-email-display') as HTMLElement;
       userEmail.click();
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await flushPromises();
 
       const emailInput = document.getElementById('profile-email') as HTMLInputElement;
       const currentPasswordInput = document.getElementById('profile-current-password') as HTMLInputElement;
@@ -927,7 +928,7 @@ describe('Auth Module', () => {
       const form = document.getElementById('profile-form');
       form?.dispatchEvent(new Event('submit', { cancelable: true }));
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await flushPromises();
 
       const callArgs = (api.apiRequest as jest.Mock).mock.calls[0];
       const bodyData = JSON.parse(callArgs[1].body);
@@ -1026,7 +1027,7 @@ describe('Auth Module', () => {
       await showResetPasswordModal('expired-token');
       document.getElementById('reset-expired-request-new')?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await flushPromises();
 
       // The reset modal is gone; the login modal is up.
       expect(document.getElementById('reset-password-modal')).toBeNull();

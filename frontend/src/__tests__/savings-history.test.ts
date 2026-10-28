@@ -40,6 +40,7 @@ import { loadSavingsHistory, initSavingsHistory, savingsChart, convertFromMonthl
 import { getSavingsAnalytics } from '../api';
 import * as state from '../state';
 import { Chart } from 'chart.js';
+import { flushPromises } from './flush-promises';
 
 describe('Savings History Module', () => {
   beforeEach(() => {
@@ -597,7 +598,7 @@ describe('Savings History Module', () => {
       periodSelect.value = '30d';
       periodSelect.dispatchEvent(new Event('change'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(getSavingsAnalytics).toHaveBeenCalled();
     });
@@ -610,7 +611,7 @@ describe('Savings History Module', () => {
       const refreshBtn = document.getElementById('refresh-savings-btn') as HTMLButtonElement;
       refreshBtn.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(getSavingsAnalytics).toHaveBeenCalled();
     });
@@ -1447,7 +1448,7 @@ describe('Savings History Module', () => {
       unitSelect.value = 'hourly';
       unitSelect.dispatchEvent(new Event('change'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
       expect(getSavingsAnalytics).toHaveBeenCalled();
     });
 
@@ -1461,7 +1462,7 @@ describe('Savings History Module', () => {
       (getSavingsAnalytics as jest.Mock).mockClear();
       unitSelect.dispatchEvent(new Event('change'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
       // Should fire exactly once (no stacked duplicate listeners)
       expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
     });
@@ -1544,7 +1545,7 @@ describe('Savings History Module', () => {
       const series = document.getElementById('savings-series') as HTMLSelectElement;
       series.value = 'cumulative';
       series.dispatchEvent(new Event('change'));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
       expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
     });
   });

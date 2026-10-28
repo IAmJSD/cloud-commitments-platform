@@ -172,6 +172,10 @@ resource "google_cloud_run_v2_service" "main" {
             SCHEDULED_TASK_AUTH_MODE     = local.scheduled_task_auth_mode
             SCHEDULED_TASK_OIDC_AUDIENCE = local.scheduled_task_oidc_audiences
             SCHEDULED_TASK_OIDC_SUBJECTS = local.scheduled_task_oidc_subjects
+            # The Cloud Scheduler cron (UTC) of the recommendations job, so
+            # GET /api/recommendations/freshness can report the next run
+            # (next_collection_at, #756). Empty when the job is not created.
+            RECOMMENDATION_SCHEDULE = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
           },
           local.archera_env,
           var.additional_env_vars

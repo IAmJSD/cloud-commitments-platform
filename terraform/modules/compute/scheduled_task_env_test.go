@@ -54,6 +54,26 @@ func envDefaultProblem(task, def string) string {
 	return ""
 }
 
+// moduleDefaultProblem checks the module's own enable default against the
+// opt-in policy, so the module cannot switch an opt-in task on for a caller
+// that does not pass the variable. An undeclared variable is reported by the
+// declaration check instead.
+func moduleDefaultProblem(modVars, task string) string {
+	enable := taskVars[task].enable
+	body, ok := blockOnce(modVars, `variable\s+"`+enable+`"\s*\{`)
+	if !ok {
+		return ""
+	}
+	m := defaultRe.FindStringSubmatch(body)
+	if m == nil {
+		return "module variable " + enable + " has no default"
+	}
+	if prob := envDefaultProblem(task, m[1]); prob != "" {
+		return "module variables.tf: " + prob
+	}
+	return ""
+}
+
 // blockOnce returns the body of the single block matching header; zero or
 // several matches report not-found so a duplicate cannot be silently ignored.
 func blockOnce(src, header string) (string, bool) {
@@ -83,6 +103,9 @@ func envProblems(modVars, envVars, compute, blockName string, wired map[string]b
 			continue
 		}
 		tv := taskVars[task]
+		if prob := moduleDefaultProblem(modVars, task); prob != "" {
+			problems = append(problems, prob)
+		}
 		for _, v := range []string{tv.enable, tv.schedule} {
 			if !strings.Contains(modVars, `variable "`+v+`"`) {
 				problems = append(problems, "module variables.tf does not declare "+v)
@@ -124,9 +147,11 @@ func tfvarsProblems(name, src string) []string {
 }
 
 // sweepProblems cross-checks dir/sweeps.tf: each sweep target must point at
-// the rule with the same key, and (Lambda) so must its invoke permission. An
+// the rule with the same key and name the task by its key. A Lambda target
+// sends `action = each.key` and needs an invoke permission on the same rule;
+// a Fargate (ECS) target runs `--task each.key` under an invoker role. An
 // absent file is fine; an existing one must have the blocks.
-func sweepProblems(dir string, needPermission bool) ([]string, error) {
+func sweepProblems(dir string, lambda bool) ([]string, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, "sweeps.tf"))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -136,7 +161,13 @@ func sweepProblems(dir string, needPermission bool) ([]string, error) {
 	src := stripComments(string(raw))
 	var problems []string
 	forEach := regexp.MustCompile(`(?m)^\s*for_each\s*=\s*local\.active_sweeps\s*$`)
-	action := regexp.MustCompile(`action\s*=\s*each\.key\b`)
+	taskRefs := []*regexp.Regexp{regexp.MustCompile(`action\s*=\s*each\.key\b`)}
+	if !lambda {
+		taskRefs = []*regexp.Regexp{
+			regexp.MustCompile(`"--task",\s*each\.key\b`),
+			regexp.MustCompile(`(?m)^\s*role_arn\s*=\s*aws_iam_role\.\w+\[0\]\.arn\s*$`),
+		}
+	}
 	check := func(typ, attr, ref string, extra ...*regexp.Regexp) {
 		body, ok := blockOnce(src, `resource\s+"`+typ+`"\s+"sweep"\s*\{`)
 		if !ok {
@@ -160,8 +191,8 @@ func sweepProblems(dir string, needPermission bool) ([]string, error) {
 		}
 	}
 	check("aws_cloudwatch_event_rule", "", "")
-	check("aws_cloudwatch_event_target", "rule", "name", action)
-	if needPermission {
+	check("aws_cloudwatch_event_target", "rule", "name", taskRefs...)
+	if lambda {
 		check("aws_lambda_permission", "source_arn", "arn")
 	}
 	return problems, nil
@@ -225,7 +256,7 @@ func TestNoTfvarsDisablesDefaultOnTask(t *testing.T) {
 // text that satisfy envProblems for one task with the given enable default.
 func envFixture(task, def string) (mod, env, compute string) {
 	tv := taskVars[task]
-	mod = fmt.Sprintf("variable %q {}\nvariable %q {}\n", tv.enable, tv.schedule)
+	mod = fmt.Sprintf("variable %q {\n  default = %s\n}\nvariable %q {}\n", tv.enable, def, tv.schedule)
 	env = fmt.Sprintf("variable %q {\n  default = %s\n}\nvariable %q {\n  default = \"x\"\n}\n", tv.enable, def, tv.schedule)
 	compute = fmt.Sprintf("module \"m\" {\n  %[1]s = var.%[1]s\n  %[2]s = var.%[2]s\n}\n", tv.enable, tv.schedule)
 	return mod, env, compute
@@ -245,6 +276,12 @@ func TestEnvChecksNegatives(t *testing.T) {
 		"opt-in task opt-in":             {fire, "false", same, false, ""},
 		"opt-in task defaulting true":    {fire, "true", same, true, ""},
 		"default-on task defaulting off": {cr, "false", same, true, ""},
+		"opt-in task on in the module only": {fire, "false", func(m, e, c string) (string, string, string) {
+			return strings.Replace(m, "default = false", "default = true", 1), e, c
+		}, true, ""},
+		"module enable var without a default": {cr, "true", func(m, e, c string) (string, string, string) {
+			return strings.Replace(m, "  default = true\n", "", 1), e, c
+		}, true, ""},
 		"pass-through not name-identical": {cr, "true", func(m, e, c string) (string, string, string) {
 			return m, e, strings.Replace(c, "= var.recommendation_schedule", "= var.other", 1)
 		}, true, ""},
@@ -308,6 +345,7 @@ func TestSweepCrossWiring(t *testing.T) {
 	const rule = "resource \"aws_cloudwatch_event_rule\" \"sweep\" {\n  for_each = local.active_sweeps\n}\n"
 	const target = "resource \"aws_cloudwatch_event_target\" \"sweep\" {\n  for_each = local.active_sweeps\n  rule%s= aws_cloudwatch_event_rule.sweep[%s].name\n  input = jsonencode({ action = each.key })\n}\n"
 	const perm = "resource \"aws_lambda_permission\" \"sweep\" {\n  for_each = local.active_sweeps\n  source_arn%s= aws_cloudwatch_event_rule.sweep[%s].arn\n}\n"
+	const ecsTarget = "resource \"aws_cloudwatch_event_target\" \"sweep\" {\n  for_each = local.active_sweeps\n  rule     = aws_cloudwatch_event_rule.sweep[each.key].name\n  role_arn = aws_iam_role.eventbridge_sweeps[0].arn\n  input = jsonencode({ containerOverrides = [{ command = [\"./cudly\", \"--task\", each.key] }] })\n}\n"
 	good, goodPerm := fmt.Sprintf(target, " ", "each.key"), fmt.Sprintf(perm, " ", "each.key")
 	for name, c := range map[string]struct {
 		src      string
@@ -316,7 +354,11 @@ func TestSweepCrossWiring(t *testing.T) {
 	}{
 		"aligned":                 {rule + fmt.Sprintf(target, "      ", "each.key") + fmt.Sprintf(perm, "   ", "each.key"), true, false},
 		"unaligned":               {rule + good + goodPerm, true, false},
-		"fargate needs no perm":   {rule + good, false, false},
+		"fargate needs no perm":   {rule + ecsTarget, false, false},
+		"fargate task not key":    {rule + strings.Replace(ecsTarget, `"--task", each.key`, `"--task", "cleanup"`, 1), false, true},
+		"fargate no invoker role": {rule + strings.Replace(ecsTarget, "role_arn", "# role_arn", 1), false, true},
+		"fargate lambda target":   {rule + good, false, true},
+		"lambda ecs target":       {rule + ecsTarget + goodPerm, true, true},
 		"wrong key":               {rule + fmt.Sprintf(target, " ", "each.value.rule") + goodPerm, true, true},
 		"wrong resource type":     {rule + strings.Replace(good, "event_rule", "event_target", 1) + goodPerm, true, true},
 		"missing permission":      {rule + good, true, true},
