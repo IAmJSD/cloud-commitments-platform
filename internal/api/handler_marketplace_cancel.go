@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
@@ -178,16 +177,16 @@ func (h *Handler) cancelListing(ctx context.Context, purchaseID string, seen *co
 // endedMarketplaceListing reports whether listingID has already ended on AWS,
 // read after its cancel failed. A role-assumption failure would fail the read
 // the same way, so it is not retried.
-func endedMarketplaceListing(ctx context.Context, ec2Client marketplaceEC2Client, listingID string, cancelErr error) (ec2svc.MarketplaceListingResult, bool) {
+func endedMarketplaceListing(ctx context.Context, ec2Client marketplaceEC2Client, listingID string, cancelErr error) (ec2MarketplaceListingResult, bool) {
 	if isRoleAssumptionFailure(cancelErr) {
-		return ec2svc.MarketplaceListingResult{}, false
+		return ec2MarketplaceListingResult{}, false
 	}
 	listing, err := ec2Client.DescribeMarketplaceListing(ctx, listingID)
 	if err != nil || !isDeadListingState(listing.State) {
-		return ec2svc.MarketplaceListingResult{}, false
+		return ec2MarketplaceListingResult{}, false
 	}
 	logging.Warnf("marketplace: listing %s is already %s on AWS (cancel said: %v); recording it", listingID, listing.State, cancelErr)
-	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: listing.State}, true
+	return ec2MarketplaceListingResult{ListingID: listingID, State: listing.State}, true
 }
 
 // resolveListingAttempt records listingID in state on a pending row, only
