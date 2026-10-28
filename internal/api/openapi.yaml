@@ -6656,6 +6656,23 @@ components:
             Minimum instance/node count a recommendation must carry to be
             surfaced (GUI/persisted equivalent of the CLI --min-count flag).
             0 (default) disables the filter.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row was first saved. Present on stored
+            rows (GET /api/config, GET /api/config/service/{provider}/{service});
+            omitted from a purchase plan's services entries. Ignored on write.
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row last changed, set by the database on
+            every save of the row, including a changed global default being
+            copied onto it. Present and omitted exactly like created_at;
+            ignored on write.
 
     CommitmentOptionsResponse:
       type: object

@@ -226,6 +226,13 @@ type ServiceConfig struct {
 	// RecommendationRecord.Count. 0 (the default) disables the filter,
 	// matching the CLI flag's 0-no-floor semantics.
 	MinCount int `json:"min_count,omitempty" dynamodbav:"min_count,omitempty"`
+	// CreatedAt and UpdatedAt are the service_configs row's own timestamps
+	// (issue #8), read-only. The store fills them on every read and from the
+	// upsert's RETURNING clause; no write path stores a caller's value. Nil
+	// (omitted from JSON) on a config that is not a stored row, such as an
+	// entry of a purchase plan's services map.
+	CreatedAt *time.Time `json:"created_at,omitempty" dynamodbav:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty" dynamodbav:"updated_at,omitempty"`
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.

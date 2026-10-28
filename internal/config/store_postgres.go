@@ -403,7 +403,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 // in scanServiceConfig order.
 const serviceConfigColumns = `provider, service, enabled, term, payment, coverage, ramp_schedule,
 		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count`
+		       include_types, exclude_types, min_count, created_at, updated_at`
 
 const getServiceConfigQuery = `SELECT ` + serviceConfigColumns + `
 		FROM service_configs
@@ -425,10 +425,22 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 // locking clause) via q (the pool or a transaction). A missing row is reported
 // as an error wrapping ErrNotFound.
 func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, provider, service string) (*ServiceConfig, error) {
-	var config ServiceConfig
-	var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
+	config, err := scanServiceConfig(q.QueryRow(ctx, query, provider, service))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
+		}
+		return nil, fmt.Errorf("failed to get service config: %w", err)
+	}
+	return config, nil
+}
 
-	err := q.QueryRow(ctx, query, provider, service).Scan(
+// scanServiceConfig scans one row selected with serviceConfigColumns,
+// including the row's created_at and updated_at stamps (issue #8).
+func scanServiceConfig(row pgx.Row) (*ServiceConfig, error) {
+	var config ServiceConfig
+	var createdAt, updatedAt time.Time
+	err := row.Scan(
 		&config.Provider,
 		&config.Service,
 		&config.Enabled,
@@ -436,30 +448,21 @@ func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, pr
 		&config.Payment,
 		&config.Coverage,
 		&config.RampSchedule,
-		&includeEngines,
-		&excludeEngines,
-		&includeRegions,
-		&excludeRegions,
-		&includeTypes,
-		&excludeTypes,
+		&config.IncludeEngines,
+		&config.ExcludeEngines,
+		&config.IncludeRegions,
+		&config.ExcludeRegions,
+		&config.IncludeTypes,
+		&config.ExcludeTypes,
 		&config.MinCount,
+		&createdAt,
+		&updatedAt,
 	)
-
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
-		}
-		return nil, fmt.Errorf("failed to get service config: %w", err)
+		return nil, err
 	}
-
-	// Map arrays (handle nil)
-	config.IncludeEngines = includeEngines
-	config.ExcludeEngines = excludeEngines
-	config.IncludeRegions = includeRegions
-	config.ExcludeRegions = excludeRegions
-	config.IncludeTypes = includeTypes
-	config.ExcludeTypes = excludeTypes
-
+	config.CreatedAt = &createdAt
+	config.UpdatedAt = &updatedAt
 	return &config, nil
 }
 
@@ -538,9 +541,11 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 			exclude_types = $13,
 			min_count = $14,
 			updated_at = NOW()
+		RETURNING created_at, updated_at
 	`
 
-	_, err := q.Exec(ctx, query,
+	var createdAt, updatedAt time.Time
+	err := q.QueryRow(ctx, query,
 		config.Provider,
 		config.Service,
 		config.Enabled,
@@ -555,12 +560,16 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 		config.IncludeTypes,
 		config.ExcludeTypes,
 		config.MinCount,
-	)
+	).Scan(&createdAt, &updatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to save service config: %w", err)
 	}
 
+	// The stamps always come from the row as written, so a caller-supplied
+	// value (a PUT body carrying created_at) never survives the save.
+	config.CreatedAt = &createdAt
+	config.UpdatedAt = &updatedAt
 	return nil
 }
 
@@ -573,10 +582,7 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 // defense-in-depth against a compromised admin inserting millions of rows
 // and matches the sibling GetPendingExecutions limit.
 func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error) {
-	query := `
-		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
-		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count
+	query := `SELECT ` + serviceConfigColumns + `
 		FROM service_configs
 		ORDER BY provider, service
 		LIMIT 1000
@@ -590,37 +596,11 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 
 	configs := make([]ServiceConfig, 0)
 	for rows.Next() {
-		var config ServiceConfig
-		var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
-
-		err := rows.Scan(
-			&config.Provider,
-			&config.Service,
-			&config.Enabled,
-			&config.Term,
-			&config.Payment,
-			&config.Coverage,
-			&config.RampSchedule,
-			&includeEngines,
-			&excludeEngines,
-			&includeRegions,
-			&excludeRegions,
-			&includeTypes,
-			&excludeTypes,
-			&config.MinCount,
-		)
+		config, err := scanServiceConfig(rows)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan service config: %w", err)
 		}
-
-		config.IncludeEngines = includeEngines
-		config.ExcludeEngines = excludeEngines
-		config.IncludeRegions = includeRegions
-		config.ExcludeRegions = excludeRegions
-		config.IncludeTypes = includeTypes
-		config.ExcludeTypes = excludeTypes
-
-		configs = append(configs, config)
+		configs = append(configs, *config)
 	}
 
 	return configs, rows.Err()
@@ -868,9 +848,9 @@ func (s *PostgresStore) updatePurchasePlanGuardedTx(ctx context.Context, tx pgx.
 		return err
 	}
 	// Marshal services and ramp_schedule to JSONB
-	servicesJSON, err := json.Marshal(plan.Services)
+	servicesJSON, err := marshalPlanServices(plan.Services)
 	if err != nil {
-		return fmt.Errorf("failed to marshal services: %w", err)
+		return err
 	}
 
 	rampScheduleJSON, err := json.Marshal(plan.RampSchedule)
