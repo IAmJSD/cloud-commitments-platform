@@ -16,6 +16,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/accountpredicate"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -2648,74 +2649,27 @@ func activePurchaseHistoryQuery(asOf time.Time, accountIDs []string, externalIDs
 	return query, args
 }
 
-// appendAccountPredicate pulls the dual-column account-predicate arg-building
-// branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
+// appendAccountPredicate appends the dual-column account predicate to the
+// GetPurchaseHistoryFiltered / GetActivePurchaseHistory AND chain.
 //
 // Either input alone is sufficient: a UUID-only filter still matches
 // NULL-cloud_account_id rows via the resolved external IDs, and an
 // external-only filter matches UUID-only rows once the caller resolves them.
 // Both empty returns conds/args unchanged (no account clause -> all accounts).
 //
-// The external-id half is grouped per provider so each external number is only
-// compared against rows of its own provider:
-//
-//	(cloud_account_id = ANY($u)
-//	   OR ((provider = '' OR LOWER(provider) = LOWER($p1)) AND account_id = ANY($e1))
-//	   OR ((provider = '' OR LOWER(provider) = LOWER($p2)) AND account_id = ANY($e2)))
-//
-// This preserves the (provider, external_id) pairing so a filter for aws/123
-// never matches azure/123 rows. The "" provider key (legacy raw external
-// number, unknown provider) matches account_id with no provider gate. Providers
-// are sorted for deterministic SQL. The OR is wrapped in parentheses so it
-// composes with the surrounding AND chain.
-//
-// The provider gate is case-insensitive, and a row whose stored provider is
-// empty (unknown) matches on account_id alone, the same way the "" filter key
-// does. Without this, a NULL-cloud_account_id row stored as "AWS" or "" was
-// silently dropped even though its account_id matched (issue #24). A row
-// stored under a different, non-empty provider is still excluded.
+// The predicate is built by internal/accountpredicate, shared with the
+// analytics reads in internal/analytics and internal/api (issue #120). This
+// path uses the case-insensitive provider gate, where a row whose stored
+// provider is empty (unknown) matches on account_id alone; without it a
+// NULL-cloud_account_id row stored as "AWS" or "" was silently dropped even
+// though its account_id matched (issue #24). A row stored under a different,
+// non-empty provider is still excluded.
 func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
-	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
+	clause, args := accountpredicate.Build(args, accountIDs, externalIDsByProvider, accountpredicate.ProviderCaseInsensitiveOrUnknown)
+	if clause == "" {
 		return conds, args
 	}
-	var ors []string
-	if len(accountIDs) > 0 {
-		args = append(args, accountIDs)
-		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
-	}
-	for _, provider := range sortedProviderKeys(externalIDsByProvider) {
-		exts := externalIDsByProvider[provider]
-		if len(exts) == 0 {
-			continue
-		}
-		if provider == "" {
-			args = append(args, exts)
-			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
-			continue
-		}
-		args = append(args, provider)
-		providerArg := len(args)
-		args = append(args, exts)
-		ors = append(ors, fmt.Sprintf(
-			"((provider = '' OR LOWER(provider) = LOWER($%d)) AND account_id = ANY($%d))",
-			providerArg, len(args)))
-	}
-	if len(ors) == 0 {
-		return conds, args
-	}
-	conds = append(conds, "("+strings.Join(ors, " OR ")+")")
-	return conds, args
-}
-
-// sortedProviderKeys returns the map keys in ascending order so the generated
-// SQL (and its bind-arg ordering) is deterministic across calls and testable.
-func sortedProviderKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return append(conds, clause), args
 }
 
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the

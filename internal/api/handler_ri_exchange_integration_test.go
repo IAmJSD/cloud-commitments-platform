@@ -174,8 +174,9 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 			"same-family m5.* alternatives must be excluded, got %s", alt.InstanceType)
 	}
 
-	// Verify the RI utilization cache row landed in Postgres.
-	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
+	// Verify the RI utilization cache row landed in Postgres, under the
+	// unattributed account key the default resolver ("") yields.
+	entry, err := store.GetRIUtilizationCache(ctx, config.RIUtilizationCacheKey{Region: "us-east-1", LookbackDays: 30})
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	var cached []recommendations.RIUtilization

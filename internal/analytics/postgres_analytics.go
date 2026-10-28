@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/accountpredicate"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,51 +41,16 @@ var _ AnalyticsStore = (*PostgresAnalyticsStore)(nil)
 // leading binds; the account array binds (if any) are appended after them and
 // the returned clause references them by the right positions.
 //
-// savings_snapshots carries two account identifiers, either of which may be the
-// only one populated on a row: account_id (the cloud-provider external number)
-// and cloud_account_id (the cloud_accounts UUID FK, NULL on the AWS ambient and
-// legacy rows). Matching only one column silently drops rows that carry only the
-// other, so we OR both, with the external-id half grouped per provider so a
-// reused external number across providers cannot leak the wrong rows. This
-// mirrors api.accountFilterClause on the live purchase_history path
-// (issue #701/#498/#866). Both empty -> "TRUE" (caller must enforce scope).
+// The predicate itself lives in internal/accountpredicate, shared with the
+// purchase_history read paths in internal/api and internal/config (issue
+// #120), so a fix to it is one edit. Both empty -> "TRUE" (caller must enforce
+// scope).
 func accountFilterClause(accountUUIDs []string, accountExternalIDsByProvider map[string][]string, baseArgs []any) (clause string, args []any) {
-	args = baseArgs
-	var ors []string
-	if len(accountUUIDs) > 0 {
-		args = append(args, accountUUIDs)
-		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
-	}
-	for _, provider := range sortedProviderKeys(accountExternalIDsByProvider) {
-		exts := accountExternalIDsByProvider[provider]
-		if len(exts) == 0 {
-			continue
-		}
-		if provider == "" {
-			args = append(args, exts)
-			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
-			continue
-		}
-		args = append(args, provider)
-		providerArg := len(args)
-		args = append(args, exts)
-		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
-	}
-	if len(ors) == 0 {
+	clause, args = accountpredicate.Build(baseArgs, accountUUIDs, accountExternalIDsByProvider, accountpredicate.ProviderExact)
+	if clause == "" {
 		return "TRUE", args
 	}
-	return "(" + strings.Join(ors, " OR ") + ")", args
-}
-
-// sortedProviderKeys returns the map keys in ascending order so generated SQL
-// (and its bind-arg ordering) is deterministic and testable.
-func sortedProviderKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return clause, args
 }
 
 // ==========================================
