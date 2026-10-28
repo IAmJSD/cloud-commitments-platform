@@ -26,8 +26,12 @@ import (
 )
 
 // CloudAccountRequest is the request body for create/update account endpoints.
+// Enabled and AWSIsOrgRoot are pointers so an omitted (or null) key can be
+// told apart from an explicit false: create treats absent as false, update
+// keeps the stored value (issue #151, A02-013).
 type CloudAccountRequest struct {
 	Enabled                 *bool  `json:"enabled"`
+	AWSIsOrgRoot            *bool  `json:"aws_is_org_root"`
 	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
 	AzureClientID           string `json:"azure_client_id"`
 	Provider                string `json:"provider"`
@@ -46,7 +50,6 @@ type CloudAccountRequest struct {
 	GCPProjectID            string `json:"gcp_project_id"`
 	GCPClientEmail          string `json:"gcp_client_email"`
 	GCPAuthMode             string `json:"gcp_auth_mode"`
-	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
@@ -544,7 +547,6 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 		AWSExternalID:           req.AWSExternalID,
 		AWSBastionID:            req.AWSBastionID,
 		AWSWebIdentityTokenFile: req.AWSWebIdentityTokenFile,
-		AWSIsOrgRoot:            req.AWSIsOrgRoot,
 		AzureSubscriptionID:     req.AzureSubscriptionID,
 		AzureTenantID:           req.AzureTenantID,
 		AzureClientID:           req.AzureClientID,
@@ -558,8 +560,25 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 	if req.Enabled != nil {
 		a.Enabled = *req.Enabled
 	}
+	if req.AWSIsOrgRoot != nil {
+		a.AWSIsOrgRoot = *req.AWSIsOrgRoot
+	}
 
 	return a
+}
+
+// keepOmittedAccountFlags copies the stored enabled and aws_is_org_root
+// values onto an update built by cloudAccountFromRequest when the request
+// omitted them (or sent null), so a PUT that only renames an account or
+// rotates its role does not silently disable it or clear its org-root flag.
+// An explicit false in the request is still applied.
+func keepOmittedAccountFlags(account, existing *config.CloudAccount, req CloudAccountRequest) {
+	if req.Enabled == nil {
+		account.Enabled = existing.Enabled
+	}
+	if req.AWSIsOrgRoot == nil {
+		account.AWSIsOrgRoot = existing.AWSIsOrgRoot
+	}
 }
 
 // getAccount handles GET /api/accounts/:id.
@@ -624,6 +643,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 	}
 
 	account := cloudAccountFromRequest(req)
+	keepOmittedAccountFlags(account, existing, req)
 	account.ID = id
 	account.CreatedAt = existing.CreatedAt
 	account.CreatedBy = existing.CreatedBy

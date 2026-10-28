@@ -4482,9 +4482,10 @@ paths:
       summary: Replace a cloud account (admin only)
       description: >
         Replaces the account's configuration with the request body; fields
-        omitted from the body are cleared, and enabled defaults to false.
-        The provider is validated but not changed. Stored credentials are
-        not affected.
+        omitted from the body are cleared, except enabled and
+        aws_is_org_root, which keep their stored values when omitted or
+        null (send false to clear them). The provider is validated but not
+        changed. Stored credentials are not affected.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -7780,7 +7781,11 @@ components:
           format: email
         enabled:
           type: boolean
-          description: Defaults to false when omitted.
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false
+            disables the account.
         aws_auth_mode:
           type: string
           enum: [access_keys, role_arn, bastion, workload_identity_federation]
@@ -7799,6 +7804,11 @@ components:
             contain "..".
         aws_is_org_root:
           type: boolean
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false clears
+            the flag.
         azure_subscription_id:
           type: string
         azure_tenant_id:
