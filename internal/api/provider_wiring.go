@@ -55,7 +55,8 @@ func loadDefaultAWSConfig(ctx context.Context) (aws.Config, error) {
 	return awsconfig.LoadDefaultConfig(ctx)
 }
 
-// newReshapeEC2Client builds the EC2 client that lists convertible RIs.
+// newReshapeEC2Client builds the EC2 client that lists convertible RIs and
+// the region's offered instance types.
 func newReshapeEC2Client(cfg aws.Config) reshapeEC2Client {
 	return awsprovider.NewEC2ClientDirect(cfg)
 }

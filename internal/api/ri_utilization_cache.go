@@ -51,8 +51,8 @@ func resolveDurationEnv(name string, def time.Duration) time.Duration {
 // that the cache needs. Declared here (and satisfied structurally) so
 // tests can inject a fake without depending on the full store.
 type riUtilizationCacheStore interface {
-	GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error)
-	UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error
+	GetRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey) (*config.RIUtilizationCacheEntry, error)
+	UpsertRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error
 }
 
 // riUtilizationFetcher is the signature of the function that retrieves
@@ -69,8 +69,10 @@ type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]riUtili
 // the next reader.
 //
 // The singleflight.Group ensures that N concurrent stale-reads for the
-// same (region, lookback) tuple collapse to exactly one background
-// refresh, avoiding a thundering-herd CE fan-out.
+// same (account, region, lookback) tuple collapse to exactly one
+// background refresh, avoiding a thundering-herd CE fan-out. The account
+// is part of the key so one account's refresh never stands in for
+// another's (issue #120).
 type riUtilizationCache struct {
 	store    riUtilizationCacheStore
 	sf       singleflight.Group
@@ -90,16 +92,19 @@ func newRIUtilizationCache(store riUtilizationCacheStore, isLambda bool) *riUtil
 // Fetch errors are NOT cached — a transient CE 5xx must not lock the
 // dashboard out for the full TTL. A cache-write error after a fresh
 // fetch is logged but not returned — the caller already has data.
+//
+// cacheKey.CloudAccountID must identify the account whose credentials
+// fetch uses, so the row and the in-flight refresh are never shared
+// between accounts.
 func (c *riUtilizationCache) getOrFetch(
 	ctx context.Context,
-	region string,
-	lookbackDays int,
+	cacheKey config.RIUtilizationCacheKey,
 	softTTL, hardTTL time.Duration,
 	fetch riUtilizationFetcher,
 ) ([]riUtilization, error) {
-	key := fmt.Sprintf("%s#%d", region, lookbackDays)
+	key := riUtilizationFlightKey(cacheKey)
 
-	entry, err := c.store.GetRIUtilizationCache(ctx, region, lookbackDays)
+	entry, err := c.store.GetRIUtilizationCache(ctx, cacheKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ri utilization cache: %w", err)
 	}
@@ -111,7 +116,7 @@ func (c *riUtilizationCache) getOrFetch(
 			// Corrupt payload — log and fall through to a fresh
 			// fetch so one bad row can't lock the dashboard out
 			// for an entire TTL window.
-			logging.Warnf("ri_utilization_cache: corrupt payload for region=%q lookback=%d: %v", region, lookbackDays, unmarshalErr)
+			logging.Warnf("ri_utilization_cache: corrupt payload (key=%s): %v", key, unmarshalErr)
 		} else {
 			switch {
 			case age < softTTL:
@@ -123,7 +128,7 @@ func (c *riUtilizationCache) getOrFetch(
 					break
 				}
 				logging.Infof("ri_utilization_cache: serving stale + kicking background refresh (key=%s age=%s)", key, age)
-				c.kickBackgroundRefresh(key, region, lookbackDays, fetch)
+				c.kickBackgroundRefresh(key, cacheKey, fetch)
 				return data, nil
 			default:
 				logging.Infof("ri_utilization_cache: entry beyond hard expiry; synchronous refetch (key=%s age=%s)", key, age)
@@ -132,13 +137,20 @@ func (c *riUtilizationCache) getOrFetch(
 		}
 	}
 
-	data, err := fetch(ctx, lookbackDays)
+	data, err := fetch(ctx, cacheKey.LookbackDays)
 	if err != nil {
 		return nil, err
 	}
 
-	c.storePayload(ctx, region, lookbackDays, data)
+	c.storePayload(ctx, cacheKey, data)
 	return data, nil
+}
+
+// riUtilizationFlightKey is the singleflight key for one cache row. Every
+// field of the row key is in it, quoted so a region string can never make
+// two different keys print the same.
+func riUtilizationFlightKey(k config.RIUtilizationCacheKey) string {
+	return fmt.Sprintf("%q#%q#%d", k.CloudAccountID, k.Region, k.LookbackDays)
 }
 
 // kickBackgroundRefresh runs a single-flighted refetch in a detached
@@ -146,7 +158,7 @@ func (c *riUtilizationCache) getOrFetch(
 // one in-flight refresh. The refresh uses a fresh context (not the
 // caller's) because the caller's ctx may be canceled when the HTTP
 // response completes, which would abort the refresh prematurely.
-func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackDays int, fetch riUtilizationFetcher) {
+func (c *riUtilizationCache) kickBackgroundRefresh(key string, cacheKey config.RIUtilizationCacheKey, fetch riUtilizationFetcher) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -158,12 +170,12 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 
-			data, err := fetch(ctx, lookbackDays)
+			data, err := fetch(ctx, cacheKey.LookbackDays)
 			if err != nil {
 				logging.Warnf("ri_utilization_cache: background refresh failed (key=%s): %v", key, err)
 				return nil, err
 			}
-			c.storePayload(ctx, region, lookbackDays, data)
+			c.storePayload(ctx, cacheKey, data)
 			return nil, nil
 		}); sfErr != nil {
 			// error already logged inside the fetch func above
@@ -174,14 +186,14 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 
 // storePayload marshals and upserts the fresh data. Errors are logged
 // but not returned — callers have the data in hand either way.
-func (c *riUtilizationCache) storePayload(ctx context.Context, region string, lookbackDays int, data []riUtilization) {
+func (c *riUtilizationCache) storePayload(ctx context.Context, cacheKey config.RIUtilizationCacheKey, data []riUtilization) {
 	payload, err := json.Marshal(data)
 	if err != nil {
-		logging.Warnf("ri_utilization_cache: failed to marshal payload for region=%q lookback=%d: %v", region, lookbackDays, err)
+		logging.Warnf("ri_utilization_cache: failed to marshal payload (key=%s): %v", riUtilizationFlightKey(cacheKey), err)
 		return
 	}
-	if err := c.store.UpsertRIUtilizationCache(ctx, region, lookbackDays, payload, time.Now()); err != nil {
-		logging.Warnf("ri_utilization_cache: failed to upsert row for region=%q lookback=%d: %v", region, lookbackDays, err)
+	if err := c.store.UpsertRIUtilizationCache(ctx, cacheKey, payload, time.Now()); err != nil {
+		logging.Warnf("ri_utilization_cache: failed to upsert row (key=%s): %v", riUtilizationFlightKey(cacheKey), err)
 	}
 }
 

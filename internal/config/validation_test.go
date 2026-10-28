@@ -1184,6 +1184,21 @@ func TestPurchasePlan_CheckNoMultiStepSavingsPlans(t *testing.T) {
 	}
 }
 
+func TestIsValidRIExchangeMode(t *testing.T) {
+	for mode, want := range map[string]bool{
+		"manual":    true,
+		"auto":      true,
+		"":          false,
+		"Auto":      false,
+		"MANUAL":    false,
+		"automatic": false,
+		" auto":     false,
+		"manual ":   false,
+	} {
+		assert.Equal(t, want, IsValidRIExchangeMode(mode), "mode %q", mode)
+	}
+}
+
 // Only purchase plans refuse a 0% target (platform#523); service and global
 // coverage keep accepting 0.
 func TestCoverageZeroStillValidOutsidePlans(t *testing.T) {

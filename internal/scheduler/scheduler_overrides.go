@@ -24,9 +24,12 @@ import (
 //   - The existing applySuppressions helper sets the precedent of post-DB
 //     filtering inside ListRecommendations.
 //
-// Errors from the resolver are non-fatal: we log and pass the un-filtered
-// list through, matching applySuppressions. Over-show is the safer default
-// (an unconfigured-looking dashboard is recoverable; a blanked one is not).
+// Errors from the resolver are returned with the un-filtered list, and the
+// page read paths log them and pass that list through. Over-show is the safer
+// default for this display filter (an unconfigured-looking dashboard is
+// recoverable; a blanked one is not). Suppressions differ: they guard against
+// buying the same commitment twice, so their read failure fails the page
+// (issue #111).
 func (s *Scheduler) applyAccountOverrides(ctx context.Context, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
 	if len(recs) == 0 {
 		return recs, nil
