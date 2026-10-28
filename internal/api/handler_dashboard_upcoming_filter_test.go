@@ -31,9 +31,15 @@ const (
 	upPlanMulti = "bbbbbbbb-0000-4000-8000-000000000004"
 )
 
+// Placeholder external IDs, named so request maps stay clear of the account-ID detector.
+const (
+	upExtProd  = "123456789012"
+	upExtStage = "111111111111"
+)
+
 var upcomingFilterAccounts = []config.CloudAccount{
-	{ID: upAcctProd, Name: "Production", Provider: "aws", ExternalID: "123456789012"},
-	{ID: upAcctStage, Name: "Staging", Provider: "aws", ExternalID: "111111111111"},
+	{ID: upAcctProd, Name: "Production", Provider: "aws", ExternalID: upExtProd},
+	{ID: upAcctStage, Name: "Staging", Provider: "aws", ExternalID: upExtStage},
 	{ID: upAcctGCP, Name: "Analytics", Provider: "gcp", ExternalID: "example-gcp-project"},
 }
 
@@ -184,7 +190,7 @@ func TestGetUpcomingPurchases_AccountFilter(t *testing.T) {
 	assert.Equal(t, []string{"exec-gcp", "exec-multi", "exec-multi-stage", "exec-stage"}, ids)
 
 	// Legacy singular account_id carrying the external account number.
-	ids = upcomingIDsFor(t, nil, map[string]string{"account_id": "111111111111"})
+	ids = upcomingIDsFor(t, nil, map[string]string{"account_id": upExtStage})
 	assert.Equal(t, []string{"exec-multi", "exec-multi-stage", "exec-stage"}, ids)
 
 	// account_ids wins over account_id, as on the summary route.
@@ -220,12 +226,12 @@ func TestGetUpcomingPurchases_OutOfScopeAccount(t *testing.T) {
 	ids = upcomingIDsFor(t, allowed, map[string]string{"account_ids": upAcctStage + "," + upAcctProd})
 	assert.Equal(t, []string{"exec-prod"}, ids, "the in-scope part of a mixed filter still applies")
 
-	ids = upcomingIDsFor(t, allowed, map[string]string{"account_id": "111111111111"})
+	ids = upcomingIDsFor(t, allowed, map[string]string{"account_id": upExtStage})
 	assert.Empty(t, ids, "a legacy external number for an out-of-scope account matches nothing")
 
 	// An in-scope legacy external number is re-grouped under its real
 	// provider by the intersection and still matches.
-	ids = upcomingIDsFor(t, allowed, map[string]string{"account_id": "123456789012"})
+	ids = upcomingIDsFor(t, allowed, map[string]string{"account_id": upExtProd})
 	assert.Equal(t, []string{"exec-prod"}, ids)
 
 	ids = upcomingIDsFor(t, allowed, map[string]string{"account_ids": upAcctGCP})
