@@ -55,7 +55,9 @@ for (const width of [1280, 390]) {
 
     // On a phone the page header and the KPI tiles fill the first screen, so
     // the table starts under the action box; scroll it up as a reader would.
-    if (width < 768) await tbl.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    // Instant, not the page's smooth scroll-behavior: the boxes below are
+    // measured right away and must not catch the scroll mid-animation.
+    if (width < 768) await tbl.evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior }));
 
     // The strip is on screen, right above the action box.
     const bar = page.locator(strip);
