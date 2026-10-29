@@ -29,7 +29,7 @@ import type {
   ExcludedRI,
   Provider,
 } from './api';
-import { openModal, closeModal } from './modal';
+import { openModal, closeModal, createModalHeader } from './modal';
 import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
 import { statusBadgeHtml } from './lib/status-badge';
 import { canAccess } from './permissions';
@@ -1159,7 +1159,8 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   const h3 = document.createElement('h3');
   h3.textContent = 'RI Exchange';
   content.textContent = '';
-  content.appendChild(h3);
+  // "Close dialog", not "Close": a finished exchange relabels Cancel to Close.
+  content.appendChild(createModalHeader(h3, { closeLabel: 'Close dialog' }));
 
   // RI ID display
   const riRow = document.createElement('div');

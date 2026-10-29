@@ -929,7 +929,10 @@
         <!-- Create/Edit Plan Modal -->
         <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="plan-modal-title">Create Purchase Plan</h2>
+                <div class="modal-header">
+                    <h2 id="plan-modal-title">Create Purchase Plan</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-plan-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <div class="plan-editor-layout">
                     <form id="plan-form">
                         <input type="hidden" id="plan-id">
@@ -1106,7 +1109,10 @@
         <!-- Purchase Detail Modal -->
         <div id="purchase-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="purchase-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="purchase-modal-title">Review Purchase</h2>
+                <div class="modal-header">
+                    <h2 id="purchase-modal-title">Review Purchase</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-purchase-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <div id="purchase-details"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-purchase-modal-btn">Cancel</button>
@@ -1118,7 +1124,10 @@
         <!-- Recommendation Selection Modal -->
         <div id="select-recommendations-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="select-recommendations-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="select-recommendations-modal-title">Select Recommendations for Plan</h2>
+                <div class="modal-header">
+                    <h2 id="select-recommendations-modal-title">Select Recommendations for Plan</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-select-recommendations-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <div id="selectable-recommendations"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-select-recommendations-btn">Cancel</button>
@@ -1131,7 +1140,10 @@
         <!-- Create API Key Modal -->
         <div id="create-apikey-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="create-apikey-modal-title">
             <div class="modal-content">
-                <h2 id="create-apikey-modal-title">Create API Key</h2>
+                <div class="modal-header">
+                    <h2 id="create-apikey-modal-title">Create API Key</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-create-apikey-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <form id="create-apikey-form">
                     <div class="form-group">
                         <label for="apikey-name">API Key Name</label>
@@ -1165,7 +1177,10 @@
         <!-- User Management Modals -->
         <div id="user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
             <div class="modal-content">
-                <h2 id="user-modal-title">Create User</h2>
+                <div class="modal-header">
+                    <h2 id="user-modal-title">Create User</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-user-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <form id="user-form" novalidate>
                     <input type="hidden" id="user-id">
                     <div class="form-group">
@@ -1194,7 +1209,10 @@
         <!-- Group Management Modal -->
         <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="group-modal-title">Create Group</h2>
+                <div class="modal-header">
+                    <h2 id="group-modal-title">Create Group</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-group-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <form id="group-form" novalidate>
                     <input type="hidden" id="group-id">
                     <div class="form-group">
@@ -1221,9 +1239,9 @@
         <!-- Duplicate Group Modal -->
         <div id="group-duplicate-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-duplicate-modal-title">
             <div class="modal-content modal-wide">
-                <div class="modal-header-row">
+                <div class="modal-header">
                     <h2 id="group-duplicate-modal-title">Duplicate Group</h2>
-                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 </div>
                 <form id="group-duplicate-form">
                     <div class="form-group">
@@ -1259,7 +1277,10 @@
              rendered dynamically. -->
         <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="account-overrides-modal-title">Service overrides</h2>
+                <div class="modal-header">
+                    <h2 id="account-overrides-modal-title">Service overrides</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-account-overrides-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Admin → Purchasing policies.</p>
                 <div id="account-overrides-modal-body"></div>
                 <div class="modal-buttons">
@@ -1271,7 +1292,10 @@
         <!-- Cloud Account Modal -->
         <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
             <div class="modal-content">
-                <h2 id="override-modal-title">Add service override</h2>
+                <div class="modal-header">
+                    <h2 id="override-modal-title">Add service override</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-override-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <p class="help-text">Per-account override that takes precedence over the global service defaults. The services listed are the ones available for this account's cloud provider.</p>
                 <form id="override-form">
                     <input type="hidden" id="override-account-id">
@@ -1330,7 +1354,10 @@
 
         <div id="account-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="account-modal-title">Add Account</h2>
+                <div class="modal-header">
+                    <h2 id="account-modal-title">Add Account</h2>
+                    <button type="button" class="modal-close" data-modal-dismiss="close-account-modal-btn" aria-label="Close" title="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </div>
                 <form id="account-form">
                     <input type="hidden" id="account-id">
                     <input type="hidden" id="account-provider">

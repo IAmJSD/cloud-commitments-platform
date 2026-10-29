@@ -10,7 +10,7 @@ import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommend
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
-import { openModal, closeModal } from './modal';
+import { openModal, closeModal, createModalHeader } from './modal';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale, startRecommendationsRefresh } from './recommendations';
 import { getRecommendationsFreshness } from './api/recommendations';
@@ -673,7 +673,7 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
   const h2 = document.createElement('h2');
   h2.id = 'purchase-details-modal-title';
   h2.textContent = 'Upcoming Purchase Details';
-  content.appendChild(h2);
+  content.appendChild(createModalHeader(h2, { dismissTargetId: 'close-purchase-details-btn' }));
 
   const section = document.createElement('div');
   section.className = 'form-section';
@@ -726,7 +726,8 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.id = 'cancel-purchase-detail-btn';
-    cancelBtn.className = 'danger';
+    // Outlined, not filled: the confirm dialog it opens carries the solid red action.
+    cancelBtn.className = 'btn-danger';
     cancelBtn.textContent = 'Cancel Purchase';
     // Same confirm copy and request path as the card's Cancel button (#731).
     cancelBtn.addEventListener('click', () => {
