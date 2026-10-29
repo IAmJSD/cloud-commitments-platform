@@ -134,7 +134,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
   </div>
 
   <div id="ladder-configs-section">
-    <h4>Per-Account Configurations</h4>
+    <h4 class="ladder-configs-heading">Per-Account Configurations</h4>
     <div id="ladder-configs-table-container"></div>
     ${canEdit ? `
     <button type="button" id="ladder-add-config-btn" class="btn btn-secondary">
