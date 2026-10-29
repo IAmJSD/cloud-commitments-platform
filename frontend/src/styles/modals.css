@@ -803,3 +803,33 @@
     font-size: var(--cudly-fs-sm);
 }
 /* ---- end Review Purchase ------------------------------------------------- */
+
+/* ---- Create API Key: permission checklist (ui/modernize-modals) ---------
+ * One compact row per permission, checkbox beside its label, in a bordered
+ * scroll box, instead of a full-width centred checkbox above each label. */
+.apikey-permissions-list {
+    display: grid;
+    gap: var(--cudly-sp-1);
+    max-height: 16rem;
+    overflow-y: auto;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.form-group label.apikey-permission-option {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
+    cursor: pointer;
+}
+
+.form-group .apikey-permission-option input[type="checkbox"] {
+    flex: none;
+    width: auto;
+    margin: 0;
+}
+/* ---- end API key checklist ---------------------------------------------- */
