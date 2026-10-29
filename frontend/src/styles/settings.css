@@ -100,7 +100,11 @@
     color: var(--cudly-text);
 }
 
-.settings-category > legend + * {
+/* Everything after the floated legend starts below it. Clearing only the
+ * first sibling is not enough: when that sibling is hidden (the provider
+ * disabled banner), a flex row next to the full-width float is pushed out
+ * of the card. */
+.settings-category > :not(legend) {
     clear: both;
 }
 
