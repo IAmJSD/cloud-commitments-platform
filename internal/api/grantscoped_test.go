@@ -32,6 +32,7 @@ const (
 func scopedHandler(t *testing.T, accounts ...string) (*Handler, *MockConfigStore) {
 	t.Helper()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 

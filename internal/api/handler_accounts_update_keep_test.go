@@ -51,6 +51,7 @@ func putAccountFlags(t *testing.T, existingEnabled, existingOrgRoot bool, extra 
 	t.Helper()
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	existing := sampleAccount()
@@ -121,6 +122,7 @@ func TestCreateAccount_FlagDefaultsUnchanged(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			setupAdminAuth(ctx, mockAuth)
 			store := newAccountWriteCapture(ctx, nil)
 			handler := &Handler{auth: mockAuth, config: store}

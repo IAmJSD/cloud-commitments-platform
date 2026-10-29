@@ -174,7 +174,14 @@ func scopeTestExecution(k scopeTestKind, status string) *config.PurchaseExecutio
 // sites for TestNoUnfailableMockAssertions.
 func newScopeTestHandler(t *testing.T, exec *config.PurchaseExecution, scope []string, store *MockConfigStore, mockPurchase *MockPurchaseManager) *Handler {
 	t.Helper()
+	// Every caller's store and purchase manager are asserted here, so a
+	// caller passing a bare new(...) still has its expectations verified.
+	t.Cleanup(func() {
+		store.AssertExpectations(t)
+		mockPurchase.AssertExpectations(t)
+	})
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", mock.Anything, "operator-token").Return(&Session{
 		UserID: "operator-1", Email: "operator@example.com",
@@ -411,6 +418,9 @@ func TestExecutionAccounts_AdHocUnattributedDenied(t *testing.T) {
 			scopeTestRec("rec-none", missing),
 		}}, "pending")
 		h := newScopeTestHandler(t, exec, []string{scopeTestProd.ID, scopeTestStage.ID}, new(MockConfigStore), new(MockPurchaseManager))
+		// The gate is called directly with a session, so no bearer token is
+		// validated.
+		relaxUnreachedStubs(&h.auth.(*MockAuthService).Mock, "ValidateSession")
 		err := h.requireExecutionAccess(context.Background(), &Session{UserID: "operator-1"}, scopeTestExecID)
 		assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 	}
@@ -430,6 +440,8 @@ func TestPlannedPurchases_HidesPartiallyScopedParent(t *testing.T) {
 		exec := scopeTestExecution(scopeTestKinds[0], "pending")
 		store := new(MockConfigStore)
 		h := newScopeTestHandler(t, exec, tc.scope, store, new(MockPurchaseManager))
+		// The list reads the planned rows, not one execution by ID.
+		relaxUnreachedStubs(&store.Mock, "GetExecutionByID")
 		store.On("GetPlannedExecutions", mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{*exec}, nil)
 		store.On("ListPurchasePlans", mock.Anything, mock.Anything).Return([]config.PurchasePlan{{ID: scopeTestPlanID, Name: "p"}}, nil)
 

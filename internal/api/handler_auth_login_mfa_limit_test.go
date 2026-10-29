@@ -81,6 +81,7 @@ func TestHandler_login_NoMFACodeSkipsPerEmailBucket(t *testing.T) {
 
 func TestHandler_login_MFALegRateLimiterErrorFailsClosed(t *testing.T) {
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	rl := new(MockRateLimiter)
 	t.Cleanup(func() { rl.AssertExpectations(t) })
 	rl.On("AllowWithIP", mock.Anything, mock.Anything, "login").Return(true, nil).Once()
@@ -205,7 +206,9 @@ func TestHandler_login_MFATokenFormValidation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			rl := new(MockRateLimiter)
+			t.Cleanup(func() { rl.AssertExpectations(t) })
 			rl.On("AllowWithIP", mock.Anything, mock.Anything, "login").Return(true, nil).Once()
 			h := &Handler{auth: mockAuth, rateLimiter: rl}
 			_, err := h.login(context.Background(), mfaTokenReq("198.51.100.1", body))

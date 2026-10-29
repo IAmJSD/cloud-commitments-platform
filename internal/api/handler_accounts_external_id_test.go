@@ -68,8 +68,10 @@ func TestValidateAWSExternalID(t *testing.T) {
 func TestCreateAccount_AWSExternalID_RoleArnRequired(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
@@ -89,8 +91,10 @@ func TestCreateAccount_AWSExternalID_RoleArnRequired(t *testing.T) {
 func TestCreateAccount_AWSExternalID_RoleArnTooShort(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
@@ -110,8 +114,10 @@ func TestCreateAccount_AWSExternalID_RoleArnTooShort(t *testing.T) {
 func TestCreateAccount_AWSExternalID_RoleArnInvalidChars(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
@@ -131,8 +137,10 @@ func TestCreateAccount_AWSExternalID_RoleArnInvalidChars(t *testing.T) {
 func TestCreateAccount_AWSExternalID_RoleArnHappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
@@ -150,7 +158,7 @@ func TestCreateAccount_AWSExternalID_RoleArnHappyPath(t *testing.T) {
 // fake host account, which that shape now requires (#531).
 func TestCreateAccount_AWSExternalID_RoleArnNoRoleArnSelfAccount(t *testing.T) {
 	ctx := context.Background()
-	handler := hostCheckHandler(setupAdminMock(ctx), &probeSTS{}, nil)
+	handler := hostCheckHandler(t, setupAdminMock(ctx), &probeSTS{}, nil)
 
 	body := `{"name":"CUDly host","provider":"aws","external_id":"` + probeHostAcct + `",` +
 		`"aws_auth_mode":"role_arn"}` // no aws_role_arn, no aws_external_id
@@ -170,8 +178,10 @@ func TestCreateAccount_AWSExternalID_NotRequiredForOtherAuthModes(t *testing.T) 
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			setupAdminAuth(ctx, mockAuth)
 			store := setupAdminMock(ctx)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			handler := &Handler{auth: mockAuth, config: store}
 
 			body := `{"name":"Acme","provider":"aws","external_id":"123456789012",` +
@@ -190,8 +200,10 @@ func TestCreateAccount_AWSExternalID_NotRequiredForOtherAuthModes(t *testing.T) 
 func TestCreateAccount_AWSExternalID_BastionRequiresExternalID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +
@@ -210,8 +222,10 @@ func TestCreateAccount_AWSExternalID_BastionRequiresExternalID(t *testing.T) {
 func TestCreateAccount_AWSExternalID_BastionHappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +
@@ -231,8 +245,10 @@ func TestCreateAccount_AWSExternalID_BastionHappyPath(t *testing.T) {
 func TestCreateAccount_AWSExternalID_BastionNoRoleArnExempt(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Target","provider":"aws","external_id":"123456789012",` +

@@ -18,7 +18,9 @@ import (
 func TestHandler_getConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -55,7 +57,9 @@ func TestHandler_getConfig(t *testing.T) {
 func TestHandler_updateConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -453,6 +457,7 @@ func (s *serializedConfigStore) ListServiceConfigs(_ context.Context) ([]config.
 func TestHandler_updateConfig_ConcurrentPartialPUTsNoLostUpdate(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").
 		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	mockAuth.grantAdmin()
@@ -510,6 +515,7 @@ func TestHandler_updateConfig_ConcurrentPartialPUTsNoLostUpdate(t *testing.T) {
 func TestHandler_updateConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -537,7 +543,9 @@ func TestHandler_updateConfig_InvalidBody(t *testing.T) {
 func TestHandler_getServiceConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -572,6 +580,7 @@ func TestHandler_getServiceConfig(t *testing.T) {
 func TestHandler_getServiceConfig_InvalidFormat(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -590,7 +599,9 @@ func TestHandler_getServiceConfig_InvalidFormat(t *testing.T) {
 func TestHandler_getServiceConfig_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -613,7 +624,9 @@ func TestHandler_getServiceConfig_NotFound(t *testing.T) {
 func TestHandler_updateServiceConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -764,11 +777,13 @@ func TestHandler_updateServiceConfig_PartialPut(t *testing.T) {
 	ctx := context.Background()
 	newHandler := func(existing *config.ServiceConfig) (*Handler, *MockConfigStore) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 		}, nil)
 		mockAuth.grantAdmin()
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetServiceConfig", ctx, existing.Provider, existing.Service).Return(existing, nil)
 		return &Handler{config: store, auth: mockAuth}, store
 	}
@@ -817,11 +832,13 @@ func TestHandler_updateServiceConfig_PartialPut(t *testing.T) {
 func TestHandler_updateServiceConfig_MergesInsideAtomicUpdate(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 	}, nil)
 	mockAuth.grantAdmin()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	stored := &config.ServiceConfig{
 		Provider: "aws", Service: "rds", Enabled: true, Term: 3,
 		Payment: "all-upfront", Coverage: 55, MinCount: 4,
@@ -861,6 +878,7 @@ func TestHandler_updateServiceConfig_CommitmentOptsOutsideTransaction(t *testing
 	run := func(t *testing.T, stored *config.ServiceConfig, body string, getErr error) error {
 		t.Helper()
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 		}, nil)
@@ -870,9 +888,12 @@ func TestHandler_updateServiceConfig_CommitmentOptsOutsideTransaction(t *testing
 		// read is the point where the real store has opened its transaction.
 		txOpened, gets := false, 0
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetServiceConfig", ctx, "aws", "rds").Return(stored, nil).
 			Run(func(mock.Arguments) { txOpened = true })
-		store.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
+		// A refused PUT saves nothing; which cases save is checked after the
+		// call.
+		store.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil).Maybe()
 		h := &Handler{config: store, auth: mockAuth, commitmentOpts: &stubCommitmentOpts{
 			getFn: func(context.Context) (commitmentopts.Options, error) {
 				assert.False(t, txOpened, "commitment options read inside the transaction")
@@ -888,6 +909,11 @@ func TestHandler_updateServiceConfig_CommitmentOptsOutsideTransaction(t *testing
 			Headers: map[string]string{"Authorization": "Bearer admin-token"}, Body: body,
 		}, "aws/rds")
 		assert.Equal(t, 1, gets, "options fetched exactly once, before the transaction")
+		if err == nil {
+			store.AssertNumberOfCalls(t, "SaveServiceConfig", 1)
+		} else {
+			store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+		}
 		return err
 	}
 	storedThreeYear := &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: true, Term: 3, Payment: "no-upfront", Coverage: 50}
@@ -922,11 +948,13 @@ func TestHandler_updateServiceConfig_StoredRowRead(t *testing.T) {
 	ctx := context.Background()
 	newHandler := func(readErr error) (*Handler, *MockConfigStore) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 		}, nil)
 		mockAuth.grantAdmin()
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, readErr)
 		return &Handler{config: store, auth: mockAuth}, store
 	}
@@ -960,6 +988,7 @@ func TestHandler_updateServiceConfig_StoredRowRead(t *testing.T) {
 func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -987,7 +1016,9 @@ func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 func TestHandler_updateServiceConfig_CommitmentOptsReject(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1034,7 +1065,9 @@ func TestHandler_updateServiceConfig_CommitmentOptsReject(t *testing.T) {
 func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1073,7 +1106,9 @@ func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 func TestHandler_updateServiceConfig_CommitmentOptsErrorRefusesSave(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
@@ -1108,7 +1143,9 @@ func TestHandler_updateServiceConfig_CommitmentOptsErrorRefusesSave(t *testing.T
 func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1137,7 +1174,9 @@ func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 func TestHandler_getConfig_GlobalConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -1157,7 +1196,9 @@ func TestHandler_getConfig_GlobalConfigError(t *testing.T) {
 func TestHandler_getConfig_ListServiceConfigsError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -1186,7 +1227,9 @@ func TestHandler_getConfig_ListServiceConfigsError(t *testing.T) {
 func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-user"}
 	userSession := &Session{UserID: "regular-user"}
@@ -1232,7 +1275,9 @@ func TestHandler_getConfig_SourceIdentity_AdminOnly(t *testing.T) {
 func TestHandler_getServiceConfig_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -1252,7 +1297,9 @@ func TestHandler_getServiceConfig_Error(t *testing.T) {
 func TestHandler_updateConfig_ValidationError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1315,7 +1362,9 @@ func TestUpdateConfig_RejectsOutOfRangeRIExchangeLimits(t *testing.T) {
 func TestHandler_updateConfig_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1349,7 +1398,9 @@ func TestHandler_updateConfig_SaveError(t *testing.T) {
 func TestHandler_updateServiceConfig_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1378,6 +1429,7 @@ func TestHandler_updateServiceConfig_SaveError(t *testing.T) {
 func TestHandler_getServiceConfig_InvalidProvider(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -1461,7 +1513,9 @@ func TestHandler_updateConfig_PropagationErrorIsReturned(t *testing.T) {
 func TestHandler_getConfig_ViewConfigPermission_Enforced(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	userSession := &Session{
 		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
@@ -1488,7 +1542,9 @@ func TestHandler_getConfig_ViewConfigPermission_Enforced(t *testing.T) {
 func TestHandler_getServiceConfig_ViewConfigPermission_Enforced(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	userSession := &Session{
 		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",

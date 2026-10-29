@@ -17,6 +17,7 @@ import (
 func TestHandler_login_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	loginResp := &LoginResponse{
 		Token:     "test-token",
@@ -65,6 +66,7 @@ func TestHandler_login_NoAuthService(t *testing.T) {
 func TestHandler_login_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -80,6 +82,7 @@ func TestHandler_login_InvalidBody(t *testing.T) {
 func TestHandler_login_AuthError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("Login", ctx, mock.Anything).Return(nil, errors.New("invalid credentials"))
 
@@ -142,6 +145,7 @@ func TestHandler_login_OpaqueError_HidesInternalMessage(t *testing.T) {
 func TestHandler_logout_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("Logout", ctx, "test-token").Return(nil)
 
@@ -179,6 +183,7 @@ func TestHandler_logout_NoAuthService(t *testing.T) {
 func TestHandler_logout_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -194,6 +199,7 @@ func TestHandler_logout_NoToken(t *testing.T) {
 func TestHandler_logout_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("Logout", ctx, "test-token").Return(errors.New("session not found"))
 
@@ -218,6 +224,7 @@ func TestHandler_logout_Error(t *testing.T) {
 func TestHandler_getCurrentUser_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
@@ -269,6 +276,7 @@ func TestHandler_getCurrentUser_NoAuthService(t *testing.T) {
 func TestHandler_getCurrentUser_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -284,6 +292,7 @@ func TestHandler_getCurrentUser_NoToken(t *testing.T) {
 func TestHandler_getCurrentUser_InvalidSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", ctx, "invalid-token").Return(nil, errors.New("invalid session"))
 
@@ -304,6 +313,7 @@ func TestHandler_getCurrentUser_InvalidSession(t *testing.T) {
 func TestHandler_getCurrentUser_UserNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
@@ -330,6 +340,7 @@ func TestHandler_getCurrentUser_UserNotFound(t *testing.T) {
 func TestHandler_checkAdminExists_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
@@ -352,6 +363,7 @@ func TestHandler_checkAdminExists_Success(t *testing.T) {
 func TestHandler_checkAdminExists_NoAdmin(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("CheckAdminExists", ctx).Return(false, nil)
 
@@ -392,6 +404,7 @@ func TestHandler_checkAdminExists_NoAuthService(t *testing.T) {
 func TestHandler_checkAdminExists_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("CheckAdminExists", ctx).Return(false, errors.New("database error"))
 
@@ -414,6 +427,7 @@ func TestHandler_checkAdminExists_Error(t *testing.T) {
 func TestHandler_setupAdmin_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	loginResp := &LoginResponse{
 		Token:     "admin-token",
@@ -472,6 +486,7 @@ func TestHandler_setupAdmin_NoAuthService(t *testing.T) {
 func TestHandler_setupAdmin_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -492,6 +507,7 @@ func TestHandler_setupAdmin_InvalidBody(t *testing.T) {
 func TestHandler_setupAdmin_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("SetupAdmin", ctx, mock.Anything).Return(nil, errors.New("admin already exists"))
 
@@ -515,6 +531,7 @@ func TestHandler_setupAdmin_Error(t *testing.T) {
 func TestHandler_forgotPassword_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("RequestPasswordReset", ctx, "user@example.com").Return(nil)
 
@@ -542,6 +559,7 @@ func TestHandler_forgotPassword_NoAuthService(t *testing.T) {
 func TestHandler_forgotPassword_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{Body: `{invalid json}`}
@@ -555,6 +573,7 @@ func TestHandler_forgotPassword_ErrorStillReturnsSuccess(t *testing.T) {
 	// Even if the email doesn't exist, we return success to prevent email enumeration
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("RequestPasswordReset", ctx, "nonexistent@example.com").Return(errors.New("user not found"))
 
@@ -571,6 +590,7 @@ func TestHandler_forgotPassword_ErrorStillReturnsSuccess(t *testing.T) {
 func TestHandler_resetPassword_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ConfirmPasswordReset", ctx, PasswordResetConfirm{
 		Token:       "reset-token",
@@ -605,6 +625,7 @@ func TestHandler_resetPassword_NoAuthService(t *testing.T) {
 func TestHandler_resetPassword_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{Body: `{invalid json}`}
@@ -685,6 +706,7 @@ func TestHandler_resetPasswordStatus_Used(t *testing.T) {
 func TestHandler_resetPasswordStatus_MissingToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{}}
@@ -802,6 +824,7 @@ func TestHandler_resetPassword_ErrorIsClientError(t *testing.T) {
 func TestHandler_updateProfile_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "12345678-1234-1234-1234-123456789abc",
@@ -851,6 +874,7 @@ func TestHandler_updateProfile_NoAuthService(t *testing.T) {
 func TestHandler_updateProfile_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -867,6 +891,7 @@ func TestHandler_updateProfile_NoToken(t *testing.T) {
 func TestHandler_updateProfile_InvalidSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", ctx, "invalid-token").Return(nil, errors.New("invalid session"))
 
@@ -890,6 +915,7 @@ func TestHandler_updateProfile_InvalidSession(t *testing.T) {
 func TestHandler_changePassword_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
@@ -939,6 +965,7 @@ func TestHandler_changePassword_NoAuthService(t *testing.T) {
 func TestHandler_changePassword_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
@@ -965,6 +992,7 @@ func TestHandler_changePassword_InvalidBody(t *testing.T) {
 func TestHandler_updateProfile_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -989,6 +1017,7 @@ func TestHandler_updateProfile_InvalidJSON(t *testing.T) {
 func TestHandler_updateProfile_RejectsInvalidEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -1017,6 +1046,7 @@ func TestHandler_updateProfile_RejectsInvalidEmail(t *testing.T) {
 func TestHandler_updateProfile_AcceptsValidEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -1186,6 +1216,7 @@ func TestHandler_resetPassword_DecodesBase64(t *testing.T) {
 func TestHandler_resetPassword_InvalidBase64(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -1205,6 +1236,7 @@ func TestHandler_resetPassword_InvalidBase64(t *testing.T) {
 func TestHandler_resetPassword_ClientErrorSubstrings(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("password must contain a number"))
@@ -1228,6 +1260,7 @@ func TestHandler_resetPassword_ClientErrorSubstrings(t *testing.T) {
 func TestHandler_resetPassword_ServerSideErrorPassesThrough(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("database connection lost"))

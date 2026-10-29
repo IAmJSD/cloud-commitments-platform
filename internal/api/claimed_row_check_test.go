@@ -70,9 +70,11 @@ func runNowClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUpfront fl
 	execID := "11111111-1111-1111-1111-111111111111"
 	snapshot := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", Recommendations: claimRecs(claimUnder)}
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetExecutionByID", ctx, execID).Return(snapshot, nil)
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "capped-token").Return(&Session{UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd", Email: "capped@example.com"}, nil)
 	mockAuth.grantPermissions([]auth.Permission{
 		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
@@ -89,6 +91,7 @@ func runNowClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUpfront fl
 
 func TestClaimedRowCheck_RunNow_RepricedRowRefused(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := runNowClaimHarness(t, mp, claimRepriced)
 	requireClaimedRowRefused(t, mp, err)
 	mp.AssertNotCalled(t, "RunPlannedPurchaseNow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -96,6 +99,7 @@ func TestClaimedRowCheck_RunNow_RepricedRowRefused(t *testing.T) {
 
 func TestClaimedRowCheck_RunNow_UnmodifiedRowRuns(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := runNowClaimHarness(t, mp, claimUnder)
 	require.NoError(t, err)
 	requireOneCheck(t, mp)
@@ -111,9 +115,11 @@ func sessionApproveClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUp
 	approver := "approver@example.com"
 	snapshot := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", Recommendations: claimRecs(claimUnder)}
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(snapshot, nil)
 	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", Email: approver}, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.grantPermissions([]auth.Permission{cappedPurchasePerm(auth.ActionApproveAny)})
@@ -127,6 +133,7 @@ func sessionApproveClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUp
 
 func TestClaimedRowCheck_SessionApprove_RepricedRowRefused(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := sessionApproveClaimHarness(t, mp, claimRepriced)
 	requireClaimedRowRefused(t, mp, err)
 	mp.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -134,6 +141,7 @@ func TestClaimedRowCheck_SessionApprove_RepricedRowRefused(t *testing.T) {
 
 func TestClaimedRowCheck_SessionApprove_UnmodifiedRowRuns(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := sessionApproveClaimHarness(t, mp, claimUnder)
 	require.NoError(t, err)
 	requireOneCheck(t, mp)
@@ -196,7 +204,9 @@ func directExecuteClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUpf
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "direct@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
 	mockAuth.grantPermissions([]auth.Permission{
@@ -221,6 +231,7 @@ func directExecuteClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUpf
 
 func TestClaimedRowCheck_DirectExecute_RepricedRowRefused(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := directExecuteClaimHarness(t, mp, claimRepriced)
 	requireClaimedRowRefused(t, mp, err)
 	mp.AssertNotCalled(t, "DirectExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -228,6 +239,7 @@ func TestClaimedRowCheck_DirectExecute_RepricedRowRefused(t *testing.T) {
 
 func TestClaimedRowCheck_DirectExecute_UnmodifiedRowRuns(t *testing.T) {
 	mp := &MockPurchaseManager{}
+	t.Cleanup(func() { mp.AssertExpectations(t) })
 	err := directExecuteClaimHarness(t, mp, 500)
 	require.NoError(t, err)
 	requireOneCheck(t, mp)

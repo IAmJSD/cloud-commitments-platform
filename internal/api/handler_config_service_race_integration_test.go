@@ -41,6 +41,7 @@ func newServiceConfigRaceFixture(ctx context.Context, t *testing.T) *serviceConf
 	pg := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	store := config.NewPostgresStore(pg.DB)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 	}, nil)
@@ -167,6 +168,7 @@ func TestUpdateServiceConfig_ParallelSettingsSaveDoesNotExhaustPool(t *testing.T
 
 	store := config.NewPostgresStore(db)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 	}, nil)
