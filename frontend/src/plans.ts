@@ -412,7 +412,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const hasNoRecommendations = purchase.has_recommendations === false;
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
-    : `${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})`;
+    : `${escapeHtml(purchase.resource_type)} <span class="cell-sub">(${escapeHtml(purchase.region)})</span>`;
   const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
   const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
   const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
@@ -457,7 +457,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
-        <span class="plan-name cell-truncate" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
+        <span class="plan-name cell-truncate cell-truncate--sm" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
