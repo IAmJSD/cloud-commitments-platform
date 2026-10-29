@@ -1428,7 +1428,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
-    <table>
+    <table class="table-compact">
       <thead>
         <tr>
           <th>Status</th>
@@ -1873,7 +1873,7 @@ const APPROVAL_QUEUE_LABELS: Record<ApprovalQueueColumnId, string> = {
   service: 'Service',
   term: 'Term',
   payment: 'Payment',
-  created_by: 'Created by',
+  created_by: 'Created By',
   count: 'Count',
   monthly_cost: 'Monthly Cost',
   upfront_cost: 'Upfront Cost',
@@ -2028,7 +2028,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         ? escapeHtml(p.created_by_user_id)
         : `<span class="muted">${NO_VALUE}</span>`;
     const accountCell = p.account_id
-      ? escapeHtml(getAccountName(p.account_id))
+      ? `<span class="cell-truncate" title="${escapeHtmlAttr(getAccountName(p.account_id))}">${escapeHtml(getAccountName(p.account_id))}</span>`
       : `<span class="muted">${NO_VALUE}</span>`;
     const empty = hasNoCommitments(p);
     const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
@@ -2066,7 +2066,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
-    <table class="approval-queue-table">
+    <table class="approval-queue-table table-compact">
       <thead>
         <tr>
           <th>Date</th>
@@ -2079,7 +2079,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
           <th class="num"><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
           <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
           <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
-          <th><span>Created by</span>${fbtn('created_by')}</th>
+          <th><span>Created By</span>${fbtn('created_by')}</th>
           <th>Actions</th>
         </tr>
       </thead>

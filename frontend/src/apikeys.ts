@@ -114,7 +114,7 @@ export function renderApiKeysList(): void {
   }
 
   const table = `
-    <table class="data-table">
+    <table class="data-table table-compact">
       <thead>
         <tr>
           <th>Name</th>

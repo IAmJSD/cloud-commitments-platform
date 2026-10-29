@@ -564,10 +564,13 @@ describe('CSS hygiene (issue #725)', () => {
     expect(table).toMatch(/overflow:\s*clip/);
   });
 
-  test('table headers are small, uppercase and muted', () => {
+  // One header case everywhere: the label as written (Title Case). The
+  // uppercase transform only reached headers without a sort button.
+  test('table headers are small, semibold, muted and not uppercased', () => {
     const th = rule(read('tables.css'), /th/);
     expect(th).toMatch(/font-size:\s*var\(--cudly-fs-xs\)/);
-    expect(th).toMatch(/text-transform:\s*uppercase/);
+    expect(th).toMatch(/font-weight:\s*var\(--cudly-fw-semibold\)/);
+    expect(th).not.toMatch(/text-transform:\s*uppercase/);
     expect(th).toMatch(/color:\s*var\(--cudly-text-muted\)/);
   });
 
