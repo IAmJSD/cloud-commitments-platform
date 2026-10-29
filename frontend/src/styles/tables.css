@@ -471,12 +471,12 @@ th .history-column-filter-btn:focus-visible {
 
 .table-sticky-start tr > :first-child::after {
     right: -8px;
-    background: linear-gradient(to right, rgb(15 23 42 / 0.08), transparent);
+    background: linear-gradient(to right, color-mix(in srgb, var(--cudly-text) 8%, transparent), transparent);
 }
 
 .table-sticky-end tr > :last-child::before {
     left: -8px;
-    background: linear-gradient(to left, rgb(15 23 42 / 0.08), transparent);
+    background: linear-gradient(to left, color-mix(in srgb, var(--cudly-text) 8%, transparent), transparent);
 }
 
 :is(.scroll-hint-left .table-sticky-start, .table-sticky-start.scroll-hint-left) tr > :first-child::after,
@@ -488,12 +488,13 @@ th .history-column-filter-btn:focus-visible {
  * otherwise dim the very buttons that stay in view. */
 .scroll-hint-left:has(.table-sticky-start),
 .table-sticky-start.scroll-hint-left {
-    --scroll-hint-l: #000;
+    /* Any opaque colour: the mask only reads alpha. */
+    --scroll-hint-l: var(--cudly-text);
 }
 
 .scroll-hint-right:has(.table-sticky-end),
 .table-sticky-end.scroll-hint-right {
-    --scroll-hint-r: #000;
+    --scroll-hint-r: var(--cudly-text);
 }
 
 /* A row's action buttons stay on one line. */
