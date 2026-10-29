@@ -18,8 +18,9 @@
 #   }
 #
 # This guard exists because compute/gcp/cloud-run was migrated to per-secret
-# bindings while its sibling compute/gcp/cleanup-function was left on a
-# project-wide grant for as long as it took someone to notice (issue #1614).
+# bindings while its sibling compute/gcp/cleanup-function (since deleted,
+# #357) was left on a project-wide grant for as long as it took someone to
+# notice (issue #1614).
 #
 # HOW IT WORKS. The guard does not try to follow a role from where it is written
 # to the IAM resource that binds it: `locals`, `for_each` over sets and maps,

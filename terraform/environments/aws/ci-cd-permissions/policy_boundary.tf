@@ -5,9 +5,8 @@
 #
 # WHY A BOUNDARY AND NOT A DENY. The deploy role legitimately creates roles on
 # every apply: twelve of them across terraform/modules (Lambda execution,
-# Fargate task and task-execution, four EventBridge invoker roles, fck-nat, VPC
-# flow logs, RDS proxy, secret rotation, and the cleanup Lambda's role, which is
-# declared but not instantiated from any environment root today). Which of the
+# Fargate task and task-execution, five EventBridge invoker roles, fck-nat, VPC
+# flow logs, RDS proxy and secret rotation). Which of the
 # twelve exist in a given environment depends on compute_platform and the
 # enable_* flags; the count is not the point, the fact that the deploy path
 # creates roles at all is. Denying iam:CreateRole,

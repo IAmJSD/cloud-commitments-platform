@@ -18,8 +18,9 @@
 # access-policy write, so `terraform apply` reports success with no warning and
 # the grant is silently inert. It surfaces only as a runtime 403, which is the
 # worst possible place to discover it. That is exactly what happened to the
-# Azure cleanup-function and the AKS workload identity (issue #1621) while every
-# other consumer in the tree already used `azurerm_role_assignment`.
+# Azure cleanup-function (since deleted, #357) and the AKS workload identity
+# (issue #1621) while every other consumer in the tree already used
+# `azurerm_role_assignment`.
 #
 # The supported pattern is:
 #
