@@ -944,6 +944,20 @@ function showResetEmailConfirmation(): void {
 }
 
 /**
+ * Up to two letters for the topbar avatar: the first letters of the first
+ * two dot/underscore/dash separated parts of the address's local part
+ * ("dana.okafor@..." -> "DO"), else its first two characters.
+ */
+export function emailInitials(email: string): string {
+  const local = email.split('@')[0] ?? '';
+  const parts = local.split(/[._\-+]+/).filter(Boolean);
+  const letters = parts.length >= 2
+    ? `${parts[0]!.charAt(0)}${parts[1]!.charAt(0)}`
+    : local.slice(0, 2);
+  return letters.toUpperCase();
+}
+
+/**
  * Update user UI after login
  */
 export function updateUserUI(): void {
@@ -958,6 +972,8 @@ export function updateUserUI(): void {
     // Update the user email display with click-to-edit functionality
     if (userEmailEl) {
       userEmailEl.textContent = currentUser.email;
+      // Drawn as an avatar by CSS (::before), so it stays out of the text.
+      userEmailEl.dataset['initials'] = emailInitials(currentUser.email);
       userEmailEl.removeAttribute('aria-label');
       userEmailEl.hidden = false;
       userEmailEl.title = 'Click to edit your profile';
