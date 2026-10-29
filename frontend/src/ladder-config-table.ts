@@ -11,6 +11,7 @@
 import type { AccountSummary } from './api/accounts';
 import type { LadderConfig } from './api/ladder';
 import { escapeHtml, formatDate } from './utils';
+import { iconSvg } from './icons';
 
 export interface LadderConfigTableOptions {
   accounts: readonly AccountSummary[];
@@ -32,9 +33,11 @@ export function renderLadderConfigTable(container: HTMLElement, configs: readonl
     return;
   }
 
-  const rows = configs.map(cfg => `
+  const rows = configs.map(cfg => {
+    const label = ladderAccountLabel(cfg, options.accounts);
+    return `
     <tr>
-      <td title="${escapeHtml(cfg.cloud_account_id)}">${escapeHtml(ladderAccountLabel(cfg, options.accounts))}</td>
+      <td title="${escapeHtml(cfg.cloud_account_id)}">${escapeHtml(label)}</td>
       <td>${escapeHtml(cfg.provider.toUpperCase())}</td>
       <td>${cfg.enabled ? 'Yes' : 'No'}</td>
       <td>${escapeHtml(cfg.mode === 'email_approval' ? 'Email Approval' : 'Auto Approve')}</td>
@@ -42,12 +45,15 @@ export function renderLadderConfigTable(container: HTMLElement, configs: readonl
       <td>${typeof cfg.target_coverage === 'number' ? `${cfg.target_coverage.toFixed(1)}%` : 'N/A'}</td>
       <td>${cfg.updated_at ? escapeHtml(formatDate(cfg.updated_at)) : 'N/A'}</td>
       ${options.canEdit
-        ? `<td><button type="button" class="btn btn-sm btn-secondary ladder-edit-btn"
+        ? `<td><button type="button" class="btn-small icon-btn ladder-edit-btn"
                        data-account-id="${escapeHtml(cfg.cloud_account_id)}"
-                       data-provider="${escapeHtml(cfg.provider)}">Edit</button></td>`
+                       data-provider="${escapeHtml(cfg.provider)}"
+                       aria-label="Edit ladder config for ${escapeHtml(label)}"
+                       title="Edit ladder config">${iconSvg('edit')}</button></td>`
         : '<td></td>'}
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   container.innerHTML = `
     <table class="data-table" aria-label="Per-account ladder configurations">
@@ -60,7 +66,7 @@ export function renderLadderConfigTable(container: HTMLElement, configs: readonl
           <th>Cadence</th>
           <th>Target Coverage</th>
           <th>Updated</th>
-          <th></th>
+          <th><span class="sr-only">Actions</span></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
