@@ -1476,6 +1476,7 @@ func TestPostgresStoreDB_ClaimRIExchangeIdempotencyKey(t *testing.T) {
 		_, err = tx.Exec(ctx,
 			`INSERT INTO ri_exchange_idempotency (idempotency_key, claimed_at) VALUES ($1, now())`, key)
 		require.NoError(t, err)
+		holderPID := testhelpers.BackendPID(ctx, t, tx)
 
 		type claimResult struct {
 			claimed bool
@@ -1488,15 +1489,13 @@ func TestPostgresStoreDB_ClaimRIExchangeIdempotencyKey(t *testing.T) {
 		}()
 
 		// The claim must contend for the row rather than answer from a read,
-		// so it cannot return while the conflicting write is uncommitted. The
-		// wait is the only way to observe "still blocked"; it is a lower bound
-		// on the observation, not a sleep the assertion depends on.
-		select {
-		case r := <-done:
+		// so it cannot return while the conflicting write is uncommitted.
+		// Observing it queued behind tx proves that; a quiet window could not
+		// tell a contender that is blocked from one that has not run yet.
+		if r, answered := testhelpers.AwaitBlockedBy(ctx, t, conn.Pool(), holderPID, done); answered {
 			_ = tx.Rollback(ctx)
 			t.Fatalf("the claim answered %v while a conflicting claim was still uncommitted; "+
 				"it read the ledger instead of contending for the row", r.claimed)
-		case <-time.After(300 * time.Millisecond):
 		}
 
 		require.NoError(t, tx.Commit(ctx))

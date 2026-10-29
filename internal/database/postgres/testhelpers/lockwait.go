@@ -3,6 +3,7 @@ package testhelpers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -101,4 +102,87 @@ func Await[T any](t *testing.T, done <-chan T) T {
 		t.Fatal("writer did not finish")
 		panic("unreachable")
 	}
+}
+
+// lockPollInterval and lockPollTimeout bound the lock observations below. The
+// timeout only fails a stuck test; a passing run returns as soon as the
+// observed state appears.
+const (
+	lockPollInterval = 5 * time.Millisecond
+	lockPollTimeout  = 30 * time.Second
+)
+
+// BackendPID returns the server process ID of tx's session, the holderPID that
+// AwaitBlockedBy takes.
+func BackendPID(ctx context.Context, t *testing.T, tx pgx.Tx) int {
+	t.Helper()
+	var pid int
+	require.NoError(t, tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
+	return pid
+}
+
+// AwaitBlockedBy proves a contender is queued behind holderPID's transaction:
+// it returns once some backend waits on a lock that holderPID holds, so the
+// contender cannot finish before the holder ends. If done delivers first, the
+// contender answered without contending; AwaitBlockedBy returns that value and
+// true. A fixed quiet window (select on done against time.After) cannot tell
+// "blocked" from "not there yet", so on a slow runner it passes a contender
+// that never contends. This observation cannot.
+//
+// Query db from a connection other than the holder's: pg_locks is read live,
+// but the holder's session is busy holding the lock.
+func AwaitBlockedBy[T any](ctx context.Context, t *testing.T, db LockDB, holderPID int, done <-chan T) (T, bool) {
+	t.Helper()
+	deadline := time.Now().Add(lockPollTimeout)
+	for time.Now().Before(deadline) {
+		var blocked bool
+		require.NoError(t, db.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_locks WHERE NOT granted AND $1::int = ANY(pg_blocking_pids(pid)))`, holderPID).Scan(&blocked))
+		if blocked {
+			var zero T
+			return zero, false
+		}
+		select {
+		case v := <-done:
+			return v, true
+		case <-time.After(lockPollInterval):
+		}
+	}
+	t.Fatalf("no backend blocked on backend %d within %s and the contender did not return", holderPID, lockPollTimeout)
+	panic("unreachable")
+}
+
+// LockWaiters counts backends of this database that wait on a lock in a
+// statement matching queryLike (a SQL LIKE pattern).
+func LockWaiters(ctx context.Context, db LockDB, queryLike string) (int, error) {
+	var n int
+	err := db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+		AND wait_event_type = 'Lock' AND query LIKE $1`, queryLike).Scan(&n)
+	return n, err
+}
+
+// AwaitArrivalsOrLockWaits is a race-test barrier: it returns once each of
+// parties has either arrived (arrived reports how many have) or is waiting on
+// a lock in a statement matching queryLike. Under a serializing lock the
+// parties that have not arrived are provably parked on it, so waiting longer
+// cannot change the outcome; without the lock every party arrives. Either way
+// the barrier opens on observed state, never on a guessed timeout. It returns
+// an error rather than failing a test so the goroutine under test can call it.
+func AwaitArrivalsOrLockWaits(ctx context.Context, db LockDB, parties int, arrived func() int, queryLike string) error {
+	deadline := time.Now().Add(lockPollTimeout)
+	for time.Now().Before(deadline) {
+		// Read arrivals first: a party that arrives between the two reads is
+		// then missed for one round instead of counted twice.
+		n := arrived()
+		waiting, err := LockWaiters(ctx, db, queryLike)
+		if err != nil {
+			return err
+		}
+		if n+waiting >= parties {
+			return nil
+		}
+		time.Sleep(lockPollInterval)
+	}
+	return fmt.Errorf("barrier: %d of %d parties neither arrived nor waited on a %q lock within %s",
+		parties-arrived(), parties, queryLike, lockPollTimeout)
 }
