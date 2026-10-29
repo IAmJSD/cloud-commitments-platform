@@ -301,6 +301,14 @@ tr.history-row-highlight:hover {
     max-width: 9rem;
 }
 
+/* A secondary value on its own muted line (planned purchase region under
+ * the resource type; the plan name cell is two lines already). */
+.cell-sub {
+    display: block;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-xs);
+}
+
 /* A chip (RI exchange alternatives) is one unit: it wraps as a whole. */
 .table-compact .cost-chip {
     white-space: nowrap;
@@ -556,8 +564,12 @@ th .history-column-filter-btn:focus-visible {
  * readable width instead of widening the sticky column. */
 .table-compact .history-ops-hint {
     display: inline-block;
-    max-width: 13rem;
+    /* A fixed width (not max-width): with overflow-wrap: anywhere the
+       min-content would collapse and push the Retry link out of the cell. */
+    width: 13rem;
     vertical-align: middle;
+    /* AWS / Azure error codes are long unbroken words. */
+    overflow-wrap: anywhere;
 }
 
 .table-compact :is(.history-approver, .status-detail) {
