@@ -17,20 +17,23 @@ table {
 }
 
 th, td {
-    padding: 0.75rem;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
     text-align: left;
+    vertical-align: middle;
     border-bottom: 1px solid var(--cudly-border);
-    font-size: 0.9rem;
+    font-size: var(--cudly-fs-sm);
 }
 
-/* Header labels read as labels, not as one more row of data (issue #725). */
+/* Header labels read as labels, not as one more row of data (issue #725).
+ * Small, semibold and muted, in the case the label is written in. The old
+ * uppercase only reached plain headers: the sort buttons inside sortable
+ * ones reset text-transform, so one table mixed SHOUTED and Title Case. */
 th {
     background: var(--cudly-surface-muted);
     color: var(--cudly-text-muted);
     font-size: var(--cudly-fs-xs);
     font-weight: var(--cudly-fw-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    line-height: var(--cudly-lh-tight);
 }
 
 /* Money and count columns: right-aligned with tabular digits so amounts line
@@ -125,7 +128,7 @@ tr.history-row-highlight:hover {
 
 .planned-purchases-table th,
 .planned-purchases-table td {
-    padding: 0.75rem 1rem;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
     text-align: left;
     border-bottom: 1px solid var(--cudly-border);
 }
@@ -240,4 +243,186 @@ tr.history-row-highlight:hover {
     margin-top: 0.25rem;
     font-size: 0.8rem;
     color: var(--cudly-text-muted);
+}
+
+/* ── Compact data tables (ui/modernize-tables) ──────────────────────────
+ * .table-compact marks the app's data grids (Opportunities, approval queue,
+ * purchase history, planned purchases, inventory, RI exchange, API keys).
+ * Short values (money, counts, dates, terms, payment, status) stay on one
+ * line; long names and ids truncate with an ellipsis and keep the full
+ * value in a title tooltip; text that has to wrap (reasons, failure
+ * details) opts in with .cell-wrap. */
+.table-compact th,
+.table-compact td {
+    padding-inline: var(--cudly-sp-2);
+}
+
+.table-compact :is(th, td):first-child {
+    padding-left: var(--cudly-sp-3);
+}
+
+.table-compact :is(th, td):last-child {
+    padding-right: var(--cudly-sp-3);
+}
+
+.table-compact td {
+    white-space: nowrap;
+}
+
+.table-compact td.cell-wrap {
+    white-space: normal;
+    min-width: 12rem;
+}
+
+/* Sublines under a badge (approver, failure reason) wrap inside the cell. */
+.table-compact :is(.history-approver, .status-detail, .overdue-hint, .history-ops-hint) {
+    white-space: normal;
+    min-width: 10rem;
+}
+
+.cell-truncate {
+    display: inline-block;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.cell-truncate--sm {
+    max-width: 10rem;
+}
+
+/* A chip (RI exchange alternatives) is one unit: it wraps as a whole. */
+.table-compact .cost-chip {
+    white-space: nowrap;
+}
+
+/* An id under a name: muted monospace, truncated (Azure GUIDs). */
+.cell-id {
+    display: block;
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+    color: var(--cudly-text-subtle);
+    font-family: var(--cudly-font-mono);
+    font-size: var(--cudly-fs-xs);
+}
+
+.table-compact .service-badge {
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+/* Header: one line, with the sort chevron and the filter funnel inline to
+ * the right of the label. Only a sort button's label may wrap (inside the
+ * button, so the chevron and funnel still sit beside it). */
+.table-compact th {
+    white-space: nowrap;
+}
+
+.table-compact th .sort-btn > span:first-child {
+    white-space: normal;
+}
+
+th.sortable .sort-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+    vertical-align: middle;
+}
+
+th.sortable .sort-indicator {
+    display: inline-flex;
+    margin-left: 0;
+}
+
+/* An unsorted column's chevrons stay faint until the header is hovered or
+ * focused; the active sort keeps its full colour. */
+th.sortable .sort-indicator:not(.active) {
+    opacity: 0.55;
+}
+
+th.sortable:hover .sort-indicator,
+th.sortable .sort-btn:focus-visible .sort-indicator {
+    opacity: 1;
+}
+
+/* One compact funnel style for every table: the purchase history and
+ * approval queue buttons used to fall back to the boxed default button. */
+th .column-filter-btn,
+th .history-column-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    margin: 0 0 0 0.125rem;
+    padding: 0 0.25rem;
+    border: 0;
+    border-radius: var(--cudly-r-sm);
+    background: transparent;
+    color: var(--cudly-text-subtle);
+    box-shadow: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    line-height: 1;
+    vertical-align: middle;
+}
+
+th .column-filter-btn:hover,
+th .history-column-filter-btn:hover {
+    background: var(--cudly-border);
+    color: var(--cudly-primary);
+}
+
+th .column-filter-btn.active,
+th .history-column-filter-btn.active {
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+th .history-column-filter-btn:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 2px;
+}
+
+/* Headers that carry two filters for one column (RI exchange Current /
+ * Suggested / Normalized units) name each funnel under the label. */
+.th-filter-group {
+    display: flex;
+    gap: var(--cudly-sp-1);
+    margin-top: 0.125rem;
+}
+
+.th-filter-group .column-filter-btn {
+    gap: 0.2rem;
+    margin-left: -0.25rem;
+    font-weight: var(--cudly-fw-medium);
+}
+
+.table-compact th.num .th-filter-group {
+    justify-content: flex-end;
+}
+
+.column-filter-btn-name {
+    font-size: var(--cudly-fs-xs);
+}
+
+/* The approval queue sits under the card's description and has the
+ * amortize toggle under it: keep a gap on both sides of the table. */
+#purchases-approval-queue {
+    margin-top: var(--cudly-sp-3);
+}
+
+#purchases-approval-queue-section > .amortize-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin-top: var(--cudly-sp-3);
 }

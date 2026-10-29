@@ -3238,9 +3238,9 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'provider':
       return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
     case 'account':
-      return `<td>${escapeHtml(ctx.accountName)}</td>`;
+      return `<td><span class="cell-truncate" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
     case 'service':
-      return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
+      return `<td><span class="service-badge" title="${escapeHtml(rec.service)}">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
       return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
     case 'capacity': {
@@ -3628,7 +3628,7 @@ function buildListMarkup(
   }
 
   return `
-    <table>
+    <table class="table-compact">
       <thead>
         <tr>
           ${checkboxColHeader}

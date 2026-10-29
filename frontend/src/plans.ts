@@ -164,11 +164,11 @@ function renderPlannedPurchasesInternal(): void {
   };
 
   const tbody = filtered.length === 0
-    ? `<tr><td colspan="11" class="empty">No rows match these filters.</td></tr>`
+    ? `<tr><td colspan="12" class="empty">No rows match these filters.</td></tr>`
     : filtered.map(purchase => renderPlannedPurchaseRow(purchase)).join('');
 
   container.innerHTML = `
-    <table class="planned-purchases-table">
+    <table class="planned-purchases-table table-compact">
       <thead>
         <tr>
           <th>Plan</th>
@@ -177,7 +177,8 @@ function renderPlannedPurchasesInternal(): void {
           <th><span>Service</span>${filterBtn('service', 'Service')}</th>
           <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
           <th class="num"><span>Count</span>${filterBtn('count', 'Count')}</th>
-          <th><span>Term</span>${filterBtn('term', 'Term')}${filterBtn('payment', 'Payment')}</th>
+          <th><span>Term</span>${filterBtn('term', 'Term')}</th>
+          <th><span>Payment</span>${filterBtn('payment', 'Payment')}</th>
           <th class="num"><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
           <th class="num"><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
           <th><span>Status</span>${filterBtn('status', 'Status')}</th>
@@ -388,8 +389,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const isPaused = purchase.status === 'paused';
   const isPending = purchase.status === 'pending' || purchase.status === 'notified';
   const canRun = isPending || isPaused;
-  const termCell = purchase.term > 0
-    ? `${purchase.term}yr ${escapeHtml((purchase.payment ?? '').replace('-', ' '))}`
+  // Term and payment are separate columns, each with its own filter (the
+  // two funnels used to share one header).
+  const termCell = purchase.term > 0 ? `${purchase.term}yr` : '—';
+  const paymentCell = purchase.term > 0
+    ? escapeHtml((purchase.payment ?? '').replace('-', ' '))
     : '—';
   // Show an em-dash for upfront=0 unless the plan truly is all-upfront;
   // $0 upfront on "partial" or "no-upfront" is informative ($0 is real).
@@ -449,7 +453,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
-        <span class="plan-name">${escapeHtml(purchase.plan_name)}</span>
+        <span class="plan-name cell-truncate" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
@@ -458,6 +462,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${resourceCell}</td>
       <td class="num">${countCell}</td>
       <td>${termCell}</td>
+      <td>${paymentCell}</td>
       <td class="num">${upfrontShown}</td>
       <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>

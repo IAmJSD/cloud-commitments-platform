@@ -241,13 +241,14 @@ function renderActiveCommitmentsTable(
 
   clearChildren(container);
   const table = document.createElement('table');
+  table.className = 'table-compact';
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
   const amortize = state.getAmortizeUpfront();
-  const monthlyLabel = amortize ? 'Monthly cost (amortized)' : 'Monthly cost';
-  const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', monthlyLabel, 'Monthly savings', 'Expires'];
-  const numericHeaders = new Set(['Count', monthlyLabel, 'Monthly savings']);
+  const monthlyLabel = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
+  const headers = ['Provider', 'Account', 'Service', 'Resource Type', 'Region', 'Count', 'Term', 'Payment', monthlyLabel, 'Monthly Savings', 'Expires'];
+  const numericHeaders = new Set(['Count', monthlyLabel, 'Monthly Savings']);
   for (const label of headers) {
     const th = document.createElement('th');
     th.textContent = label;
@@ -274,8 +275,8 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
 
   appendCell(tr, c.provider);
   tr.appendChild(buildAccountCell(c));
-  appendCell(tr, c.service);
-  appendCell(tr, c.resource_type ?? '');
+  appendTruncatedCell(tr, c.service);
+  appendTruncatedCell(tr, c.resource_type ?? '');
   appendCell(tr, c.region);
   appendCell(tr, String(c.count), true);
   appendCell(tr, `${c.term_years}y`);
@@ -301,6 +302,18 @@ function appendCell(tr: HTMLTableRowElement, text: string, numeric = false): voi
   const td = document.createElement('td');
   td.textContent = text;
   if (numeric) td.className = 'num';
+  tr.appendChild(td);
+}
+
+// Long free-form values (savings plan descriptions, service slugs) truncate
+// with an ellipsis so the row stays one line; the title keeps the full text.
+function appendTruncatedCell(tr: HTMLTableRowElement, text: string): void {
+  const td = document.createElement('td');
+  const span = document.createElement('span');
+  span.className = 'cell-truncate cell-truncate--sm';
+  span.textContent = text;
+  if (text) span.title = text;
+  td.appendChild(span);
   tr.appendChild(td);
 }
 
@@ -337,16 +350,24 @@ function mountInventoryAmortizeCheckbox(): void {
   actions.appendChild(wrapper);
 }
 
+// The id sits under the name in small muted type; both truncate with an
+// ellipsis (Azure subscription GUIDs are long) and the cell's title carries
+// the full value.
 function buildAccountCell(c: api.InventoryCommitment): HTMLTableCellElement {
   const td = document.createElement('td');
   if (c.account_name && c.account_name.includes(c.account_id)) {
     td.textContent = c.account_name;
+    td.title = c.account_name;
   } else if (c.account_name) {
-    td.appendChild(document.createTextNode(c.account_name + ' '));
+    const name = document.createElement('span');
+    name.className = 'cell-truncate cell-truncate--sm';
+    name.textContent = c.account_name;
+    td.appendChild(name);
     const id = document.createElement('span');
-    id.className = 'monospace';
-    id.textContent = `(${c.account_id})`;
+    id.className = 'monospace cell-id';
+    id.textContent = c.account_id;
     td.appendChild(id);
+    td.title = `${c.account_name} (${c.account_id})`;
   } else {
     const id = document.createElement('span');
     id.className = 'monospace';
@@ -486,15 +507,15 @@ function buildServiceTable(
   targetFor: (service: string) => number | null,
 ): HTMLTableElement {
   const table = document.createElement('table');
-  table.className = 'coverage-service-table';
+  table.className = 'coverage-service-table table-compact';
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Service', 'Covered/mo', 'On-demand gap/mo', 'Coverage %', 'Coverage bar']) {
+  for (const label of ['Service', 'Covered/mo', 'On-Demand Gap/mo', 'Coverage %', 'Coverage Bar']) {
     const th = document.createElement('th');
     th.textContent = label;
     if (label.endsWith('/mo')) th.className = 'num';
-    if (label === 'Coverage bar') {
+    if (label === 'Coverage Bar') {
       th.setAttribute('aria-label', 'Coverage bar');
     }
     headerRow.appendChild(th);
