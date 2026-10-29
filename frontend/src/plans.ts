@@ -7,13 +7,13 @@ import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
 import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
-import { iconSvg } from './icons';
+import { createIcon, iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
-import { openModal, closeModal } from './modal';
+import { openModal, closeModal, modalCloseButtonHtml } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { renderErrorCallout } from './lib/error-callout';
 import { canAccess } from './permissions';
@@ -839,9 +839,12 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
-          <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" ${plan.enabled ? 'checked' : ''}>
-            <span class="slider"></span>
+          <label class="plan-toggle">
+            <span class="plan-toggle-text">Enabled</span>
+            <span class="toggle-label">
+              <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" aria-label="Enabled: ${escapeHtmlAttr(plan.name)}" ${plan.enabled ? 'checked' : ''}>
+              <span class="slider"></span>
+            </span>
           </label>
           ` : ''}
         </div>
@@ -881,9 +884,9 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         </div>
         <div class="plan-actions">
           ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" data-notification-days="${escapeHtmlAttr(String(plan.notification_days_before))}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-delete">${iconSvg('trash-2')}Delete</button>` : ''}
         </div>
       </div>
     </div>
@@ -1294,13 +1297,23 @@ function renderPlanAccountChips(): void {
   if (!container) return;
   container.textContent = '';
   planSelectedAccounts.forEach(acct => {
+    const label = `${acct.name} (${acct.external_id})`;
     const chip = document.createElement('span');
     chip.className = 'account-chip';
-    chip.textContent = `${acct.name} (${acct.external_id})`;
+    // A pill that never wraps mid-name: a long name is truncated with an
+    // ellipsis and shown in full on hover.
+    const name = document.createElement('span');
+    name.className = 'account-chip-name';
+    name.textContent = label;
+    name.title = label;
+    chip.appendChild(name);
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.textContent = '\u00d7';
+    removeBtn.className = 'account-chip-remove';
+    removeBtn.setAttribute('aria-label', `Remove ${label}`);
+    removeBtn.title = 'Remove';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.addEventListener('click', () => {
       planSelectedAccounts = planSelectedAccounts.filter(a => a.id !== acct.id);
       renderPlanAccountChips();
@@ -1962,10 +1975,16 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
 
   const modal = document.createElement('div');
   modal.id = 'add-purchases-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'add-purchases-modal-title');
   modal.innerHTML = `
     <div class="modal-overlay">
       <div class="modal-content">
-        <h2>Add Planned Purchases</h2>
+        <div class="modal-header">
+          <h2 id="add-purchases-modal-title">Add Planned Purchases</h2>
+          ${modalCloseButtonHtml('add-purchases-cancel')}
+        </div>
         <p class="help-text">Schedule additional purchases for <strong>${escapeHtml(planName)}</strong></p>
 
         <form id="add-purchases-form">

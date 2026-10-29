@@ -178,16 +178,20 @@
 .ramp-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 1rem;
-    margin-top: 0.5rem;
+    gap: var(--cudly-sp-3);
+    margin-top: var(--cudly-sp-2);
 }
 
-.ramp-option {
+/* label.ramp-option outranks `.modal-content label { display: block }`,
+ * which otherwise ran the title and description together on one line. */
+label.ramp-option {
     display: flex;
     flex-direction: column;
-    padding: 1rem;
-    border: 2px solid var(--cudly-border-strong);
-    border-radius: 8px;
+    gap: var(--cudly-sp-1);
+    margin: 0;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
     cursor: pointer;
     transition: border-color var(--cudly-dur) var(--cudly-ease), background-color var(--cudly-dur) var(--cudly-ease), box-shadow var(--cudly-dur) var(--cudly-ease);
 }
@@ -217,16 +221,28 @@
 .ramp-option:has(input:checked) {
     border-color: var(--cudly-primary);
     background: var(--cudly-info-bg);
+    /* A second pixel of the accent, inside the border, so selection reads
+     * clearly without the card changing size. */
+    box-shadow: inset 0 0 0 1px var(--cudly-primary);
+}
+
+.ramp-option:has(input:checked:focus-visible) {
+    box-shadow: inset 0 0 0 1px var(--cudly-primary), var(--cudly-focus-ring);
 }
 
 .ramp-label {
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
-    margin-bottom: 0.25rem;
+}
+
+.ramp-option:has(input:checked) .ramp-label {
+    color: var(--cudly-primary);
 }
 
 .ramp-desc {
-    font-size: 0.8rem;
+    font-size: var(--cudly-fs-xs);
+    line-height: 1.4;
     color: var(--cudly-text-muted);
 }
 
@@ -271,7 +287,7 @@
     .plan-editor-layout.has-editor-draft { grid-template-columns: minmax(0, 1fr); grid-template-areas: "form" "panel"; }
     #plan-editor-panel { position: static; max-height: none; overflow: visible; }
 }
-@media (max-width: 480px) { #plan-modal .modal-content { padding: 12px; } }
+@media (max-width: 480px) { #plan-modal .modal-content { --modal-pad: 12px; } }
 
 #plan-advanced-settings { border-top: 1px solid var(--cudly-border); margin-top: 16px; padding-top: 16px; }
 #plan-advanced-settings > summary, #plan-editor-panel summary { cursor: pointer; padding: 8px 0; }
@@ -280,5 +296,183 @@
 #plan-editor-panel .editor-help { margin-bottom: 16px; }
 #plan-editor-panel .editor-status { font-weight: var(--cudly-fw-semibold); min-height: 1.5em; }
 #plan-editor-panel .schedule-preview-scroll { min-height: 372px; }
+/* The read-only plot is shorter (no Start/End handle row). */
+#plan-editor-panel .schedule-preview-scroll:has(> svg[role="img"]) { min-height: 312px; }
 #plan-editor-panel .schedule-preview-scroll[hidden] { display: none; }
 #plan-editor-panel [data-editor="changes"] { margin-top: 16px; border-top: 1px solid var(--cudly-border); }
+
+/* ---- Plan editor: selected-account pills (ui/modernize-modals) ---------- */
+.selected-accounts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2);
+}
+
+.selected-accounts:not(:empty) {
+    margin-top: var(--cudly-sp-3);
+}
+
+.account-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+    max-width: 100%;
+    padding: 0.125rem var(--cudly-sp-1) 0.125rem var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text);
+    background: var(--cudly-info-bg);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-full);
+}
+
+.account-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+button.account-chip-remove {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--cudly-r-full);
+    background: transparent;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+}
+
+button.account-chip-remove:hover {
+    background: var(--cudly-border);
+    color: var(--cudly-text);
+}
+
+.plan-accounts-search {
+    position: relative;
+}
+
+.account-suggestions {
+    position: absolute;
+    z-index: 3;
+    left: 0;
+    right: 0;
+    max-height: 14rem;
+    overflow-y: auto;
+    margin-top: var(--cudly-sp-1);
+    padding: var(--cudly-sp-1) 0;
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-lg);
+}
+
+.account-suggestion-item {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    cursor: pointer;
+}
+
+.account-suggestion-item:hover {
+    background: var(--cudly-surface-muted);
+}
+/* ---- end plan editor pills ---------------------------------------------- */
+
+/* ---- Plan cards: actions, enabled switch, sections (ui/modernize-modals) */
+.plan-status {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+/* The card's on/off switch, labelled "Enabled" and set apart from the badges. */
+.plan-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0 0 0 var(--cudly-sp-2);
+    padding-left: var(--cudly-sp-3);
+    border-left: 1px solid var(--cudly-border);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+}
+
+.plan-toggle .toggle-label {
+    width: 36px;
+    height: 20px;
+}
+
+.plan-toggle .slider:before {
+    width: 14px;
+    height: 14px;
+}
+
+.plan-toggle input:checked + .slider:before {
+    transform: translateX(16px);
+}
+
+.plan-toggle input:focus-visible + .slider {
+    box-shadow: var(--cudly-focus-ring);
+}
+
+.plan-actions {
+    align-items: center;
+}
+
+/* Secondary card actions: no box until hovered. */
+.plan-actions button.plan-action-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--cudly-text);
+}
+
+.plan-actions button.plan-action-ghost:hover {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-border);
+}
+
+/* A boxless first action (read-only cards) lines its text up with the card. */
+.plan-actions button.plan-action-ghost:first-child {
+    margin-left: calc(-1 * var(--cudly-sp-4));
+}
+
+/* Delete: red text on the card surface, pushed to the far end of the row.
+ * The confirm dialog it opens carries the solid red action. */
+.plan-actions button.plan-action-delete {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+    margin-left: auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--cudly-error-fg);
+}
+
+.plan-actions button.plan-action-delete:hover {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error-bg);
+}
+
+/* "Unassigned" plans heading: a section heading with its note below it and
+ * room above, instead of plain text flush against the next card. */
+.plans-section-header {
+    margin: var(--cudly-sp-6) 0 var(--cudly-sp-3);
+}
+
+.plans-section-header h4 {
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+.plans-section-description {
+    display: block;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+/* ---- end plan cards ------------------------------------------------------ */

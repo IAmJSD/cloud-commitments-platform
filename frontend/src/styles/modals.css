@@ -28,6 +28,24 @@
     overflow-y: auto;
 }
 
+/* ---- Dialog chrome (ui/modernize-modals) ---------------------------------
+ * A dialog with a .modal-header child (title + close-X, see
+ * modal.ts) gets the shared chrome: a 24px gutter (--modal-pad), a header
+ * and a footer whose hairlines run edge to edge, both pinned while a long
+ * body scrolls, and one of three widths: .modal-sm (420px), the default
+ * (520px) or .modal-wide (800px). :where() keeps these at class specificity
+ * so .modal-wide and per-dialog rules later in the cascade still win.
+ * Dialogs without a header (login, profile) keep the plain box above. */
+.modal-content:where(:has(> .modal-header)) {
+    --modal-pad: var(--cudly-sp-5);
+    padding: var(--modal-pad);
+    width: 520px;
+}
+
+.modal-sm {
+    width: 420px;
+}
+
 .modal-wide {
     width: 800px;
     max-width: 95vw;
@@ -37,6 +55,88 @@
     margin-bottom: 1.5rem;
     color: var(--cudly-text);
 }
+
+/* The negative insets cancel the scroll container's padding, which sticky
+ * positioning respects, so the header and footer sit flush with its edges. */
+.modal-header {
+    position: sticky;
+    top: calc(-1 * var(--modal-pad, 0px));
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-4);
+    margin: calc(-1 * var(--modal-pad, 0px)) calc(-1 * var(--modal-pad, 0px)) var(--cudly-sp-5);
+    padding: var(--cudly-sp-4) var(--modal-pad, 0px);
+    background: var(--cudly-surface);
+    border-bottom: 1px solid var(--cudly-border);
+}
+
+.modal-content .modal-header h2,
+.modal-content .modal-header h3 {
+    margin: 0;
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: 1.3;
+    color: var(--cudly-text);
+}
+
+/* Quiet square icon button. The element qualifier outranks the bare button
+ * rule and the older .modal-close in settings.css. */
+.modal-header button.modal-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    margin-right: calc(-1 * var(--cudly-sp-2));
+    padding: 0;
+    border: none;
+    border-radius: var(--cudly-r-sm);
+    background: transparent;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-lg);
+    line-height: 1;
+}
+
+.modal-header button.modal-close:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--cudly-border);
+}
+
+/* Footer of a framed dialog: right-aligned actions on an edge-to-edge
+ * hairline, pinned to the bottom while the body scrolls. */
+.modal-content:has(> .modal-header) :is(.modal-buttons, .modal-footer) {
+    position: sticky;
+    bottom: calc(-1 * var(--modal-pad));
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-3);
+    justify-content: flex-end;
+    align-items: center;
+    margin: var(--cudly-sp-5) calc(-1 * var(--modal-pad)) calc(-1 * var(--modal-pad));
+    padding: var(--cudly-sp-4) var(--modal-pad);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+}
+/* The footer draws its own hairline, so a section just above it drops its. */
+.modal-content:has(> .modal-header) .form-section:has(+ :is(.modal-buttons, .modal-footer)) {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+/* ---- end dialog chrome --------------------------------------------------- */
 
 .modal-content label {
     display: block;
@@ -60,15 +160,6 @@
 .modal-content textarea {
     min-height: 80px;
     resize: vertical;
-}
-
-.modal-buttons {
-    display: flex;
-    gap: 1rem;
-    justify-content: flex-end;
-    margin-top: 1.5rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--cudly-border);
 }
 
 /* Modal description */
@@ -560,3 +651,185 @@
     border-left: 3px solid var(--cudly-error);
     padding-left: 0.75rem;
 }
+
+/* ---- Review Purchase, bulk mode (ui/modernize-modals) --------------------
+ * The summary is a grid of small key/value tiles with total savings
+ * emphasised; each bucket is a card: title and recommendation count, terms,
+ * the Payment select with its source, and the bucket totals. */
+.fanout-summary.form-section {
+    margin-bottom: var(--cudly-sp-4);
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.fanout-summary h3 {
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-md);
+    color: var(--cudly-text);
+}
+
+.fanout-email-note {
+    margin: 0 0 var(--cudly-sp-4);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: var(--cudly-sp-2);
+}
+
+.fanout-total {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-1);
+    margin: 0;
+    padding: var(--cudly-sp-3);
+    background: var(--cudly-surface-muted);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.fanout-total-label {
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
+
+/* The text reads "Label: value"; the tile layout makes the colon redundant. */
+.fanout-total-sep {
+    display: none;
+}
+
+.fanout-total strong {
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.fanout-total.fanout-total-savings {
+    background: var(--cudly-success-bg);
+    border-color: transparent;
+}
+
+.fanout-total.fanout-total-savings strong {
+    font-size: var(--cudly-fs-lg);
+    color: var(--cudly-success);
+}
+
+.modal-content .fanout-bucket {
+    margin: 0 0 var(--cudly-sp-3);
+    padding: var(--cudly-sp-4);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.modal-content .fanout-bucket.fanout-bucket-failed {
+    border-left: 3px solid var(--cudly-error);
+}
+
+.fanout-bucket .fanout-bucket-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--cudly-sp-1) var(--cudly-sp-3);
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+.fanout-bucket-rec-count {
+    flex: none;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-regular);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-bucket-ok,
+.fanout-bucket-error {
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-bucket-error {
+    color: var(--cudly-error-fg);
+}
+
+.fanout-bucket-payment-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+}
+
+.modal-content .fanout-bucket-payment-label {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+}
+
+.modal-content select.fanout-bucket-payment {
+    width: auto;
+    min-width: 12rem;
+    margin: 0;
+}
+
+.fanout-bucket-payment-source {
+    padding: 0.125rem var(--cudly-sp-2);
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+    background: var(--cudly-surface-muted);
+    border-radius: var(--cudly-r-full);
+}
+
+.fanout-bucket-totals {
+    margin: var(--cudly-sp-3) 0 0;
+    padding-top: var(--cudly-sp-3);
+    border-top: 1px solid var(--cudly-border);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.fanout-sp-plan-types {
+    margin-top: var(--cudly-sp-2);
+    font-size: var(--cudly-fs-sm);
+}
+/* ---- end Review Purchase ------------------------------------------------- */
+
+/* ---- Create API Key: permission checklist (ui/modernize-modals) ---------
+ * One compact row per permission, checkbox beside its label, in a bordered
+ * scroll box, instead of a full-width centred checkbox above each label. */
+.apikey-permissions-list {
+    display: grid;
+    gap: var(--cudly-sp-1);
+    max-height: 16rem;
+    overflow-y: auto;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.form-group label.apikey-permission-option {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
+    cursor: pointer;
+}
+
+.form-group .apikey-permission-option input[type="checkbox"] {
+    flex: none;
+    width: auto;
+    margin: 0;
+}
+/* ---- end API key checklist ---------------------------------------------- */

@@ -24,6 +24,7 @@ import { LADDER_CONFIG_TABLE_COLUMNS, renderLadderConfigTable } from './ladder-c
 import { renderLadderConfigModal } from './ladder-config-modal';
 import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { readLadderNumbers } from './ladder-form-numbers';
+import { showFieldError } from './lib/field-errors';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // ==========================================
@@ -281,12 +282,18 @@ export async function saveLadderConfig(): Promise<void> {
     return;
   }
 
-  const rampRaw = (document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement | null)?.value?.trim() ?? '';
+  const rampField = document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement | null;
+  const rampRaw = rampField?.value?.trim() ?? '';
   let rampSchedule: api.LadderConfig['ramp_schedule'];
   try {
     rampSchedule = JSON.parse(rampRaw);
-  } catch {
+  } catch (err) {
     showToast({ message: 'Ramp schedule is not valid JSON.', kind: 'error' });
+    // Also say what is wrong under the field itself; it clears on the next edit.
+    if (rampField) {
+      showFieldError(rampField, `Not valid JSON: ${(err as Error).message}`);
+      rampField.focus();
+    }
     return;
   }
 

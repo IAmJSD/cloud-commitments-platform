@@ -1,40 +1,12 @@
 /* Commitment Laddering per-account config modal (issue #742 review).
  * Labels stack above their inputs, the short fields pair up in a two-column
  * grid, and qualifiers such as ranges live in a muted hint under the input.
- * The header stays fixed and the body scrolls on short viewports, with the
- * Cancel / Save footer pinned to the bottom of the scroll area. */
+ * On short viewports the body scrolls between the pinned header and the
+ * Cancel / Save footer (shared dialog chrome, modals.css). */
 
 .ladder-config-dialog {
     width: 680px;
     max-width: 95vw;
-    max-height: 90vh;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.ladder-config-dialog .modal-header {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--cudly-sp-4);
-    padding: var(--cudly-sp-4) var(--cudly-sp-5);
-    border-bottom: 1px solid var(--cudly-border);
-}
-
-.ladder-config-dialog .modal-header h3 {
-    margin: 0;
-    font-size: var(--cudly-fs-lg);
-    color: var(--cudly-text);
-}
-
-.ladder-config-dialog .modal-body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--cudly-sp-5) var(--cudly-sp-5) 0;
 }
 
 .ladder-form-grid {
@@ -70,7 +42,9 @@
 }
 
 .ladder-config-dialog .ladder-field textarea {
-    min-height: 6rem;
+    /* Room for a two-step schedule without scrolling. */
+    min-height: 10rem;
+    line-height: 1.45;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.85rem;
 }
@@ -122,19 +96,6 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--cudly-text-muted);
-}
-
-.ladder-config-dialog .modal-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--cudly-sp-3);
-    margin: 0 calc(-1 * var(--cudly-sp-5));
-    padding: var(--cudly-sp-4) var(--cudly-sp-5);
-    background: var(--cudly-surface);
-    border-top: 1px solid var(--cudly-border);
 }
 
 @media (max-width: 640px) {
