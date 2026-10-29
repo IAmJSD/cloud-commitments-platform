@@ -832,9 +832,12 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
-          <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" ${plan.enabled ? 'checked' : ''}>
-            <span class="slider"></span>
+          <label class="plan-toggle">
+            <span class="plan-toggle-text">Enabled</span>
+            <span class="toggle-label">
+              <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" aria-label="Enabled: ${escapeHtmlAttr(plan.name)}" ${plan.enabled ? 'checked' : ''}>
+              <span class="slider"></span>
+            </span>
           </label>
           ` : ''}
         </div>
@@ -874,9 +877,9 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         </div>
         <div class="plan-actions">
           ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" data-notification-days="${escapeHtmlAttr(String(plan.notification_days_before))}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-delete">${iconSvg('trash-2')}Delete</button>` : ''}
         </div>
       </div>
     </div>
