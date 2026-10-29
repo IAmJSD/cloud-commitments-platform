@@ -542,7 +542,7 @@ th .history-column-filter-btn:focus-visible {
 /* Phones: the approval queue and purchase history action cells can be
  * wider than half the card ("Awaiting different approver", a failure
  * hint), so pinned they would cover the rest of the row. There they
- * scroll with the row, as before. */
+ * scroll with the row and the right-edge fade, as before. */
 @media (max-width: 640px) {
     :is(.approval-queue-table, #history-list table).table-sticky-end tr > :last-child {
         position: static;
@@ -552,8 +552,9 @@ th .history-column-filter-btn:focus-visible {
         content: none;
     }
 
-    .scroll-hint-right:has(:is(.approval-queue-table, #history-list table).table-sticky-end) {
-        --scroll-hint-r: transparent;
+    .scroll-hint-right:has(:is(.approval-queue-table, #history-list table).table-sticky-end),
+    :is(.approval-queue-table, #history-list table).table-sticky-end.scroll-hint-right {
+        --scroll-hint-r: color-mix(in srgb, var(--cudly-text) 12%, transparent);
     }
 }
 
