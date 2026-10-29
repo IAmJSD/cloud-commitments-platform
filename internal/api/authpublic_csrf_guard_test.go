@@ -257,6 +257,7 @@ func purchaseCSRFGuardFixture(action string, viaToken bool) func(t *testing.T) c
 		}
 
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 			return &config.CloudAccount{ID: id, Name: id, Provider: "aws", ContactEmail: contact}, nil
 		}
@@ -266,6 +267,7 @@ func purchaseCSRFGuardFixture(action string, viaToken bool) func(t *testing.T) c
 		store.On("SetCancelledBy", mock.Anything, csrfGuardExecID, mock.Anything).Return(nil).Maybe()
 
 		pm := new(MockPurchaseManager)
+		t.Cleanup(func() { pm.AssertExpectations(t) })
 		pm.On("ApproveAndExecute", mock.Anything, csrfGuardExecID, mock.Anything, mock.Anything).Return(exec, "", nil).Maybe()
 		pm.On("ApproveExecution", mock.Anything, csrfGuardExecID, csrfGuardRawToken, mock.Anything).Return(nil, "", nil).Maybe()
 		pm.On("CancelExecution", mock.Anything, csrfGuardExecID, csrfGuardRawToken, mock.Anything).Return(nil).Maybe()
@@ -278,6 +280,7 @@ func purchaseCSRFGuardFixture(action string, viaToken bool) func(t *testing.T) c
 			m = csrfGuardAuth("admin@example.com")
 			m.grantAdminPurchaser()
 		}
+		t.Cleanup(func() { m.AssertExpectations(t) })
 
 		refused := func(t *testing.T) {
 			t.Helper()
@@ -316,6 +319,7 @@ func riApproveCSRFGuardFixture(t *testing.T) csrfGuardFixture {
 	t.Helper()
 	creatorID := "creator-uuid"
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetRIExchangeRecord", mock.Anything, csrfGuardRIID).Return(&config.RIExchangeRecord{
 		ID:              csrfGuardRIID,
 		Status:          "pending",
@@ -335,6 +339,7 @@ func riApproveCSRFGuardFixture(t *testing.T) csrfGuardFixture {
 	store.On("StampRIExchangeApprovedBy", mock.Anything, csrfGuardRIID, mock.Anything).Return(nil).Maybe()
 
 	m := csrfGuardAuth("admin@example.com")
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.grantAdminPurchaser()
 
 	refused := func(t *testing.T) {

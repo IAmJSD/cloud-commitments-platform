@@ -18,6 +18,7 @@ import (
 func TestHandler_getRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 	// Mock the scheduler to return empty recommendations
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
@@ -124,6 +125,7 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 
 	t.Run("returns freshness payload", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		now := time.Now().UTC()
 		mockStore.On("GetRecommendationsFreshness", ctx).
 			Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
@@ -144,6 +146,7 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 	// partial sweep must reach it as a structured, sanitized field.
 	t.Run("surfaces last_collection_partial", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		now := time.Now().UTC()
 		partial := &config.RecommendationsCollectionPartial{
 			Providers: []config.PartialProviderSweep{{
@@ -180,6 +183,7 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 
 	t.Run("complete collection serializes last_collection_partial as null", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetRecommendationsFreshness", ctx).Return(&config.RecommendationsFreshness{}, nil)
 
 		handler := &Handler{config: mockStore, apiKey: "test-key"}
@@ -197,6 +201,7 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 
 	t.Run("surfaces store error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, errors.New("db down"))
 
 		handler := &Handler{config: mockStore, apiKey: "test-key"}
@@ -271,6 +276,7 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetRecommendationsFreshness", ctx).
 			Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
@@ -311,6 +317,7 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetRecommendationsFreshness", ctx).
 			Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
@@ -339,6 +346,7 @@ func TestHandler_getRecommendationDetail(t *testing.T) {
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetRecommendationsFreshness", ctx).
 			Return(nil, errors.New("db down"))
 
@@ -453,6 +461,7 @@ func TestGetRecommendations_AccountIDFilter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockScheduler := new(MockScheduler)
+			t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 			if tt.wantStatus == 0 {
 				mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 					Return(tt.mockReturn, nil)

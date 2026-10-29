@@ -59,6 +59,7 @@ func newPollerFixture(t *testing.T, rows ...config.PurchaseHistoryRecord) *polle
 // its AssertNotCalled checks go through MockConfigStore's call log.
 func newPollerFixtureWithStore(t *testing.T, store *MockConfigStore, rows ...config.PurchaseHistoryRecord) *pollerFixture {
 	t.Helper()
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	f := &pollerFixture{
 		store: store,
 		aws:   &fakeListingStatusReader{statuses: map[string]marketplaceListingStatus{}, errs: map[string]error{}},
@@ -298,6 +299,7 @@ func TestPollMarketplaceListings_FailuresAreCountedAndTheRunGoesOn(t *testing.T)
 	noAccount := listedRow("ri-orphan", "ril-orphan")
 	noAccount.CloudAccountID, noAccount.AccountID = nil, ""
 	f := newPollerFixture(t, listedRow("ri-1", "ril-1"), noAccount, listedRow("ri-2", "ril-2"), listedRow("ri-3", "ril-3"))
+	t.Cleanup(func() { f.store.AssertExpectations(t) })
 	f.aws.errs["ril-1"] = errors.New("RequestLimitExceeded")
 	f.aws.statuses["ril-2"] = marketplaceListingStatus{ListingID: "ril-2", State: config.ListingStateActive, CreatedAt: pollerCreateDate}
 	f.store.On("RecordMarketplaceListingActive", mock.Anything, "ri-2", "ril-2", pollerCreateDate).Return(false, errors.New("db down"))
@@ -314,6 +316,7 @@ func TestPollMarketplaceListings_FailuresAreCountedAndTheRunGoesOn(t *testing.T)
 
 func TestPollMarketplaceListings_ListFailureFailsTheRun(t *testing.T) {
 	f := newPollerFixture(t)
+	t.Cleanup(func() { f.store.AssertExpectations(t) })
 	f.store.ExpectedCalls = nil
 	f.store.On("ListMarketplaceListingsToPoll", mock.Anything).Return(nil, errors.New("db down"))
 

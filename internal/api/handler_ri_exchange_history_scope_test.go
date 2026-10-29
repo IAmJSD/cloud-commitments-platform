@@ -34,6 +34,7 @@ func runExchangeHistoryScopeCases(t *testing.T, accounts []config.CloudAccount, 
 			t.Parallel()
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "uid"}, nil)
 			mockAuth.grantScoped(tc.scope...)
 			store := new(MockConfigStore)
@@ -149,7 +150,7 @@ func TestHandler_getRIExchangeHistory_AccountListErrorFailsClosed(t *testing.T) 
 	rows := []config.RIExchangeRecord{{ID: "b-1", AccountID: exchangeAcctB}}
 	store.On("GetRIExchangeHistory", ctx, mock.Anything, 500).Return(rows, nil).Maybe()
 	store.On("GetRIExchangeHistoryForAccounts", ctx, mock.Anything, 500, mock.Anything).Return(rows, nil).Maybe()
-	h, req := scopedExchangeHistoryHandler(ctx, store)
+	h, req := scopedExchangeHistoryHandler(t, ctx, store)
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return nil, errors.New("list failed")
 	}

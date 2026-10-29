@@ -87,7 +87,7 @@ func purchasesFiredByRetry(t *testing.T, failed *config.PurchaseExecution, req *
 	// retry-own authorizes the row's creator (issue #907), so RBAC is out of
 	// the way and the re-drive-safety gate is what the assertions see.
 	session := &Session{UserID: retryCallerID, Email: "operator@example.com"}
-	handler, mockConfig, _ := buildSessionRetryHandler(failed, session, false, true)
+	handler, mockConfig, _ := buildSessionRetryHandler(t, failed, session, false, true)
 
 	var saved []*config.PurchaseExecution
 	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).

@@ -51,6 +51,7 @@ func (a *realAPIKeyAuth) ListUserAPIKeysAPI(ctx context.Context, userID string) 
 func newAPIKeyRoundtripHandler(t *testing.T) (*Handler, *auth.MockStore, **auth.UserAPIKey) {
 	t.Helper()
 	store := new(auth.MockStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	user := &auth.User{
 		ID:           roundtripUserID,
 		Email:        "owner@example.com",
@@ -70,6 +71,7 @@ func newAPIKeyRoundtripHandler(t *testing.T) (*Handler, *auth.MockStore, **auth.
 		Return(nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, roundtripToken).
 		Return(&Session{UserID: roundtripUserID, Email: user.Email}, nil)
 	mockAuth.On("ValidateCSRFToken", mock.Anything, roundtripToken, roundtripCSRF).Return(nil).Maybe()
@@ -161,6 +163,8 @@ func TestHandleRequest_CreateAPIKey_ResponseUsesDocumentedConstraintShape(t *tes
 
 func TestHandleRequest_ListAPIKeys_ReturnsDocumentedConstraintShape(t *testing.T) {
 	h, store, _ := newAPIKeyRoundtripHandler(t)
+	// Listing creates nothing and does not read the owner's group.
+	relaxUnreachedStubs(&store.Mock, "GetGroup", "CreateAPIKey")
 
 	// Seeded directly in the stored (auth) shape so this checks the listing
 	// response independently of the create path.
@@ -200,7 +204,10 @@ func TestHandleRequest_ListAPIKeys_ReturnsDocumentedConstraintShape(t *testing.T
 // level. Before #957 the negative max_amount was dropped during decoding and
 // the key was minted with no cap at all.
 func TestHandleRequest_CreateAPIKey_RejectsNegativeMaxAmount(t *testing.T) {
-	h, _, stored := newAPIKeyRoundtripHandler(t)
+	h, store, stored := newAPIKeyRoundtripHandler(t)
+	// The cap is refused before the owner's group is read or a key is
+	// stored; *stored below pins the latter.
+	relaxUnreachedStubs(&store.Mock, "GetGroup", "CreateAPIKey")
 
 	resp := apiKeyRoundtripRequest(t, h, "POST", constrainedAPIKeyBody(t, -1))
 

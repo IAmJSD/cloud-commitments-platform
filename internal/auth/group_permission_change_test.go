@@ -160,6 +160,7 @@ func TestUpdateGroupAPI_MemberCheckStoreErrorFailsClosed(t *testing.T) {
 	t.Run("listing users fails", func(t *testing.T) {
 		ctx := context.Background()
 		m := new(MockStore)
+		t.Cleanup(func() { m.AssertExpectations(t) })
 		m.On("GetGroup", ctx, changeTargetID).Return(changeTarget(), nil)
 		m.On("ListUsers", ctx).Return(nil, errors.New("connection reset"))
 		svc := createTestService(m, new(MockEmailSender))
@@ -174,6 +175,7 @@ func TestUpdateGroupAPI_MemberCheckStoreErrorFailsClosed(t *testing.T) {
 	t.Run("loading a member's other group fails", func(t *testing.T) {
 		ctx := context.Background()
 		m := new(MockStore)
+		t.Cleanup(func() { m.AssertExpectations(t) })
 		m.On("GetGroup", ctx, changeTargetID).Return(changeTarget(), nil)
 		m.On("GetGroup", ctx, "x1").Return(nil, errors.New("connection reset"))
 		m.On("ListUsers", ctx).Return([]User{{ID: "u1", GroupIDs: []string{changeTargetID, "x1"}}}, nil)

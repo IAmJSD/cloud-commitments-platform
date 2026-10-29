@@ -172,10 +172,12 @@ func runAccountTest(t *testing.T, pc probeCase) AccountTestResult {
 	t.Helper()
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "uid"}, nil)
 	mockAuth.grantAdmin()
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	acct := pc.acct
 	acct.ID = probeAccountID
 	acct.Provider = "aws"

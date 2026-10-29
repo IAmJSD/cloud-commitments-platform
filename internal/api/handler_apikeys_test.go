@@ -45,6 +45,7 @@ func (m *MockRateLimiter) AllowWithUser(ctx context.Context, userID, limitType s
 func TestHandler_listAPIKeys_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -86,6 +87,7 @@ func TestHandler_listAPIKeys_NoAuthService(t *testing.T) {
 func TestHandler_listAPIKeys_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{
@@ -100,6 +102,7 @@ func TestHandler_listAPIKeys_NoToken(t *testing.T) {
 func TestHandler_listAPIKeys_InvalidSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", ctx, "invalid-token").Return(nil, errors.New("invalid session"))
 
@@ -119,6 +122,7 @@ func TestHandler_listAPIKeys_InvalidSession(t *testing.T) {
 func TestHandler_listAPIKeys_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -141,7 +145,9 @@ func TestHandler_listAPIKeys_ServiceError(t *testing.T) {
 func TestHandler_createAPIKey_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -179,6 +185,7 @@ func TestHandler_createAPIKey_NoAuthService(t *testing.T) {
 func TestHandler_createAPIKey_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{}
@@ -191,6 +198,7 @@ func TestHandler_createAPIKey_NoToken(t *testing.T) {
 func TestHandler_createAPIKey_InvalidSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", ctx, "bad-token").Return(nil, errors.New("invalid session"))
 
@@ -210,7 +218,9 @@ func TestHandler_createAPIKey_InvalidSession(t *testing.T) {
 func TestHandler_createAPIKey_RateLimited(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -234,6 +244,7 @@ func TestHandler_createAPIKey_RateLimited(t *testing.T) {
 func TestHandler_createAPIKey_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -256,6 +267,7 @@ func TestHandler_createAPIKey_InvalidBody(t *testing.T) {
 func TestHandler_createAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -293,7 +305,9 @@ func TestHandler_createAPIKey_ServiceError(t *testing.T) {
 func TestHandler_createAPIKey_WrongPassword(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -327,6 +341,7 @@ func TestHandler_createAPIKey_PasswordDecodedBeforeForwarding(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -361,7 +376,9 @@ func TestHandler_createAPIKey_PasswordDecodedBeforeForwarding(t *testing.T) {
 func TestHandler_createAPIKey_ExpiresAtRequired(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -392,7 +409,9 @@ func TestHandler_createAPIKey_ExpiresAtRequired(t *testing.T) {
 func TestHandler_createAPIKey_ExpiresAtTooFar(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockRateLimiter := new(MockRateLimiter)
+	t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -429,6 +448,7 @@ func TestHandler_createAPIKey_ExpiresAtTooFar(t *testing.T) {
 func TestHandler_deleteAPIKey_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -470,6 +490,7 @@ func TestHandler_deleteAPIKey_NoAuthService(t *testing.T) {
 func TestHandler_deleteAPIKey_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{}
@@ -482,6 +503,7 @@ func TestHandler_deleteAPIKey_NoToken(t *testing.T) {
 func TestHandler_deleteAPIKey_InvalidPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -508,6 +530,7 @@ func TestHandler_deleteAPIKey_InvalidPath(t *testing.T) {
 func TestHandler_deleteAPIKey_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -534,6 +557,7 @@ func TestHandler_deleteAPIKey_InvalidUUID(t *testing.T) {
 func TestHandler_deleteAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -561,6 +585,7 @@ func TestHandler_deleteAPIKey_ServiceError(t *testing.T) {
 func TestHandler_revokeAPIKey_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -602,6 +627,7 @@ func TestHandler_revokeAPIKey_NoAuthService(t *testing.T) {
 func TestHandler_revokeAPIKey_NoToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth}
 
 	req := &events.LambdaFunctionURLRequest{}
@@ -614,6 +640,7 @@ func TestHandler_revokeAPIKey_NoToken(t *testing.T) {
 func TestHandler_revokeAPIKey_InvalidPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -640,6 +667,7 @@ func TestHandler_revokeAPIKey_InvalidPath(t *testing.T) {
 func TestHandler_revokeAPIKey_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -666,6 +694,7 @@ func TestHandler_revokeAPIKey_InvalidUUID(t *testing.T) {
 func TestHandler_revokeAPIKey_ServiceError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "user-123", Email: "user@example.com"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
@@ -696,6 +725,7 @@ func TestHandler_revokeAPIKey_ServiceError(t *testing.T) {
 func TestHandler_listAPIKeys_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
@@ -716,6 +746,7 @@ func TestHandler_listAPIKeys_PermissionDenied(t *testing.T) {
 func TestHandler_createAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
@@ -737,6 +768,7 @@ func TestHandler_createAPIKey_PermissionDenied(t *testing.T) {
 func TestHandler_deleteAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)
@@ -762,6 +794,7 @@ func TestHandler_deleteAPIKey_PermissionDenied(t *testing.T) {
 func TestHandler_revokeAPIKey_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "viewer-1", Email: "viewer@example.com"}
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(session, nil)

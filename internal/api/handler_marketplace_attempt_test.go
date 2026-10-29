@@ -188,7 +188,7 @@ func newMarketplaceFixture(t *testing.T) *marketplaceFixture {
 	t.Helper()
 	db := newFakeListingDB()
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	authSvc.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	fake := &fakeMarketplaceAWS{}
 	// The token and schedule must be on the row before AWS sees the request.

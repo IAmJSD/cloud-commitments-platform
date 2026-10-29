@@ -49,6 +49,7 @@ func TestHandler_forgotPassword_PerIPCapAcrossDistinctEmails(t *testing.T) {
 	require.Less(t, limit, 100)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("RequestPasswordReset", mock.Anything, mock.Anything).Return(nil)
 	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	ctx := context.Background()
@@ -77,6 +78,7 @@ func TestHandler_forgotPassword_PerIPCapIgnoresForwardedHeaders(t *testing.T) {
 	limit := getDefaultRateLimits()["forgot_password_ip"].MaxAttempts
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("RequestPasswordReset", mock.Anything, mock.Anything).Return(nil)
 	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
@@ -151,6 +153,7 @@ func TestHandler_forgotPassword_PerIPCapConcurrent(t *testing.T) {
 	const callers = 40
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("RequestPasswordReset", mock.Anything, mock.Anything).Return(nil)
 	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 

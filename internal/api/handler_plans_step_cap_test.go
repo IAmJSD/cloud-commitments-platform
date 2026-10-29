@@ -57,6 +57,7 @@ func TestUpdatePlan_CapNullKeepsAuthorization(t *testing.T) {
 			ctx := context.Background()
 			store := new(MockConfigStore)
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", mock.Anything, "cap-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, nil)
 			mockAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			if status == 403 {

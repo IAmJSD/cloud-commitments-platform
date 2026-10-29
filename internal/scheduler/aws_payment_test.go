@@ -34,6 +34,7 @@ func TestFetchAndConvert_AWSFallbackPaymentOption(t *testing.T) {
 			var mu sync.Mutex
 			var got []string
 			client := new(MockRecommendationsClient)
+			t.Cleanup(func() { client.AssertExpectations(t) })
 			client.On("GetAllRecommendations", mock.Anything).Return([]common.Recommendation{}, nil)
 			client.On("GetRecommendations", mock.Anything, mock.MatchedBy(func(p *common.RecommendationParams) bool {
 				mu.Lock()
@@ -43,7 +44,7 @@ func TestFetchAndConvert_AWSFallbackPaymentOption(t *testing.T) {
 			})).Return([]common.Recommendation{}, nil)
 
 			s := &Scheduler{}
-			_, _, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "",
+			_, _, err := s.fetchAndConvert(context.Background(), newRecProvider(t, client), "aws", nil, "",
 				&config.GlobalConfig{DefaultTerm: 1, DefaultPayment: tc.stored, RecommendationsLookbackDays: 30})
 			require.NoError(t, err)
 			require.NotEmpty(t, got)
@@ -81,6 +82,7 @@ func TestFetchAndConvert_AWSFallbackRealClientSavingsPlans(t *testing.T) {
 		t.Run("stored_"+stored, func(t *testing.T) {
 			ce := &spPaymentCE{}
 			prov := new(MockProvider)
+			t.Cleanup(func() { prov.AssertExpectations(t) })
 			prov.On("GetRecommendationsClient", mock.Anything).Return(awsrec.NewClientWithAPI(ce, "us-east-1"), nil)
 			// The stub returns nothing, so GetAllRecommendations is empty and
 			// the per-service fallback runs against the real client.

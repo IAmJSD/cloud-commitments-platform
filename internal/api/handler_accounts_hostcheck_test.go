@@ -26,8 +26,10 @@ const hostCheckRegID = "33333333-3333-3333-3333-333333333333"
 
 // hostCheckHandler returns a handler whose cached host AWS config signs with
 // the probe host keys and sends every STS call to fake (no real AWS).
-func hostCheckHandler(store *MockConfigStore, fake aws.HTTPClient, cfgErr error) *Handler {
+func hostCheckHandler(t *testing.T, store *MockConfigStore, fake aws.HTTPClient, cfgErr error) *Handler {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(context.Background(), mockAuth)
 	h := &Handler{auth: mockAuth, config: store}
 	h.awsCfgOnce.Do(func() {
@@ -100,7 +102,8 @@ func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 	for _, tc := range rejectedHostCheckCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
-			h := hostCheckHandler(store, tc.fake, tc.cfgErr)
+			t.Cleanup(func() { store.AssertExpectations(t) })
+			h := hostCheckHandler(t, store, tc.fake, tc.cfgErr)
 			result, err := h.createAccount(ctx, adminRequest(roleARNBody(tc.externalID, "")))
 			assert.Nil(t, result)
 			requireNotHost400(t, err, tc.wantMsg)
@@ -110,8 +113,9 @@ func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("host account is accepted", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		fake := &probeSTS{}
-		h := hostCheckHandler(store, fake, nil)
+		h := hostCheckHandler(t, store, fake, nil)
 		_, err := h.createAccount(ctx, adminRequest(roleARNBody(probeHostAcct, "")))
 		require.NoError(t, err)
 		store.AssertCalled(t, "CreateCloudAccount")
@@ -120,8 +124,9 @@ func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("role ARN set skips the host check", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		fake := &probeSTS{transportErr: true}
-		h := hostCheckHandler(store, fake, nil)
+		h := hostCheckHandler(t, store, fake, nil)
 		_, err := h.createAccount(ctx, adminRequest(roleARNBody(probeTenantAcct, probeTenantRole)))
 		require.NoError(t, err)
 		store.AssertCalled(t, "CreateCloudAccount")
@@ -130,8 +135,9 @@ func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("other auth modes skip the host check", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		fake := &probeSTS{transportErr: true}
-		h := hostCheckHandler(store, fake, nil)
+		h := hostCheckHandler(t, store, fake, nil)
 		body := `{"name":"Acme","provider":"aws","external_id":"` + probeTenantAcct + `","aws_auth_mode":"access_keys"}`
 		_, err := h.createAccount(ctx, adminRequest(body))
 		require.NoError(t, err)
@@ -144,7 +150,8 @@ func TestUpdateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 	for _, tc := range rejectedHostCheckCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
-			h := hostCheckHandler(store, tc.fake, tc.cfgErr)
+			t.Cleanup(func() { store.AssertExpectations(t) })
+			h := hostCheckHandler(t, store, tc.fake, tc.cfgErr)
 			result, err := h.updateAccount(ctx, adminRequest(roleARNBody(tc.externalID, "")), probeAccountID)
 			assert.Nil(t, result)
 			requireNotHost400(t, err, tc.wantMsg)
@@ -154,7 +161,8 @@ func TestUpdateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("host account is accepted", func(t *testing.T) {
 		store := new(MockConfigStore)
-		h := hostCheckHandler(store, &probeSTS{}, nil)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		h := hostCheckHandler(t, store, &probeSTS{}, nil)
 		_, err := h.updateAccount(ctx, adminRequest(roleARNBody(probeHostAcct, "")), probeAccountID)
 		require.NoError(t, err)
 		store.AssertCalled(t, "UpdateCloudAccount")
@@ -162,9 +170,10 @@ func TestUpdateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("out-of-scope account is not probed", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.GetCloudAccountFn = func(context.Context, string) (*config.CloudAccount, error) { return nil, nil }
 		fake := &probeSTS{}
-		h := hostCheckHandler(store, fake, nil)
+		h := hostCheckHandler(t, store, fake, nil)
 		_, err := h.updateAccount(ctx, adminRequest(roleARNBody(probeHostAcct, "")), probeAccountID)
 		require.ErrorIs(t, err, errNotFound)
 		assert.Equal(t, int32(0), fake.identityCalls.Load())
@@ -176,13 +185,17 @@ func TestApproveRegistration_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 	for _, tc := range rejectedHostCheckCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetAccountRegistration", mock.Anything, hostCheckRegID).
 				Return(&config.AccountRegistration{ID: hostCheckRegID, Status: "pending", Provider: "aws", ExternalID: tc.externalID}, nil)
 			// Registered so a regression fails on the assertions below
 			// instead of panicking on an unexpected call.
 			store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-				Return(errors.New("registration must not be approved"))
-			h := hostCheckHandler(store, tc.fake, tc.cfgErr)
+				Return(errors.New("registration must not be approved")).Maybe()
+			h := hostCheckHandler(t, store, tc.fake, tc.cfgErr)
+			// approveRegistration is called directly, without the router's
+			// session check.
+			relaxUnreachedStubs(&h.auth.(*MockAuthService).Mock, "ValidateSession")
 			req := &events.LambdaFunctionURLRequest{Body: roleARNBody(tc.externalID, "")}
 			result, err := h.approveRegistration(ctx, req, hostCheckRegID)
 			assert.Nil(t, result)
@@ -195,10 +208,12 @@ func TestApproveRegistration_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 
 	t.Run("host account is accepted", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetAccountRegistration", mock.Anything, hostCheckRegID).
 			Return(&config.AccountRegistration{ID: hostCheckRegID, Status: "pending", Provider: "aws", ExternalID: probeHostAcct}, nil)
 		store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		h := hostCheckHandler(store, &probeSTS{}, nil)
+		h := hostCheckHandler(t, store, &probeSTS{}, nil)
+		relaxUnreachedStubs(&h.auth.(*MockAuthService).Mock, "ValidateSession")
 		req := &events.LambdaFunctionURLRequest{Body: roleARNBody(probeHostAcct, "")}
 		_, err := h.approveRegistration(ctx, req, hostCheckRegID)
 		require.NoError(t, err)

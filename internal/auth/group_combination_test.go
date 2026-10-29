@@ -112,6 +112,7 @@ func TestCheckGroupCombination_MirrorsFrontend(t *testing.T) {
 func TestCheckGroupCombination_UsesPermissionsNotNames(t *testing.T) {
 	ctx := context.Background()
 	m := new(MockStore)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	svc := createTestService(m, new(MockEmailSender))
 	m.On("GetGroup", ctx, "a").Return(&Group{ID: "a", Name: "Viewers", Permissions: []Permission{{Action: ActionUpdate, Resource: "plans"}}}, nil)
 	m.On("GetGroup", ctx, "b").Return(&Group{ID: "b", Name: "Administrators", Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}}}, nil)
@@ -128,6 +129,7 @@ func TestCheckGroupCombination_UsesPermissionsNotNames(t *testing.T) {
 func TestCheckGroupCombination_StoreErrorFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	m := new(MockStore)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	svc := createTestService(m, new(MockEmailSender))
 	m.On("GetGroup", ctx, "v1").Return(comboViewOnly, nil).Maybe()
 	m.On("GetGroup", ctx, "w1").Return(nil, errors.New("connection reset"))

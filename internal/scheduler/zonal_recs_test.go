@@ -96,23 +96,27 @@ func assertOnlyMemberZonalDropped(t *testing.T, recs []config.RecommendationReco
 	assert.ElementsMatch(t, []string{"us-east-1a", ""}, azs, "own zonal and member regional kept; member zonal dropped")
 }
 
-func newRecProvider(client *MockRecommendationsClient) *MockProvider {
+func newRecProvider(t *testing.T, client *MockRecommendationsClient) *MockProvider {
+	t.Helper()
 	prov := new(MockProvider)
+	t.Cleanup(func() { prov.AssertExpectations(t) })
 	prov.On("GetRecommendationsClient", mock.Anything).Return(client, nil)
 	return prov
 }
 
 func TestFetchAndConvert_DropsForeignZonalEC2_Primary(t *testing.T) {
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
 	s := &Scheduler{}
-	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111", nil)
+	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(t, client), "aws", nil, "111111111111", nil)
 	require.NoError(t, err)
 	assertOnlyMemberZonalDropped(t, recs, gap)
 }
 
 func TestFetchAndConvert_DropsForeignZonalEC2_LookbackFallback(t *testing.T) {
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return([]common.Recommendation{}, nil)
 	client.On("GetRecommendations", mock.Anything, mock.MatchedBy(func(p *common.RecommendationParams) bool {
 		return p.Service == common.ServiceEC2
@@ -121,7 +125,7 @@ func TestFetchAndConvert_DropsForeignZonalEC2_LookbackFallback(t *testing.T) {
 		return p.Service != common.ServiceEC2
 	})).Return([]common.Recommendation{}, nil)
 	s := &Scheduler{}
-	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111",
+	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(t, client), "aws", nil, "111111111111",
 		&config.GlobalConfig{DefaultTerm: 1, DefaultPayment: "no-upfront", RecommendationsLookbackDays: 30})
 	require.NoError(t, err)
 	assertOnlyMemberZonalDropped(t, recs, gap)
@@ -129,9 +133,10 @@ func TestFetchAndConvert_DropsForeignZonalEC2_LookbackFallback(t *testing.T) {
 
 func TestFetchAndConvert_NilExpectedAccountKeepsForeignZonal(t *testing.T) {
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
 	s := &Scheduler{}
-	recs, _, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "", nil)
+	recs, _, err := s.fetchAndConvert(context.Background(), newRecProvider(t, client), "aws", nil, "", nil)
 	require.NoError(t, err)
 	assert.Len(t, recs, 3, "an unknown collecting identity disables the drop")
 }
@@ -140,9 +145,11 @@ func TestFetchAndConvert_NilExpectedAccountKeepsForeignZonal(t *testing.T) {
 func TestCollectAWSAmbient_PassesHostAccount(t *testing.T) {
 	ctx := context.Background()
 	factory := new(MockProviderFactory)
+	t.Cleanup(func() { factory.AssertExpectations(t) })
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(t, client), nil)
 	s := &Scheduler{providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSAmbient(ctx, nil)
 	require.NoError(t, err)
@@ -153,9 +160,11 @@ func TestCollectAWSAmbient_PassesHostAccount(t *testing.T) {
 func TestCollectAWSForAccount_SelfAccountPassesExternalID(t *testing.T) {
 	ctx := context.Background()
 	factory := new(MockProviderFactory)
+	t.Cleanup(func() { factory.AssertExpectations(t) })
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(t, client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "self", Provider: "aws", AWSAuthMode: "role_arn", ExternalID: "111111111111", Enabled: true,
@@ -169,9 +178,11 @@ func TestCollectAWSForAccount_SelfAccountPassesExternalID(t *testing.T) {
 func TestCollectAWSForAccount_AssumedRolePassesExternalID(t *testing.T) {
 	ctx := context.Background()
 	factory := new(MockProviderFactory)
+	t.Cleanup(func() { factory.AssertExpectations(t) })
 	client := new(MockRecommendationsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("333333333333"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", mock.AnythingOfType("*provider.Config")).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", mock.AnythingOfType("*provider.Config")).Return(newRecProvider(t, client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "member", Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::333333333333:role/cudly",

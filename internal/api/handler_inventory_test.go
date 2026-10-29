@@ -17,8 +17,10 @@ import (
 // requirePermission short-circuits. Mirrors adminHistoryReq from
 // handler_history_test.go — the inventory handler reuses the view:purchases
 // permission, so the request shape is the same.
-func adminInventoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+func adminInventoryReq(t *testing.T, ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
@@ -36,13 +38,14 @@ func adminInventoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFun
 func TestHandler_listActiveCommitments_Empty(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{})
@@ -62,6 +65,7 @@ func TestHandler_listActiveCommitments_Empty(t *testing.T) {
 func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	now := time.Now()
 	purchases := []config.PurchaseHistoryRecord{
@@ -107,7 +111,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 		}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{})
@@ -141,6 +145,7 @@ func TestHandler_listActiveCommitments_FiltersExpired(t *testing.T) {
 func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	now := time.Now()
 	purchases := []config.PurchaseHistoryRecord{
@@ -162,7 +167,7 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{"account_id": "acc-1"})
@@ -184,6 +189,7 @@ func TestHandler_listActiveCommitments_AccountFilter(t *testing.T) {
 func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	now := time.Now()
 	purchases := []config.PurchaseHistoryRecord{
@@ -214,7 +220,7 @@ func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{"provider": "aws"})
@@ -233,6 +239,7 @@ func TestHandler_listActiveCommitments_ProviderFilter(t *testing.T) {
 func TestHandler_listActiveCommitments_SortedByExpiry(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	now := time.Now()
 	// Three purchases with very different term remainders. Listed
@@ -275,7 +282,7 @@ func TestHandler_listActiveCommitments_SortedByExpiry(t *testing.T) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{})
@@ -452,7 +459,7 @@ func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
 	}
 	mockScheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return(recs, nil)
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
 
 	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
@@ -547,7 +554,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 		config.RecommendationFilter{AccountIDs: []string{"acc-1"}},
 	).Return(acc1Recs, nil)
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
 
 	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{
@@ -655,7 +662,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 	// amortized upfront makes Azure 100% covered for compute.
 	mockScheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return([]config.RecommendationRecord{}, nil)
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
 
 	result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
@@ -754,7 +761,7 @@ func TestHandler_listActiveCommitments_NoTruncationBeyond1000(t *testing.T) {
 		return []config.CloudAccount{}, nil
 	}
 
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.listActiveCommitments(ctx, req, map[string]string{})

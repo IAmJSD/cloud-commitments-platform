@@ -17,6 +17,7 @@ func TestAuthServiceAdapter_GetUser_MissingUserIsErrUserNotFound(t *testing.T) {
 
 	t.Run("store returns ErrNoRows", func(t *testing.T) {
 		adapter, mockStore := createMockAuthService(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetUserByID", ctx, "missing").Return(nil, pgx.ErrNoRows)
 
 		_, err := adapter.GetUser(ctx, "missing")
@@ -26,6 +27,7 @@ func TestAuthServiceAdapter_GetUser_MissingUserIsErrUserNotFound(t *testing.T) {
 
 	t.Run("store returns nil user", func(t *testing.T) {
 		adapter, mockStore := createMockAuthService(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetUserByID", ctx, "missing").Return(nil, nil)
 
 		_, err := adapter.GetUser(ctx, "missing")

@@ -110,6 +110,7 @@ func TestFinalizePurchaseStatus_WriteErrorSurfaces(t *testing.T) {
 // save failure too, not a lost guard, so it gets the same 500.
 func TestFinalizePurchaseStatus_MissingRowSurfaces(t *testing.T) {
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"pending"}).
 		Return(config.ErrNotFound).Once()
 	h := &Handler{config: store}
@@ -163,6 +164,7 @@ func TestExecutePurchase_EmailFailureNotRecorded_Returns500(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	authSvc := new(MockAuthService)
+	t.Cleanup(func() { authSvc.AssertExpectations(t) })
 	authSvc.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	authSvc.grantAdminPurchaser()
 	var inserted *config.PurchaseExecution
@@ -202,7 +204,7 @@ func TestRetryPurchase_EmailFailureNotRecorded_Returns500(t *testing.T) {
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "rds", Term: 1, UpfrontCost: 100}},
 	}
-	h, store, _ := buildSessionRetryHandler(failedExec, &Session{UserID: retryCallerID, Email: "admin@example.com"}, true, false)
+	h, store, _ := buildSessionRetryHandler(t, failedExec, &Session{UserID: retryCallerID, Email: "admin@example.com"}, true, false)
 	var successor *config.PurchaseExecution
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { successor = args.Get(1).(*config.PurchaseExecution) }).

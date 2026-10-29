@@ -18,8 +18,10 @@ import (
 // adminHistoryReq builds an admin-authed request and wires the auth mock so
 // requirePermission short-circuits. Returns the mocked auth so tests can add
 // extra expectations.
-func adminHistoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+func adminHistoryReq(t *testing.T, ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
@@ -34,6 +36,7 @@ func adminHistoryReq(ctx context.Context) (*MockAuthService, *events.LambdaFunct
 func TestHandler_getHistory(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	history := []config.PurchaseHistoryRecord{
 		{AccountID: "123456789012", PurchaseID: "purchase-1", UpfrontCost: new(float64(100.0)), EstimatedSavings: 10.0},
@@ -45,7 +48,7 @@ func TestHandler_getHistory(t *testing.T) {
 	mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: historyStreamBatch(100)}, noCursor).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{
@@ -69,6 +72,7 @@ func TestHandler_getHistory(t *testing.T) {
 func TestHandler_getHistory_AllAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	history := []config.PurchaseHistoryRecord{
 		{AccountID: "111111111111", PurchaseID: "purchase-1", UpfrontCost: new(float64(100.0)), EstimatedSavings: 10.0},
@@ -78,7 +82,7 @@ func TestHandler_getHistory_AllAccounts(t *testing.T) {
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{}
@@ -101,6 +105,7 @@ func TestHandler_getHistory_AllAccounts(t *testing.T) {
 func TestHandler_getHistory_IncludesPending(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	completed := []config.PurchaseHistoryRecord{
 		{AccountID: "acc-1", PurchaseID: "done-1", UpfrontCost: new(float64(500.0)), EstimatedSavings: 50.0},
@@ -127,7 +132,7 @@ func TestHandler_getHistory_IncludesPending(t *testing.T) {
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -161,11 +166,12 @@ func TestHandler_getHistory_IncludesPending(t *testing.T) {
 func TestHandler_getHistory_CustomLimit(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	params := map[string]string{
@@ -236,6 +242,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 	t.Run("async expire fires for stale pending row; response shows pre-transition status", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		expired := staleExec("pending")
 		expired.Status = "expired"
@@ -252,7 +259,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 			Run(waitForCall(done)).
 			Return(true, nil).Once()
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -296,6 +303,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 	t.Run("async expire fires for stale notified row; response shows pre-transition status", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		expired := staleExec("notified")
 		expired.Status = "expired"
@@ -309,7 +317,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 			Run(waitForCall(done)).
 			Return(true, nil).Once()
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -336,6 +344,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 	t.Run("async expire error is non-fatal; response and row visibility are unaffected", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		done := make(chan struct{})
 
 		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
@@ -346,7 +355,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 			Run(waitForCall(done)).
 			Return(false, errors.New("simulated store failure")).Once()
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		// A Transition error must be non-fatal. No panic, no dropped row —
@@ -374,13 +383,14 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 	t.Run("fresh row does not trigger TransitionExecutionStatus", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{freshExec()}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -443,7 +453,7 @@ func TestHandler_getHistory_GetIsReadOnly(t *testing.T) {
 		}).
 		Return(false, nil).Maybe()
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -523,6 +533,7 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 		Email:  "scoped@example.com",
 	}
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(scopedUser, nil)
 	mockAuth.On("HasPermissionAPI", ctx, scopedUserID, "view", "purchases").Return(true, nil)
 	// allowed_accounts is non-empty → user is scoped (not unrestricted).
@@ -592,6 +603,7 @@ func TestHandler_getHistory_ScopedUserCannotSeeOtherUsersEmptyAccountRows(t *tes
 	// User A: scoped to one account, different from user B.
 	userASession := &Session{UserID: userAID, Email: "a@example.com"}
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "user-a-token").Return(userASession, nil)
 	mockAuth.On("HasPermissionAPI", ctx, userAID, "view", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, userAID).Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)
@@ -642,7 +654,7 @@ func TestHandler_expireStaleExecutionsAsync_SystemActorIsNil(t *testing.T) {
 	// goroutine uses context.Background(); use mock.Anything for ctx.
 	mockStore.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, staleID).Run(func(_ mock.Arguments) { close(done) }).Return(true, nil).Once()
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	_, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)
@@ -660,6 +672,7 @@ func TestHandler_getHistory_PermissionDenied(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",
 	}, nil)
@@ -685,6 +698,7 @@ func TestHandler_getHistory_PermissionDenied(t *testing.T) {
 func TestHandler_getHistory_IncludesInFlightApprovals(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	completed := []config.PurchaseHistoryRecord{
 		{AccountID: "acc-1", PurchaseID: "done-1", UpfrontCost: new(float64(500.0)), EstimatedSavings: 50.0},
@@ -714,7 +728,7 @@ func TestHandler_getHistory_IncludesInFlightApprovals(t *testing.T) {
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(inFlight, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -768,6 +782,7 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 			inProgress := []config.PurchaseExecution{
 				{
@@ -786,7 +801,7 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 			mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(inProgress, nil)
 			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
-			mockAuth, req := adminHistoryReq(ctx)
+			mockAuth, req := adminHistoryReq(t, ctx)
 			handler := &Handler{auth: mockAuth, config: mockStore}
 
 			result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -821,6 +836,7 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	auditGap := []config.PurchaseExecution{
 		{
@@ -839,7 +855,7 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(auditGap, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -871,6 +887,7 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 func TestHandler_getHistory_PartiallyCompletedVisible(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	partial := []config.PurchaseExecution{
 		{
@@ -889,7 +906,7 @@ func TestHandler_getHistory_PartiallyCompletedVisible(t *testing.T) {
 	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(partial, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -918,6 +935,7 @@ func TestHandler_getHistory_PartiallyCompletedVisible(t *testing.T) {
 func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	// A genuine completed purchase_history row that happens to carry a
 	// human-readable StatusDescription (IsAuditGap stays false, as it is for
@@ -934,10 +952,9 @@ func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.
 	}
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
-	approver := "ops@example.com"
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+	// No pending rows, so the approver email (GetGlobalConfig) is never resolved.
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -972,7 +989,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		t.Helper()
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil).Maybe()
 		// resolveHistoryAccountFilter loads cloud_accounts to resolve UUIDs to
 		// their external ids. Default to an empty list (no resolvable external
@@ -985,6 +1002,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 	t.Run("provider filter is pushed to SQL and prunes executions", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		// SQL path: must be called via ListPurchaseHistoryPage with
 		// provider="aws" and no other filters set. Return only the aws row.
@@ -1026,6 +1044,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 	t.Run("provider=all is treated as no filter (legacy SQL path)", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -1036,6 +1055,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 	t.Run("account_ids filter is pushed to SQL and prunes executions", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		uuidA := "11111111-1111-1111-1111-111111111111"
 		uuidB := "22222222-2222-2222-2222-222222222222"
@@ -1135,6 +1155,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 	t.Run("start/end date filter is pushed to SQL and prunes executions", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		// Build start/end relative to "now" so the in-range execution's
 		// ScheduledDate stays younger than the approvalExpiryWindow (7 days).
@@ -1183,6 +1204,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 
 	t.Run("combined provider+account_ids+date filter is applied on both halves", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		uuidA := "55555555-5555-5555-5555-555555555555"
 		mockStore.On("ListPurchaseHistoryPage", ctx,
@@ -1297,7 +1319,7 @@ func TestHandler_getHistory_FilterValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
-			mockAuth, req := adminHistoryReq(ctx)
+			mockAuth, req := adminHistoryReq(t, ctx)
 			handler := &Handler{auth: mockAuth, config: mockStore}
 
 			_, err := handler.getHistory(ctx, req, tc.params)
@@ -1323,7 +1345,8 @@ func TestHandler_getHistory_DateRangeBoundary(t *testing.T) {
 
 	t.Run("range of exactly 366 days is accepted", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockAuth, req := adminHistoryReq(ctx)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseHistoryRecord{}, nil)
@@ -1336,7 +1359,7 @@ func TestHandler_getHistory_DateRangeBoundary(t *testing.T) {
 
 	t.Run("range of 367 days is rejected", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		_, err := handler.getHistory(ctx, req, map[string]string{"start": "2024-01-01", "end": "2025-01-02"})
@@ -1405,6 +1428,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 	t.Run("email resolved from auth service", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		exec := config.PurchaseExecution{
 			ExecutionID:     "pend-with-creator",
@@ -1419,7 +1443,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		mockAuth.On("GetUser", ctx, creatorID).Return(&User{ID: creatorID, Email: creatorEmail}, nil)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
@@ -1436,6 +1460,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 	t.Run("lookup failure degrades gracefully", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		exec := config.PurchaseExecution{
 			ExecutionID:     "pend-bad-user",
@@ -1450,7 +1475,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		mockAuth.On("GetUser", ctx, creatorID).Return(nil, errors.New("user not found"))
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
@@ -1486,6 +1511,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 	t.Run("single-rec pending row carries Account + Payment + MonthlyCost", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		monthly := 7.5
 		accountID := "123456789012"
 		pending := []config.PurchaseExecution{
@@ -1517,7 +1543,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -1535,6 +1561,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 	t.Run("multi-rec uniform pending row collapses Account + Payment, sums MonthlyCost", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		monthlyA := 3.0
 		monthlyB := 4.5
 		accountID := "987654321098"
@@ -1555,7 +1582,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -1573,6 +1600,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 	t.Run("multi-rec heterogeneous Payment collapses to empty for honest dash fallback", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		pending := []config.PurchaseExecution{
 			{
 				ExecutionID:   "pend-multi-mixed",
@@ -1588,7 +1616,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -1644,7 +1672,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 			Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": recAccountID})
@@ -1695,7 +1723,7 @@ func TestHandler_getHistory_ExternalIDOnlyAccount(t *testing.T) {
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": accountBUUID})
@@ -1741,6 +1769,7 @@ func TestMatchesExecution_ExternalIDOnlyPending(t *testing.T) {
 func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	completed := []config.PurchaseHistoryRecord{
 		{AccountID: "acc-1", PurchaseID: "ri-commitment-1", UpfrontCost: new(float64(400.0)), EstimatedSavings: 40.0},
@@ -1760,13 +1789,12 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 			Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1"}},
 		},
 	}
-	approver := "ops@example.com"
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(cleanCompletedExec, nil)
 	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(cleanCompletedExec, nil)
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+	// No pending rows, so the approver email (GetGlobalConfig) is never resolved.
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -1903,7 +1931,8 @@ func TestHandler_getHistory_LimitParsing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
-			mockAuth, req := adminHistoryReq(ctx)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
+			mockAuth, req := adminHistoryReq(t, ctx)
 			handler := &Handler{auth: mockAuth, config: mockStore}
 
 			if tc.wantCode != 0 {
@@ -2000,7 +2029,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 		mockStore.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, staleID).Return(true, nil).Once()
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore, isLambda: true}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
@@ -2042,7 +2071,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 			close(swept)
 		}).Return(true, nil).Once()
 
-		mockAuth, req := adminHistoryReq(ctx)
+		mockAuth, req := adminHistoryReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore, isLambda: false}
 
 		done := make(chan struct{})
@@ -2122,6 +2151,7 @@ func TestExpireStaleExecutionsSweep_ReleasesSuppressionsOnlyWhenExpired(t *testi
 	for name, won := range map[string]bool{"flip won": true, "row already moved": false} {
 		t.Run(name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, "stale-1").Return(won, nil)
 			store.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, "stale-1").Return(nil).Maybe()
 			h := &Handler{config: store}
@@ -2190,6 +2220,7 @@ func TestExecutionToHistoryRow_RedriveUnsafe(t *testing.T) {
 func TestHandler_getHistory_ProjectsCreatedBySystem(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	approverEmail := "ops@example.com"
 	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1"}}
 	execs := []config.PurchaseExecution{
@@ -2199,7 +2230,7 @@ func TestHandler_getHistory_ProjectsCreatedBySystem(t *testing.T) {
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 
 	result, err := (&Handler{auth: mockAuth, config: mockStore}).getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)

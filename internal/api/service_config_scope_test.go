@@ -60,6 +60,7 @@ func TestRouterDispatch_UpdateServiceConfig_SameRefusalAsGlobalConfig(t *testing
 
 func TestRouterDispatch_UpdateServiceConfig_UnrestrictedAdminSucceeds(t *testing.T) {
 	h, store := scopedHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetServiceConfig", mock.Anything, "aws", "ec2").Return(nil, nil)
 	store.On("SaveServiceConfig", mock.Anything, mock.Anything).Return(nil)
 

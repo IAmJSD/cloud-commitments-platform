@@ -254,6 +254,7 @@ func TestSender_SendUserInviteEmail_NoFromEmail(t *testing.T) {
 // Test error cases for template functions.
 func TestSender_SendNewRecommendationsNotification_SNSError(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -303,6 +304,7 @@ func TestSender_SendScheduledPurchaseNotification_SESError(t *testing.T) {
 
 func TestSender_SendPurchaseConfirmation_SNSError(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -321,6 +323,7 @@ func TestSender_SendPurchaseConfirmation_SNSError(t *testing.T) {
 
 func TestSender_SendPurchaseFailedNotification_SNSError(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	sender := &Sender{
 		snsClient: mockSNS,
 		topicARN:  "arn:aws:sns:us-east-1:123456789:topic",
@@ -339,6 +342,7 @@ func TestSender_SendPurchaseFailedNotification_SNSError(t *testing.T) {
 
 func TestSender_SendPasswordResetEmail_SESError(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	sender := &Sender{
 		sesClient: mockSES,
 		fromEmail: "noreply@example.com",
@@ -651,7 +655,9 @@ func TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection(t *t
 // send, not the SNS broadcast (which is a no-op when no topic is configured).
 func TestSender_SendPurchaseFailedNotification_RecipientUsesSES(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	var to []string
@@ -660,7 +666,9 @@ func TestSender_SendPurchaseFailedNotification_RecipientUsesSES(t *testing.T) {
 			to = args.Get(1).(*sesv2.SendEmailInput).Destination.ToAddresses
 		}).
 		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-714")}, nil)
-	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(&sns.PublishOutput{}, nil)
+	// Maybe: registered only so a regressed broadcast returns cleanly and is
+	// caught by the AssertNotCalled below rather than by a mock panic.
+	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(&sns.PublishOutput{}, nil).Maybe()
 
 	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
 		FromEmail: "noreply@example.com",

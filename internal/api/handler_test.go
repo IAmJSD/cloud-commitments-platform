@@ -204,6 +204,7 @@ func TestHandler_HandleRequest_CORS_Preflight(t *testing.T) {
 func TestHandler_HandleRequest_Health(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 
 	// Setup mocks for health checks
@@ -335,6 +336,7 @@ func TestHandler_CORS_CustomOrigin(t *testing.T) {
 func TestHandler_HandleRequest_GetConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		EnabledProviders: []string{"aws"},
@@ -366,21 +368,21 @@ func TestHandler_HandleRequest_GetConfig(t *testing.T) {
 func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated. A changed default reaches the service configs inside
+	// the store's atomic update, so the handler never lists them itself.
 	mockStore.On("SaveGlobalConfig", mock.Anything, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
-	mockStore.On("ListServiceConfigs", mock.Anything).Return([]config.ServiceConfig{}, nil)
 	// updateConfig calls GetGlobalConfig before save to preserve persisted
 	// values for fields omitted from the request body (PR #308 CR pass-2).
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
 		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
 		RecommendationsLookbackDays:    config.DefaultRecommendationsLookbackDays,
 	}, nil)
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 
@@ -408,6 +410,7 @@ func TestHandler_HandleRequest_PutConfig(t *testing.T) {
 func TestHandler_HandleRequest_GetServiceConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	serviceCfg := &config.ServiceConfig{Provider: "aws", Service: "rds"}
 	mockStore.On("GetServiceConfig", mock.Anything, "aws", "rds").Return(serviceCfg, nil)
@@ -434,12 +437,13 @@ func TestHandler_HandleRequest_GetServiceConfig(t *testing.T) {
 func TestHandler_HandleRequest_PutServiceConfig(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("GetServiceConfig", mock.Anything, "aws", "rds").Return(nil, nil)
 	mockStore.On("SaveServiceConfig", mock.Anything, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
@@ -470,6 +474,7 @@ func TestHandler_HandleRequest_PutServiceConfig(t *testing.T) {
 func TestHandler_HandleRequest_GetRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
 	// Mock the scheduler to return empty recommendations
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
@@ -502,13 +507,15 @@ func TestHandler_HandleRequest_RefreshRecommendations(t *testing.T) {
 	t.Setenv("SCHEDULER_LAMBDA_ARN", "")
 
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockScheduler.On("CollectRecommendations", mock.Anything, mock.Anything).Return(&scheduler.CollectResult{Recommendations: 0, TotalSavings: 0}, nil)
 	mockStore.On("GetRecommendationsFreshness", mock.Anything).
@@ -653,10 +660,12 @@ func TestRunMarkedCollection_AsyncInvokeSuccess_PayloadCarriesOwnerToken(t *test
 func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	plans := []config.PurchasePlan{{ID: "11111111-1111-1111-1111-111111111111"}}
@@ -689,14 +698,15 @@ func TestHandler_HandleRequest_ListPlans(t *testing.T) {
 func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	targetAccountID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("CreatePurchasePlan", mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
 	mockStore.On("SetPlanAccounts", mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("[]string")).Return(nil)
@@ -736,10 +746,12 @@ func TestHandler_HandleRequest_CreatePlan(t *testing.T) {
 func TestHandler_HandleRequest_GetPlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	plan := &config.PurchasePlan{ID: "12345678-1234-1234-1234-123456789abc"}
@@ -768,12 +780,13 @@ func TestHandler_HandleRequest_GetPlan(t *testing.T) {
 func TestHandler_HandleRequest_UpdatePlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	existingPlan := &config.PurchasePlan{
 		ID:      "12345678-1234-1234-1234-123456789abc",
@@ -810,12 +823,13 @@ func TestHandler_HandleRequest_UpdatePlan(t *testing.T) {
 func TestHandler_HandleRequest_DeletePlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockStore.On("DeletePurchasePlan", mock.Anything, "12345678-1234-1234-1234-123456789abc").Return(nil)
 
@@ -847,6 +861,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	accountID := "acct-1"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "token123",
@@ -864,6 +879,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
@@ -877,6 +893,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", mock.Anything, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return(nil, "", nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
@@ -936,6 +953,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	accountID := "acct-1"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "token456",
@@ -953,6 +971,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
@@ -966,6 +985,7 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", mock.Anything, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("CancelExecution", mock.Anything, execID, "token456", approver).Return(nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
@@ -1054,6 +1074,7 @@ func TestHandler_HandleRequest_CancelPurchase_GETDoesNotCancel(t *testing.T) {
 func TestHandler_HandleRequest_GetHistory(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	history := []config.PurchaseHistoryRecord{{PurchaseID: "purchase-1"}}
 	mockStore.On("ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything).Return(history, nil)
@@ -1086,6 +1107,7 @@ func TestHandler_HandleRequest_GetHistory(t *testing.T) {
 func TestHandler_HandleRequest_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(nil, assert.AnError)
 
@@ -1117,7 +1139,9 @@ func TestHandler_HandleRequest_Error(t *testing.T) {
 func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	recommendations := []config.RecommendationRecord{
 		{Service: "rds", Savings: 100.0},
@@ -1167,6 +1191,7 @@ func TestHandler_HandleRequest_GetDashboardSummary(t *testing.T) {
 func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	nextExecDate := time.Now().AddDate(0, 0, 7)
 	plans := []config.PurchasePlan{
@@ -1230,10 +1255,12 @@ func TestHandler_HandleRequest_GetUpcomingPurchases(t *testing.T) {
 func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	scheduledDate := time.Now().AddDate(0, 0, 7)
@@ -1270,12 +1297,13 @@ func TestHandler_HandleRequest_GetPlannedPurchases(t *testing.T) {
 func TestHandler_HandleRequest_PausePlannedPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
 	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).Return(paused, nil)
@@ -1305,12 +1333,13 @@ func TestHandler_HandleRequest_PausePlannedPurchase(t *testing.T) {
 func TestHandler_HandleRequest_ResumePlannedPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
 	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending", mock.Anything).Return(resumed, nil)
@@ -1341,14 +1370,16 @@ func TestHandler_HandleRequest_ResumePlannedPurchase(t *testing.T) {
 func TestHandler_HandleRequest_RunPlannedPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	// runPlannedPurchase re-hydrates the execution to enforce the session's
 	// execute:purchases Constraints against its recommendations (issue #60).
 	mockStore.On("GetExecutionByID", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(&config.PurchaseExecution{
@@ -1387,12 +1418,13 @@ func TestHandler_HandleRequest_RunPlannedPurchase(t *testing.T) {
 func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
 	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
@@ -1421,12 +1453,13 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	plan := bareStepAPIPlan()
 	plan.ID = "11111111-1111-1111-1111-111111111111"
@@ -1465,10 +1498,12 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	mockStore.On("GetPurchasePlan", mock.Anything, "12345678-1234-1234-1234-123456789abc").Return(nil, assert.AnError)
@@ -1497,6 +1532,7 @@ func TestHandler_HandleRequest_GetPlan_Error(t *testing.T) {
 func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	// Use valid UUID format for the admin user ID
 	adminUserID := "12345678-1234-1234-1234-123456789abc"
@@ -1536,10 +1572,12 @@ func TestHandler_HandleRequest_DeleteUser_SelfDeletion(t *testing.T) {
 func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	mockStore.On("ListPurchasePlans", mock.Anything, mock.Anything).Return(nil, assert.AnError)
@@ -1572,10 +1610,12 @@ func TestHandler_HandleRequest_ListPlans_Error(t *testing.T) {
 func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
 
 	// Simulate the store returning one assigned plan and one zero-account
@@ -1633,11 +1673,11 @@ func TestHandler_HandleRequest_ListPlans_UnassignedFlagged(t *testing.T) {
 func TestHandler_HandleRequest_UpdateConfig_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	adminSession := &Session{UserID: "admin-id", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session
+	// is never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{auth: mockAuth, apiKey: "test-key"}
 

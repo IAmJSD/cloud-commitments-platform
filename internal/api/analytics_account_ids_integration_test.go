@@ -50,6 +50,7 @@ func TestAnalyticsAccountIDs_SumsSelectedAccountsOnly_DB(t *testing.T) {
 
 	newHandler := func(allowed []string) *Handler {
 		auth := new(MockAuthService)
+		t.Cleanup(func() { auth.AssertExpectations(t) })
 		auth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1"}, nil)
 		auth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
 		auth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(allowed, nil)

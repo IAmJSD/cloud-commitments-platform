@@ -51,10 +51,12 @@ func TestPauseResumePlanned_UpdateAnyConstraintErrorDoesNotFallBack(t *testing.T
 			exec := cancelRouteExec(op.status)
 			exec.CreatedByUserID = &owner
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
 			store.On("TransitionExecutionStatus", mock.Anything, cancelExecID, mock.Anything, mock.Anything, mock.Anything).
 				Return(nil, errKeyScopeReached).Maybe()
 			m := new(MockAuthService)
+			t.Cleanup(func() { m.AssertExpectations(t) })
 			m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: owner}, nil)
 			m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
 			m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(true, nil)

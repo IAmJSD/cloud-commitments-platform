@@ -75,6 +75,7 @@ func TestRouterDispatch_DeletePlan_AllAccountsInScopeDeletes(t *testing.T) {
 func TestRouterDispatch_DeletePlan_UnrestrictedSkipsPlanLookup(t *testing.T) {
 	ctx := context.Background()
 	h, store := scopedHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("DeletePurchasePlan", mock.Anything, scopePlanID).Return(nil).Once()
 
 	_, err := NewRouter(h).Route(ctx, "DELETE", "/api/plans/"+scopePlanID, scopedRequest(""))

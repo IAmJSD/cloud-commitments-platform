@@ -27,6 +27,7 @@ func TestImportOverrides_StrictIsAllOrNothingPostgres(t *testing.T) {
 	require.NoError(t, store.CreateCloudAccount(ctx, acct))
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantPermissionsScoped([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}}, nil)
 	h := &Handler{auth: mockAuth, config: store}

@@ -35,11 +35,13 @@ var (
 func sharedNameHandler(t *testing.T, scope []string, accounts []config.CloudAccount, listErr error) *Handler {
 	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil)
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		if listErr != nil {
 			return nil, listErr
@@ -225,6 +227,9 @@ func TestAccountScope_SharedDisplayName_OtherGates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := sharedNameHandler(t, tc.scope, registered, nil)
+			// The gates are called directly with a session: no bearer token
+			// is validated and no route permission is checked.
+			relaxUnreachedStubs(&h.auth.(*MockAuthService).Mock, "ValidateSession", "HasPermissionAPI")
 			store := h.config.(*MockConfigStore)
 			store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
 				return []config.CloudAccount{sharedNameAWS}, nil
@@ -275,6 +280,9 @@ func TestAccountScope_EditorControlledExternalIDGrantsNothing(t *testing.T) {
 			t.Parallel()
 			// Listed in name order, as ListCloudAccounts returns them.
 			h := sharedNameHandler(t, []string{tc.editor.ID}, []config.CloudAccount{shadowVictim, tc.editor}, nil)
+			// The gates are called directly with a session: no bearer token
+			// is validated and no route permission is checked.
+			relaxUnreachedStubs(&h.auth.(*MockAuthService).Mock, "ValidateSession", "HasPermissionAPI")
 			target, own := tc.targetID, tc.editor.ID
 
 			err := h.validatePurchaseRecommendationScope(ctx, session, []config.RecommendationRecord{{CloudAccountID: &target}})

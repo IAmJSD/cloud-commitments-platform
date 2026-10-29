@@ -22,6 +22,7 @@ func spHandler(t *testing.T) (*Handler, *MockConfigStore) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	auth.grantAdmin()
 	return &Handler{config: store, auth: auth}, store
@@ -53,12 +54,17 @@ func TestMergeUpdatedPlan_RejectsArmedMultiStepSavingsPlan(t *testing.T) {
 	requireSP400(t, err)
 }
 
-func patchSP(t *testing.T, existing *config.PurchasePlan, body string) (any, error) {
+// patchSP expects the plan write only when writes is true: a refused PATCH
+// must not reach UpdatePurchasePlan, and an unexpected call fails the test.
+func patchSP(t *testing.T, existing *config.PurchasePlan, body string, writes bool) (any, error) {
 	t.Helper()
 	ctx := context.Background()
 	h, store := spHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetPurchasePlan", ctx, spPlanID).Return(existing, nil)
-	store.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	if writes {
+		store.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)
+	}
 	return h.patchPlan(ctx, spReq(body), spPlanID)
 }
 
@@ -69,7 +75,7 @@ func spPlan(service string, ramp config.RampSchedule) *config.PurchasePlan {
 
 func TestPatchPlan_ArmingMultiStepSavingsPlanIs400(t *testing.T) {
 	weekly := config.RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, TotalSteps: 4}
-	_, err := patchSP(t, spPlan("savingsplans", weekly), `{"enabled":true,"auto_purchase":true}`)
+	_, err := patchSP(t, spPlan("savingsplans", weekly), `{"enabled":true,"auto_purchase":true}`, false)
 	requireSP400(t, err)
 }
 
@@ -82,7 +88,7 @@ func TestPatchPlan_SingleStepSavingsPlanAndMultiStepNonSPArmFine(t *testing.T) {
 		"single custom SP (100%)": spPlan("savingsplans", config.RampSchedule{Type: "custom", PercentPerStep: 100, StepIntervalDays: 7, TotalSteps: 1}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := patchSP(t, plan, `{"enabled":true,"auto_purchase":true}`)
+			_, err := patchSP(t, plan, `{"enabled":true,"auto_purchase":true}`, true)
 			require.NoError(t, err)
 		})
 	}
@@ -90,6 +96,6 @@ func TestPatchPlan_SingleStepSavingsPlanAndMultiStepNonSPArmFine(t *testing.T) {
 
 func TestPatchPlan_UnarmedMultiStepSavingsPlanIsAllowed(t *testing.T) {
 	weekly := config.RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, TotalSteps: 4}
-	_, err := patchSP(t, spPlan("savingsplans", weekly), `{"name":"renamed"}`)
+	_, err := patchSP(t, spPlan("savingsplans", weekly), `{"name":"renamed"}`, true)
 	require.NoError(t, err)
 }

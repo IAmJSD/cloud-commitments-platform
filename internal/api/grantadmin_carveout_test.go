@@ -134,6 +134,7 @@ func TestGrantAdminPurchaser_GrantsCarvedOutVerbs(t *testing.T) {
 func TestExecutePurchase_PlainAdminIsRefused(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 

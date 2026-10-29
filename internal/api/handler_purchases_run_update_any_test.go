@@ -38,7 +38,7 @@ func runPlanned(t *testing.T, mp *MockPurchaseManager, creator *string, recs []c
 	if recs != nil {
 		exec.Recommendations = recs
 	}
-	h, _ := cancelRouteHandler(exec, append(perms, unboundedExecute)...)
+	h, _ := cancelRouteHandler(t, exec, append(perms, unboundedExecute)...)
 	mp.On("RunPlannedPurchaseNow", mock.Anything, cancelExecID, mock.Anything, mock.Anything).
 		Return(&config.PurchaseExecution{ExecutionID: cancelExecID, Status: "completed"}, "", nil).Maybe()
 	h.purchase = mp
@@ -154,8 +154,10 @@ func TestRunPlanned_UpdateAnyConstraintErrorDoesNotFallBack(t *testing.T) {
 	exec.CreatedByUserID = &owner
 	exec.Recommendations = []config.RecommendationRecord{runRouteRec()}
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: owner}, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
 	m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(true, nil)
@@ -211,7 +213,12 @@ func TestAuthorizeClaimedRowManagement_WithoutUpdateAny(t *testing.T) {
 		exec.CreatedByUserID = by
 		return exec
 	}
-	h, _ := cancelRouteHandler(row(&creator), unboundedExecute)
+	// authorizeClaimedRowManagement is called directly, so no request is
+	// authenticated and no row is loaded: only the caller's grants matter.
+	grants := new(MockAuthService)
+	t.Cleanup(func() { grants.AssertExpectations(t) })
+	grants.grantPermissions([]auth.Permission{unboundedExecute})
+	h := &Handler{auth: grants}
 	ctx := context.Background()
 
 	require.NoError(t, h.authorizeClaimedRowManagement(ctx, &Session{UserID: creator}, row(&creator)))
@@ -221,6 +228,7 @@ func TestAuthorizeClaimedRowManagement_WithoutUpdateAny(t *testing.T) {
 
 	boom := errors.New("auth store down")
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, creator, auth.ActionUpdateAny, auth.ResourcePurchases).Return(false, boom)
 	err := (&Handler{auth: m}).authorizeClaimedRowManagement(ctx, &Session{UserID: creator}, row(&creator))
 	require.ErrorIs(t, err, boom)
