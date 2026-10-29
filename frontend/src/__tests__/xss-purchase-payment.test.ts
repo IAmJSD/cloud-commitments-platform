@@ -177,7 +177,7 @@ describe('XSS regression: purchase.payment rendered as text, not markup (#1633)'
     expect(list!.textContent).toContain('onerror');
   });
 
-  test('valid payment "no-upfront" still renders as readable text with hyphen replaced', async () => {
+  test('valid payment "no-upfront" still renders as a readable label', async () => {
     (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
       purchases: [makePurchase('no-upfront')],
     });
@@ -186,7 +186,7 @@ describe('XSS regression: purchase.payment rendered as text, not markup (#1633)'
 
     const list = document.getElementById('planned-purchases-list');
     expect(list).not.toBeNull();
-    expect(list!.textContent).toContain('no upfront');
+    expect(list!.textContent).toContain('No Upfront');
   });
 
   test('missing purchase.payment does not throw (guarded, not just escaped)', async () => {

@@ -38,6 +38,7 @@ import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
+import { formatDecimalStringCurrency, formatIsoTermShort, formatPaymentOption } from './lib/table-format';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -441,7 +442,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
             <td>${escapeHtml(ri.instance_type)}</td>
             <td>${escapeHtml(ri.availability_zone)}</td>
             <td class="num">${ri.instance_count}</td>
-            <td>${escapeHtml(ri.offering_type)}</td>
+            <td>${escapeHtml(formatPaymentOption(ri.offering_type))}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
             ${canExchange ? `<td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Exchange ${escapeHtml(ri.reserved_instance_id)}">Exchange</button></td>` : ''}
@@ -532,7 +533,7 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
   appendAzureCell(tr, r.sku);
   appendAzureCell(tr, String(r.quantity), true);
   appendAzureCell(tr, r.region || '—');
-  appendAzureCell(tr, r.term || '—');
+  appendAzureCell(tr, formatIsoTermShort(r.term) || '—');
   appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
 
   return tr;
@@ -2086,7 +2087,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
-      + '<td class="num">' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
+      + '<td class="num">' + (rec.payment_due ? escapeHtml(formatDecimalStringCurrency(rec.payment_due)) : '&mdash;') + '</td>'
       + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
