@@ -683,8 +683,8 @@ function providerCell(p: HistoryPurchase): string {
 function upfrontCell(p: HistoryPurchase, amortize: boolean): string {
   const amount = formatCurrency(p.upfront_cost);
   const folded = amortize && p.monthly_cost != null && p.upfront_cost != null && p.upfront_cost > 0 && p.term > 0;
-  if (!folded) return `<td class="num">${amount}</td>`;
-  return `<td class="num upfront-in-monthly" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
+  if (!folded) return `<td class="num" data-label="Upfront Cost">${amount}</td>`;
+  return `<td class="num upfront-in-monthly" data-label="Upfront Cost" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
 }
 
 // canCancelPendingRow returns true when the current session is permitted
@@ -1408,18 +1408,18 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     return `
       <tr${execIdAttr}>
-        <td>${statusCell}</td>
-        <td>${formatDate(p.timestamp)}</td>
-        <td>${providerCell(p)}</td>
-        <td>${dashOr(escapeHtml(p.service))}</td>
-        <td>${empty ? NO_RECS_HTML : escapeHtml(p.resource_type)}</td>
-        <td>${dashOr(escapeHtml(p.region))}</td>
-        <td class="num">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
-        <td>${termCell(p)}</td>
-        ${empty ? `<td class="num">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
-        <td class="num">${dashOr(monthlyCostCell)}</td>
-        <td class="num savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
-        <td>${planCellContent}</td>
+        <td data-label="Status">${statusCell}</td>
+        <td data-label="Date">${formatDate(p.timestamp)}</td>
+        <td data-label="Provider">${providerCell(p)}</td>
+        <td data-label="Service">${dashOr(escapeHtml(p.service))}</td>
+        <td data-label="Type">${empty ? NO_RECS_HTML : escapeHtml(p.resource_type)}</td>
+        <td data-label="Region">${dashOr(escapeHtml(p.region))}</td>
+        <td class="num" data-label="Count">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td data-label="Term">${termCell(p)}</td>
+        ${empty ? `<td class="num" data-label="Upfront Cost">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="num" data-label="${amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost'}">${dashOr(monthlyCostCell)}</td>
+        <td class="num savings" data-label="Monthly Savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
+        <td data-label="Plan">${planCellContent}</td>
       </tr>
     `;
   }).join('');
@@ -1430,7 +1430,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
-    <table class="table-compact table-sticky-end">
+    <table class="table-compact table-sticky-end table-cards-mobile">
       <thead>
         <tr>
           <th>Status</th>
@@ -2046,18 +2046,18 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
-        <td>${formatDate(p.timestamp)}</td>
-        <td>${accountCell}</td>
-        <td>${providerCell(p)}</td>
-        <td>${empty ? NO_RECS_HTML : escapeHtml(p.service)}</td>
-        <td class="num">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
-        <td>${termCell(p)}</td>
-        <td>${dashOr(paymentCell)}</td>
-        <td class="num">${dashOr(monthlyCostCell)}</td>
-        ${empty ? `<td class="num">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
-        <td class="num savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
-        <td>${createdBy}</td>
-        <td>${actionsCell}</td>
+        <td data-label="Date">${formatDate(p.timestamp)}</td>
+        <td data-label="Account">${accountCell}</td>
+        <td data-label="Provider">${providerCell(p)}</td>
+        <td data-label="Service">${empty ? NO_RECS_HTML : escapeHtml(p.service)}</td>
+        <td class="num" data-label="Count">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td data-label="Term">${termCell(p)}</td>
+        <td data-label="Payment">${dashOr(paymentCell)}</td>
+        <td class="num" data-label="${amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost'}">${dashOr(monthlyCostCell)}</td>
+        ${empty ? `<td class="num" data-label="Upfront Cost">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="num savings" data-label="Monthly Savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
+        <td data-label="Created By">${createdBy}</td>
+        <td data-label="Actions">${actionsCell}</td>
       </tr>
     `;
   }).join('');
@@ -2069,7 +2069,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
-    <table class="approval-queue-table table-compact table-sticky-end">
+    <table class="approval-queue-table table-compact table-sticky-end table-cards-mobile">
       <thead>
         <tr>
           <th>Date</th>
