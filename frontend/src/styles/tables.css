@@ -639,3 +639,121 @@ th .history-column-filter-btn:focus-visible {
 .savings-stripe-swatch--medium {
     background: var(--cudly-warn);
 }
+
+/* Phones: the approval queue and purchase history (.table-cards-mobile)
+ * turn each row into a card of label / value lines (labels from the
+ * cells' data-label), so nothing hides behind a sideways scroll. The
+ * header row stays as a wrap of chips for the columns that have a filter
+ * funnel, so filtering still works; the other header cells are hidden. */
+@media (max-width: 640px) {
+    .table-cards-mobile,
+    .table-cards-mobile thead,
+    .table-cards-mobile tbody,
+    .table-cards-mobile tr,
+    .table-cards-mobile td {
+        display: block;
+    }
+
+    .table-cards-mobile {
+        margin-top: var(--cudly-sp-2);
+        background: transparent;
+        box-shadow: none;
+        border-radius: 0;
+        overflow: visible;
+    }
+
+    .table-cards-mobile thead tr {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--cudly-sp-1);
+        margin-bottom: var(--cudly-sp-2);
+    }
+
+    .table-cards-mobile thead tr:hover {
+        background: transparent;
+    }
+
+    .table-cards-mobile thead th {
+        display: inline-flex;
+        align-items: center;
+        position: static;
+        padding: 0 0 0 var(--cudly-sp-2);
+        border: 1px solid var(--cudly-border);
+        border-radius: var(--cudly-r-full);
+        background: var(--cudly-surface);
+    }
+
+    .table-cards-mobile thead th:not(:has(button)) {
+        display: none;
+    }
+
+    /* Each card is a three-column grid of label-over-value fields; long
+     * values (account, creator, type) take two columns. */
+    .table-cards-mobile.table-compact tbody tr {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-auto-flow: row dense;
+        gap: var(--cudly-sp-2) var(--cudly-sp-3);
+        margin-bottom: var(--cudly-sp-2);
+        padding: var(--cudly-sp-3);
+        border: 1px solid var(--cudly-border);
+        border-radius: var(--cudly-r-md);
+        background: var(--cudly-surface);
+    }
+
+    .table-cards-mobile.table-compact tbody td {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0;
+        position: static;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        text-align: left;
+        white-space: normal;
+    }
+
+    .table-cards-mobile.table-compact tbody td::before {
+        content: attr(data-label);
+        position: static;
+        width: auto;
+        opacity: 1;
+        background: none;
+        max-width: 100%;
+        overflow: hidden;
+        color: var(--cudly-text-subtle);
+        font-size: var(--cudly-fs-xs);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Status (history) leads the card and the actions / plan cell closes
+     * it, each across the full width. */
+    .table-cards-mobile.table-compact tbody td:is([data-label="Status"], :last-child) {
+        grid-column: 1 / -1;
+    }
+
+    .table-cards-mobile.table-compact tbody td:is([data-label="Account"], [data-label="Created By"], [data-label="Type"]) {
+        grid-column: span 2;
+    }
+
+    .table-cards-mobile.table-compact tbody td[data-label="Status"]::before {
+        content: none;
+    }
+
+    .table-cards-mobile.table-compact tbody td:last-child {
+        padding-top: var(--cudly-sp-2);
+        border-top: 1px solid var(--cudly-border);
+    }
+
+    .table-cards-mobile.table-compact tbody td:last-child::before {
+        content: none;
+    }
+
+    .table-cards-mobile .cell-truncate {
+        max-width: 100%;
+    }
+}
