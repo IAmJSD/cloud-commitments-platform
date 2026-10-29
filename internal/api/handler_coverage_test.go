@@ -87,6 +87,7 @@ func TestHandler_validateSecurityContext_Unauthorized(t *testing.T) {
 func TestHandler_validateSecurityContext_CSRFFailure(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	// Setup authentication to pass (via bearer token), then CSRF to fail
 	mockAuth.On("ValidateSession", mock.Anything, "test-token").Return(&Session{UserID: "user-1"}, nil)
@@ -751,7 +752,9 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 func TestHandler_listPlans_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
@@ -771,12 +774,14 @@ func TestHandler_listPlans_Error(t *testing.T) {
 func TestHandler_getPlan_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(nil, errors.New("not found"))
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -793,6 +798,7 @@ func TestHandler_getPlan_NotFound(t *testing.T) {
 func TestHandler_deleteUser_CannotDeleteSelf(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	// Use a valid UUID format
 	adminID := "11111111-1111-1111-1111-111111111111"
@@ -814,11 +820,12 @@ func TestHandler_deleteUser_CannotDeleteSelf(t *testing.T) {
 func TestHandler_deleteUser_Error(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("DeleteUser", ctx, "other-user-id").Return(errors.New("delete failed"))
+	mockAuth.On("DeleteUser", ctx, "22222222-2222-4222-8222-222222222222").Return(errors.New("delete failed"))
 
 	handler := &Handler{auth: mockAuth}
 
@@ -826,8 +833,9 @@ func TestHandler_deleteUser_Error(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
 
-	_, err := handler.deleteUser(ctx, req, "other-user-id")
-	assert.Error(t, err)
+	_, err := handler.deleteUser(ctx, req, "22222222-2222-4222-8222-222222222222")
+	require.Error(t, err)
+	assert.EqualError(t, err, "delete failed", "the store failure must surface, not an earlier validation error")
 }
 
 // Tests for handler_groups
@@ -835,11 +843,12 @@ func TestHandler_deleteUser_Error(t *testing.T) {
 func TestHandler_deleteGroup_DeleteFailed(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
-	mockAuth.On("DeleteGroup", ctx, "group-1").Return(errors.New("delete failed"))
+	mockAuth.On("DeleteGroup", ctx, "33333333-3333-4333-8333-333333333333").Return(errors.New("delete failed"))
 
 	handler := &Handler{auth: mockAuth}
 
@@ -847,8 +856,9 @@ func TestHandler_deleteGroup_DeleteFailed(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
 	}
 
-	_, err := handler.deleteGroup(ctx, req, "group-1")
-	assert.Error(t, err)
+	_, err := handler.deleteGroup(ctx, req, "33333333-3333-4333-8333-333333333333")
+	require.Error(t, err)
+	assert.EqualError(t, err, "delete failed", "the store failure must surface, not an earlier validation error")
 }
 
 // Tests for forgotPassword
@@ -856,6 +866,7 @@ func TestHandler_deleteGroup_DeleteFailed(t *testing.T) {
 func TestHandler_forgotPassword_SuccessOnError(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	// Even when RequestPasswordReset returns an error, forgotPassword should return success
 	// (to prevent email enumeration)
@@ -928,6 +939,7 @@ func TestHandler_createGroup_NoToken(t *testing.T) {
 func TestHandler_createGroup_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -965,7 +977,9 @@ func TestHandler_getGroup_NoToken(t *testing.T) {
 func TestHandler_deletePlan_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -1004,7 +1018,9 @@ func TestHandler_deletePlan_NoToken(t *testing.T) {
 func TestHandler_deletePlan_Error(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "admin-id"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)

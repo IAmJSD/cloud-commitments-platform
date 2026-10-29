@@ -21,6 +21,7 @@ func delayTokenHandler(t *testing.T, exec *config.PurchaseExecution) *Handler {
 	t.Helper()
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	kept := store.ExpectedCalls[:0]
 	for _, c := range store.ExpectedCalls {
 		if c.Method != "GetGlobalConfig" {
@@ -122,6 +123,7 @@ func TestHandleRequest_ApproveViaToken_DelayConfigured_ReplayOfScheduledIs409(t 
 	exec := &config.PurchaseExecution{Status: "scheduled", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := delayTokenHandler(t, exec)
 	store := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, []string{"pending", "notified"}, "scheduled", mock.Anything, tokenErrRawToken).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 

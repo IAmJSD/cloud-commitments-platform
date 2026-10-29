@@ -19,23 +19,30 @@ const startDateProbePlanID = "11111111-1111-1111-1111-111111111111"
 // postPlannedPurchaseAt sends POST /api/plans/{id}/purchases through the real
 // router with the handler clock pinned to now, and returns the response plus
 // the store mock so callers can check whether any execution row was written.
-func postPlannedPurchaseAt(t *testing.T, now time.Time, startDate string) (*events.LambdaFunctionURLResponse, *MockConfigStore) {
+// The execution and plan writes are expected only when the date is accepted.
+func postPlannedPurchaseAt(t *testing.T, now time.Time, startDate string, accepted bool) (*events.LambdaFunctionURLResponse, *MockConfigStore) {
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "admin-id", Email: "admin@example.com"}, nil)
+	// The admin X-API-Key authenticates the request, so the bearer session is
+	// never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	plan := bareStepAPIPlan()
 	plan.ID = startDateProbePlanID
 	plan.AutoPurchase = false
-	mockStore.On("GetPurchasePlan", mock.Anything, startDateProbePlanID).Return(plan, nil)
-	mockStore.On("GetPlanAccounts", mock.Anything, startDateProbePlanID).Return([]config.CloudAccount{{Provider: "azure"}}, nil)
-	mockStore.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
-	mockStore.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil)
+	// Maybe: a malformed date is refused before the plan is read; a
+	// well-formed past date is refused after it.
+	mockStore.On("GetPurchasePlan", mock.Anything, startDateProbePlanID).Return(plan, nil).Maybe()
+	mockStore.On("GetPlanAccounts", mock.Anything, startDateProbePlanID).Return([]config.CloudAccount{{Provider: "azure"}}, nil).Maybe()
+	if accepted {
+		mockStore.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+		mockStore.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil)
+	}
 
 	handler := &Handler{
 		config:            mockStore,
@@ -100,7 +107,7 @@ func TestCreatePlannedPurchases_StartDateMustBeInTheFuture(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, store := postPlannedPurchaseAt(t, tc.now, tc.startDate)
+			resp, store := postPlannedPurchaseAt(t, tc.now, tc.startDate, tc.status == 200)
 			assert.Equal(t, tc.status, resp.StatusCode, "body: %s", resp.Body)
 			if tc.status == 200 {
 				assert.JSONEq(t, `{"created":1}`, resp.Body)

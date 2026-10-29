@@ -111,6 +111,7 @@ func TestListPlans_UnrestrictedCallerStillSeesUnassignedPlans(t *testing.T) {
 func TestListPlans_ScopeLookupErrorFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, scopedToken).Return(&Session{UserID: scopedUserID}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, scopedUserID, "view", "plans").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, scopedUserID).Return(nil, errors.New("auth store unavailable"))

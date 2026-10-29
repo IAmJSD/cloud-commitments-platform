@@ -34,9 +34,13 @@ func lgBody(enabled bool, mode, capJSON string) string {
 		lgAcct, enabled, mode, capField, ladderValidRamp)
 }
 
-func lgCall(caller apgCaller, stored *config.LadderConfigDB, body string) (*MockConfigStore, error) {
+func lgCall(t *testing.T, caller apgCaller, stored *config.LadderConfigDB, body string) (*MockConfigStore, error) {
+	t.Helper()
 	store := new(MockConfigStore)
-	store.On("GetLadderConfig", mock.Anything, lgAcct, "aws").Return(stored, nil)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+	// Maybe: a body that fails validation is refused before the stored config
+	// is read; callers assert the outcome through the error and the upsert.
+	store.On("GetLadderConfig", mock.Anything, lgAcct, "aws").Return(stored, nil).Maybe()
 	store.On("UpsertLadderConfig", mock.Anything, mock.Anything).Return(&config.LadderConfigDB{ID: "cfg-1"}, nil).Maybe()
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, Provider: "aws"}, nil
@@ -86,7 +90,7 @@ func TestLadderArmingGate_ConfigWrites(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			store, err := lgCall(tc.caller, tc.stored, tc.body)
+			store, err := lgCall(t, tc.caller, tc.stored, tc.body)
 			if tc.wantRefused {
 				apgRefused(t, err)
 				assert.False(t, apgCalled(store, "UpsertLadderConfig"), "a refused write must not reach the store")
@@ -100,6 +104,7 @@ func TestLadderArmingGate_ConfigWrites(t *testing.T) {
 
 func TestLadderArmingGate_ConfigLookupErrorFailsClosed(t *testing.T) {
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetLadderConfig", mock.Anything, lgAcct, "aws").Return((*config.LadderConfigDB)(nil), fmt.Errorf("db down"))
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, Provider: "aws"}, nil
@@ -113,7 +118,7 @@ func TestLadderArmingGate_ConfigLookupErrorFailsClosed(t *testing.T) {
 func TestLadderArmingGate_CapValidation(t *testing.T) {
 	for _, capJSON := range []string{"0", "-1", "0.0000004", "1.1234567", "1e13", "1e308", `"5"`} {
 		t.Run(capJSON, func(t *testing.T) {
-			store, err := lgCall(apgCaller{perms: apgAdminPlus}, nil, lgBody(false, "auto_approve", capJSON))
+			store, err := lgCall(t, apgCaller{perms: apgAdminPlus}, nil, lgBody(false, "auto_approve", capJSON))
 			require.Error(t, err)
 			ce, ok := IsClientError(err)
 			require.True(t, ok, "%v", err)
@@ -123,7 +128,7 @@ func TestLadderArmingGate_CapValidation(t *testing.T) {
 	}
 	// Boundary values stay valid.
 	for _, capJSON := range []string{"0.000001", "123.456789", "1e12"} {
-		_, err := lgCall(apgCaller{perms: apgAdminPlus}, nil, lgBody(false, "auto_approve", capJSON))
+		_, err := lgCall(t, apgCaller{perms: apgAdminPlus}, nil, lgBody(false, "auto_approve", capJSON))
 		require.NoError(t, err, capJSON)
 	}
 }

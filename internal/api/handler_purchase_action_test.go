@@ -39,6 +39,7 @@ func TestMarketplaceScopeLookupErrors(t *testing.T) {
 	for _, cancel := range []bool{false, true} {
 		for _, accountFailure := range []bool{false, true} {
 			service, store, provider := new(MockAuthService), new(MockConfigStore), new(stubMarketplaceEC2)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			service.On("ValidateSession", mock.Anything, "test-token").Return(&Session{UserID: "owner"}, nil)
 			service.On("HasPermissionAPI", mock.Anything, "owner", auth.ActionSellAny, auth.ResourcePurchases).Return(true, nil)
 			if accountFailure {

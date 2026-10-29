@@ -36,6 +36,7 @@ func newOverrideAuditFixture(ctx context.Context, t *testing.T) *overrideAuditFi
 	acct := &config.CloudAccount{Name: "audit fixture", Provider: "aws", ExternalID: "123456789012", Enabled: true}
 	require.NoError(t, store.CreateCloudAccount(ctx, acct))
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantPermissionsScoped([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}}, nil)
 	return &overrideAuditFixture{pg: pg, store: store, h: &Handler{auth: mockAuth, config: store}, acct: acct}

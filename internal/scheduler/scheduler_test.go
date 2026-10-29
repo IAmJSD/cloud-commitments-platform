@@ -214,6 +214,7 @@ func TestNewScheduler(t *testing.T) {
 func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 
 	globalCfg := &config.GlobalConfig{
@@ -238,8 +239,10 @@ func TestScheduler_CollectRecommendations_NoProviders(t *testing.T) {
 func TestScheduler_CollectRecommendations_AWSProvider(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		EnabledProviders: []string{"aws"},
@@ -332,8 +335,10 @@ func TestScheduler_CollectRecommendations_ClearsWithOwnerToken(t *testing.T) {
 func TestScheduler_CollectRecommendations_AllProviders(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		EnabledProviders: []string{"aws", "azure", "gcp"},
@@ -378,8 +383,10 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 	t.Run("successfulProviders ordering matches config order, not goroutine completion", func(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockEmail := new(MockEmailSender)
 		mockFactory := new(MockProviderFactory)
+		t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 		// Deliberately non-alphabetical config order so we can distinguish
 		// "by config" from "by goroutine completion" from "alphabetical"
@@ -434,8 +441,10 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 
 	t.Run("ctx cancellation propagates", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockEmail := new(MockEmailSender)
 		mockFactory := new(MockProviderFactory)
+		t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 		globalCfg := &config.GlobalConfig{
 			EnabledProviders: []string{"aws", "azure", "gcp"},
@@ -470,6 +479,7 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 
@@ -506,6 +516,7 @@ func TestScheduler_CollectAWSRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -529,6 +540,7 @@ func TestScheduler_CollectAWSRecommendations(t *testing.T) {
 func TestScheduler_CollectAzureRecommendations_NoAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -547,6 +559,7 @@ func TestScheduler_CollectAzureRecommendations_NoAccounts(t *testing.T) {
 func TestScheduler_CollectGCPRecommendations_NoAccounts_Alt(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -565,7 +578,9 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts_Alt(t *testing.T) {
 func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -610,8 +625,10 @@ func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 func TestScheduler_CollectRecommendations_WithNotification(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 
 	// This test verifies that when there are no recommendations,
 	// no email is sent
@@ -664,6 +681,7 @@ func TestScheduler_Interface(t *testing.T) {
 func TestScheduler_CollectRecommendations_ConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, assert.AnError)
@@ -927,6 +945,7 @@ func (m *MockRecommendationsClient) GetRecommendationsForService(ctx context.Con
 func TestScheduler_ListRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	now := time.Now().UTC()
 	cached := []config.RecommendationRecord{
@@ -939,16 +958,15 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
 		Return(cached, nil)
 	mockStore.On("GetServiceConfig", ctx, "aws", mock.Anything).Return(nil, config.ErrNotFound)
-	// Non-Lambda path resolves the effective stale TTL from the DB config.
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
-		RecommendationsCacheStaleHours: config.DefaultRecommendationsCacheStaleHours,
-	}, nil)
 
 	scheduler := &Scheduler{config: mockStore}
 
 	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 2)
+	// A plain reader may not kick a background refresh, so it never resolves
+	// the stale TTL from the global config.
+	mockStore.AssertNotCalled(t, "GetGlobalConfig")
 }
 
 // staleListRecommendations serves a cache older than any TTL through
@@ -962,6 +980,7 @@ func staleListRecommendations(t *testing.T, staleHours int) <-chan struct{} {
 	t.Helper()
 	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	old := time.Now().Add(-72 * time.Hour)
 	mockStore.On("GetRecommendationsFreshness", ctx).
@@ -1059,6 +1078,7 @@ func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
 func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, assert.AnError)
 
@@ -1083,6 +1103,7 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 	ctx := WithBackgroundCollection(context.Background())
 	require.True(t, BackgroundCollectionAllowed(ctx), "the read must be allowed to collect, or this test is vacuous")
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	// Cache is stale (older than the 1ns TTL set below).
 	old := time.Now().Add(-time.Hour)
@@ -1239,6 +1260,7 @@ func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollec
 	ctx, cancel := context.WithCancel(WithBackgroundCollection(context.Background()))
 	defer cancel()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	release := make(chan struct{})
 	collectCtxErr := make(chan error, 1)
@@ -1893,8 +1915,11 @@ func TestScheduler_CollectAWSRecommendations_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -1933,7 +1958,9 @@ func TestScheduler_CollectAWSRecommendations_RecClientError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -1958,8 +1985,11 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -1998,6 +2028,7 @@ func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T)
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -2102,8 +2133,11 @@ func TestScheduler_CollectAWSForAccount_EmptyRoleARNWrongModeFailsLoud(t *testin
 func TestScheduler_CollectAWSForAccount_SelfAccountRoleARNModeUsesAmbient(t *testing.T) {
 	ctx := context.Background()
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
 
@@ -2175,6 +2209,7 @@ func TestScheduler_CollectAWSForAccount_RoleARNWithoutARNOnNonHostFailsClosed(t 
 func TestScheduler_CollectGCPRecommendations_NoAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -2196,10 +2231,15 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts(t *testing.T) {
 func TestScheduler_CollectRecommendations_WithSuccessfulRecs(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		EnabledProviders: []string{"aws"},
@@ -2255,7 +2295,9 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
 
 	globalCfg := &config.GlobalConfig{
@@ -2380,9 +2422,13 @@ func (s *slowSTSClient) GetCallerIdentity(ctx context.Context, _ *sts.GetCallerI
 func TestScheduler_CollectAWSRecommendations_AmbientTagging_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{
 		DefaultTerm:    3,
@@ -2440,9 +2486,13 @@ func TestScheduler_CollectAWSRecommendations_AmbientTagging_HappyPath(t *testing
 func TestScheduler_CollectAWSRecommendations_AmbientTagging_NoRegisteredAccount(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
 
@@ -2477,9 +2527,13 @@ func TestScheduler_CollectAWSRecommendations_AmbientTagging_NoRegisteredAccount(
 func TestScheduler_CollectAWSRecommendations_AmbientTagging_STSFailure(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
 
@@ -2529,6 +2583,7 @@ func TestScheduler_ResolveAmbientHostAccountID_NoSTSClient(t *testing.T) {
 // it returns "" so the collection falls back to the pre-fix nil tagging.
 func TestScheduler_ResolveAmbientHostAccountID_StoreError(t *testing.T) {
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "aws", "123456789012").
 		Return(nil, errors.New("db unreachable"))
 
@@ -2569,9 +2624,13 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_HappyPath(t *testi
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	// No enabled Azure accounts — ambient fallback fires.
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
@@ -2625,9 +2684,13 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_NoRegisteredAccoun
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
 
@@ -2662,9 +2725,13 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_StoreError(t *test
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
 
@@ -2700,6 +2767,7 @@ func TestScheduler_CollectAzureRecommendations_NoEnvVar_Skips(t *testing.T) {
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
@@ -2724,9 +2792,13 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_HappyPath(t *testing
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	// No enabled GCP accounts — ambient fallback fires.
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
@@ -2778,9 +2850,13 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_NoRegisteredAccount(
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
 
@@ -2813,9 +2889,13 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_StoreError(t *testin
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockProvider := new(MockProvider)
+	t.Cleanup(func() { mockProvider.AssertExpectations(t) })
 	mockRecClient := new(MockRecommendationsClient)
+	t.Cleanup(func() { mockRecClient.AssertExpectations(t) })
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
 
@@ -2848,6 +2928,7 @@ func TestScheduler_CollectGCPRecommendations_NoEnvVar_Skips(t *testing.T) {
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockFactory := new(MockProviderFactory)
 
 	mockStore.On("ListCloudAccounts", mock.Anything, mock.Anything).Return([]config.CloudAccount{}, nil)
@@ -2877,6 +2958,7 @@ func TestScheduler_ResolveAmbientAccountID_EmptyExternalID(t *testing.T) {
 // when the store call fails.
 func TestScheduler_ResolveAmbientAccountID_StoreError(t *testing.T) {
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetCloudAccountByExternalID", mock.Anything, "gcp", "some-project").
 		Return(nil, errors.New("store down"))
 	sched := &Scheduler{config: mockStore}

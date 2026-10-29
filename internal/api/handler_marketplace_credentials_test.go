@@ -50,10 +50,15 @@ func (hostSTSTransport) Do(*http.Request) (*http.Response, error) {
 func marketplaceAccountHandler(t *testing.T, account *config.CloudAccount, row *config.PurchaseHistoryRecord) (*Handler, *aws.Config) {
 	t.Helper()
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
-	cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, nil)
+	// A nil account is a row with no cloud account, which is never looked up;
+	// an unexpected lookup then hits an unregistered method.
+	if account != nil {
+		cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, nil)
+	}
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).Return(&config.MarketplaceListingClaim{ClientToken: "tok"}, nil).Maybe()
 	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).Return(nil).Maybe()
 	cfgStore.On("ReleaseMarketplaceListingClaim", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -217,8 +222,9 @@ func (d deniedCancelEC2) CancelMarketplaceListing(ctx context.Context, id string
 
 func TestMarketplaceList_CompensationAssumeRoleDeniedReturnsFixedMessage(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
 	cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(roleAccount(), nil)
@@ -270,8 +276,9 @@ func TestMarketplaceCancel_RoleARNAccountAssumesRole(t *testing.T) {
 }
 
 func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
-	newHandler := func(account *config.CloudAccount, lookupErr error) *Handler {
+	newHandler := func(t *testing.T, account *config.CloudAccount, lookupErr error) *Handler {
 		cfgStore := &MockConfigStore{}
+		t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 		cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, lookupErr)
 		h := &Handler{config: cfgStore, credStore: &accountKeyStore{}}
 		h.awsCfgOnce.Do(func() {
@@ -285,7 +292,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 	}
 
 	t.Run("nil account is not host credentials", func(t *testing.T) {
-		cfg, err := newHandler(nil, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, nil, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "expected a client error, got %v", err)
@@ -295,7 +302,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 	})
 
 	t.Run("lookup error is not host credentials", func(t *testing.T) {
-		cfg, err := newHandler(nil, errors.New("db down")).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, nil, errors.New("db down")).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		require.Error(t, err)
 		_, isClient := IsClientError(err)
@@ -305,7 +312,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 
 	t.Run("non-aws provider", func(t *testing.T) {
 		account := &config.CloudAccount{ID: "acct-1", Provider: "azure"}
-		cfg, err := newHandler(account, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, account, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "expected a client error, got %v", err)
@@ -503,6 +510,7 @@ func TestLoadMarketplaceAWSConfig_ResolverErrorNeverFallsBackToHost(t *testing.T
 	for name, store := range stores {
 		t.Run(name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
+			t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 			cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(memberAccount(), nil)
 			h := &Handler{config: cfgStore, credStore: store}
 			h.awsCfgOnce.Do(func() {

@@ -345,6 +345,7 @@ func TestApproveRIExchange_DoubleApprove(t *testing.T) {
 
 func TestApproveRIExchange_InvalidToken(t *testing.T) {
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	h := &Handler{config: mockStore}
 	ctx := context.Background()
 	id := "550e8400-e29b-41d4-a716-446655440003"
@@ -367,7 +368,9 @@ func TestApproveRIExchange_InvalidToken(t *testing.T) {
 // a pending RI exchange without an email token (issue #300).
 func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	h := &Handler{config: mockStore, auth: mockAuth}
 	ctx := context.Background()
 	id := "550e8400-e29b-41d4-a716-446655440010"
@@ -395,8 +398,8 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil)
-	// executeApprovedExchange calls GetGlobalConfig + ReserveApprovedRIExchange
-	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
+	// The record carries no region, so execution fails closed at the region
+	// guard before ReserveApprovedRIExchange: the approval ends in FailRIExchange.
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
@@ -433,7 +436,9 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 
 	t.Run("own exchange allowed", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		h := &Handler{config: mockStore, auth: mockAuth}
 
 		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com"}
@@ -456,7 +461,8 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 
 		mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 			Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
-		mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
+		// The record carries no region, so execution fails closed at the region
+		// guard before ReserveApprovedRIExchange: the approval ends in FailRIExchange.
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 			RIExchangeMaxDailyUSD:       1000,
 			RIExchangeMaxPerExchangeUSD: 500,
@@ -477,7 +483,9 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 
 	t.Run("other user exchange rejected", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		h := &Handler{config: mockStore, auth: mockAuth}
 
 		ownerSession := &Session{UserID: ownerID, Email: "owner@example.com"}
@@ -520,9 +528,10 @@ func TestApproveRIExchange_SessionScope(t *testing.T) {
 	id := "550e8400-e29b-41d4-a716-446655440019"
 	const accA, accB = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
 
-	setup := func(deploymentAccount string, action string) (*Handler, *MockConfigStore) {
+	setup := func(t *testing.T, deploymentAccount string, action string) (*Handler, *MockConfigStore) {
 		mockStore := new(MockConfigStore)
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", ctx, "sess").Return(&Session{UserID: "approver-uuid", Email: "approver@example.com"}, nil)
 		mockAuth.On("ValidateCSRFToken", ctx, "sess", "csrf").Return(nil)
 		mockAuth.grantPermissionsScoped([]auth.Permission{{Action: action, Resource: auth.ResourcePurchases}}, []string{accA})
@@ -549,7 +558,7 @@ func TestApproveRIExchange_SessionScope(t *testing.T) {
 	}
 
 	t.Run("out of scope is not found", func(t *testing.T) {
-		h, mockStore := setup(accB, auth.ActionApproveAny)
+		h, mockStore := setup(t, accB, auth.ActionApproveAny)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		require.ErrorIs(t, err, errNotFound)
 		mockStore.AssertNotCalled(t, "GetRIExchangeRecord", ctx, id)
@@ -557,21 +566,21 @@ func TestApproveRIExchange_SessionScope(t *testing.T) {
 	})
 
 	t.Run("out of scope approve-own is not found", func(t *testing.T) {
-		h, mockStore := setup(accB, auth.ActionApproveOwn)
+		h, mockStore := setup(t, accB, auth.ActionApproveOwn)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		require.ErrorIs(t, err, errNotFound)
 		mockStore.AssertNotCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 	})
 
 	t.Run("out of scope with a valid token falls through to the token flow", func(t *testing.T) {
-		h, mockStore := setup(accB, auth.ActionApproveAny)
+		h, mockStore := setup(t, accB, auth.ActionApproveAny)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "tok")
 		require.NoError(t, err)
 		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 	})
 
 	t.Run("scope resolver error fails closed", func(t *testing.T) {
-		h, mockStore := setup(accA, auth.ActionApproveAny)
+		h, mockStore := setup(t, accA, auth.ActionApproveAny)
 		h.reshapeAccountResolver = func(context.Context) (string, error) { return "", errors.New("resolver down") }
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		require.Error(t, err)
@@ -580,7 +589,7 @@ func TestApproveRIExchange_SessionScope(t *testing.T) {
 	})
 
 	t.Run("in scope is approved", func(t *testing.T) {
-		h, mockStore := setup(accA, auth.ActionApproveAny)
+		h, mockStore := setup(t, accA, auth.ActionApproveAny)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		require.NoError(t, err)
 		mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
@@ -601,19 +610,42 @@ func grantRINone(m *MockAuthService, userID string) {
 	m.On("HasPermissionAPI", context.Background(), userID, mock.Anything, auth.ResourcePurchases).Return(false, nil)
 }
 
+// riApprovePath is how a fourEyesRIExchangeFixture request authenticates,
+// which decides the auth calls the approval makes.
+type riApprovePath int
+
+const (
+	// riApproveSession: session plus CSRF token, no email token.
+	riApproveSession riApprovePath = iota
+	// riApproveTokenWithSession: the email token, with a session that
+	// attributes the approver. The token authorizes, so no CSRF check runs.
+	riApproveTokenWithSession
+	// riApproveTokenNoSession: the email token alone. No session is resolved
+	// and no permission is consulted.
+	riApproveTokenNoSession
+)
+
 // fourEyesRIExchangeFixture wires a pending exchange created by creatorID and a
-// session for approverID holding the given approve grant.
-func fourEyesRIExchangeFixture(t *testing.T, creatorID *string, approverID string, grant riApproverGrant, fourEyes bool) (*Handler, *MockConfigStore, string, string) {
+// session for approverID holding the given approve grant. path and approved
+// say which auth calls and which writes the approval must make; any write a
+// refused approval attempts hits an unregistered method and fails the test.
+func fourEyesRIExchangeFixture(t *testing.T, creatorID *string, approverID string, grant riApproverGrant, fourEyes bool, path riApprovePath, approved bool) (*Handler, *MockConfigStore, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	id := "550e8400-e29b-41d4-a716-446655440021"
 	token := "four-eyes-token"
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	mockAuth.On("ValidateSession", ctx, "sess").Return(&Session{UserID: approverID, Email: approverID + "@example.com"}, nil)
-	mockAuth.On("ValidateCSRFToken", ctx, "sess", "csrf").Return(nil)
-	grant(mockAuth, approverID)
+	if path != riApproveTokenNoSession {
+		mockAuth.On("ValidateSession", ctx, "sess").Return(&Session{UserID: approverID, Email: approverID + "@example.com"}, nil)
+		grant(mockAuth, approverID)
+	}
+	if path == riApproveSession {
+		mockAuth.On("ValidateCSRFToken", ctx, "sess", "csrf").Return(nil)
+	}
 
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
 		ID:              id,
@@ -628,11 +660,18 @@ func fourEyesRIExchangeFixture(t *testing.T, creatorID *string, approverID strin
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
 	}, nil)
-	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
-		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
-	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
-	mockStore.On("FailRIExchange", mock.Anything, id, mock.AnythingOfType("string")).Return(nil)
-	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, mock.Anything).Return(nil)
+	if approved {
+		// The claimed record carries no region, so execution fails closed at
+		// the region guard before reserving the spend ceiling: the approval
+		// ends in FailRIExchange, and is stamped only when a session named
+		// the approver.
+		mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
+			Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
+		mockStore.On("FailRIExchange", mock.Anything, id, mock.AnythingOfType("string")).Return(nil)
+		if path != riApproveTokenNoSession {
+			mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, mock.Anything).Return(nil)
+		}
+	}
 
 	return &Handler{config: mockStore, auth: mockAuth}, mockStore, id, token
 }
@@ -664,57 +703,57 @@ func TestApproveRIExchange_FourEyes(t *testing.T) {
 	}
 
 	t.Run("session: creator with approve-own denied", func(t *testing.T) {
-		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, true)
+		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, true, riApproveSession, false)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		denied(t, store, err, 403)
 		assert.Contains(t, err.Error(), "4-eyes mode")
 	})
 
 	t.Run("session: admin creator denied", func(t *testing.T) {
-		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIAdmin, true)
+		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIAdmin, true, riApproveSession, false)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		denied(t, store, err, 403)
 	})
 
 	t.Run("session: creator holding the email token still denied", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, true, riApproveSession, false)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, token)
 		denied(t, store, err, 403)
 	})
 
 	t.Run("token: creator session without approve rights denied", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRINone, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRINone, true, riApproveTokenWithSession, false)
 		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
 		denied(t, store, err, 403)
 		assert.Contains(t, err.Error(), "4-eyes mode")
 	})
 
 	t.Run("token: no session fails closed", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRIAdmin, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, creator, grantRIAdmin, true, riApproveTokenNoSession, false)
 		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 		denied(t, store, err, 500)
 	})
 
 	t.Run("session: different approver allowed", func(t *testing.T) {
-		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, "approver-uuid", grantRIAdmin, true)
+		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, "approver-uuid", grantRIAdmin, true, riApproveSession, true)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		approved(t, store, err)
 	})
 
 	t.Run("token: different approver allowed", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, "approver-uuid", grantRINone, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, &creator, "approver-uuid", grantRINone, true, riApproveTokenWithSession, true)
 		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
 		approved(t, store, err)
 	})
 
 	t.Run("mode off: creator allowed", func(t *testing.T) {
-		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, false)
+		h, store, id, _ := fourEyesRIExchangeFixture(t, &creator, creator, grantRIApproveOwn, false, riApproveSession, true)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		approved(t, store, err)
 	})
 
 	t.Run("automated exchange without creator stays approvable", func(t *testing.T) {
-		h, store, id, _ := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, true)
+		h, store, id, _ := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, true, riApproveSession, true)
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		approved(t, store, err)
 	})
@@ -723,7 +762,7 @@ func TestApproveRIExchange_FourEyes(t *testing.T) {
 	// branch is the one that runs. Under 4-eyes it must still demand an
 	// identified approver instead of letting an anonymous token holder through.
 	t.Run("automated exchange: token without session fails closed", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, true, riApproveTokenNoSession, false)
 		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 		denied(t, store, err, 500)
 		assert.Contains(t, err.Error(), "no session could be resolved")
@@ -731,13 +770,13 @@ func TestApproveRIExchange_FourEyes(t *testing.T) {
 	})
 
 	t.Run("automated exchange: token with a resolved session allowed", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRINone, true)
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRINone, true, riApproveTokenWithSession, true)
 		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
 		approved(t, store, err)
 	})
 
 	t.Run("automated exchange: mode off, token without session allowed", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, false)
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, false, riApproveTokenNoSession, true)
 		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 		approved(t, store, err)
 	})
@@ -749,6 +788,7 @@ func TestApproveRIExchange_FourEyes(t *testing.T) {
 func TestRequireDifferentRIExchangeApprover_ConfigLoadFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", ctx).Return(nil, errors.New("db down"))
 	h := &Handler{config: store}
 	err := h.requireDifferentRIExchangeApprover(ctx, nil, &config.RIExchangeRecord{ID: "x"})
@@ -764,7 +804,7 @@ func TestApproveRIExchange_TokenPathAttributesResolvedApprover(t *testing.T) {
 	approver := "11111111-1111-4111-8111-111111111111"
 
 	t.Run("session resolves", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, nil, approver, grantRINone, false)
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, approver, grantRINone, false, riApproveTokenWithSession, true)
 		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
 		require.NoError(t, err)
 		store.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", &approver)
@@ -772,7 +812,7 @@ func TestApproveRIExchange_TokenPathAttributesResolvedApprover(t *testing.T) {
 	})
 
 	t.Run("no session leaves the actor unset", func(t *testing.T) {
-		h, store, id, token := fourEyesRIExchangeFixture(t, nil, approver, grantRINone, false)
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, approver, grantRINone, false, riApproveTokenNoSession, true)
 		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
 		require.NoError(t, err)
 		store.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", (*string)(nil))
@@ -790,7 +830,9 @@ func TestApproveRIExchange_TokenPathSkipsStampWhenExecutionErrors(t *testing.T) 
 	token := "four-eyes-token"
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "sess").Return(&Session{UserID: approver, Email: "approver@example.com"}, nil)
 	grantRINone(mockAuth, approver)
 	mockStore.On("GetRIExchangeRecord", ctx, id).Return(&config.RIExchangeRecord{
@@ -832,6 +874,7 @@ func TestApproveRIExchange_TokenPathSkipsStampWhenExecutionErrors(t *testing.T) 
 // continues to work for non-session callers after the dual-auth refactor (backwards-compat).
 func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	h := &Handler{config: mockStore} // no auth configured -> tryGetSession returns nil
 	ctx := context.Background()
 	id := "550e8400-e29b-41d4-a716-446655440012"
@@ -846,7 +889,8 @@ func TestApproveRIExchange_LegacyTokenStillWorks(t *testing.T) {
 	}, nil)
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing"}, nil)
-	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
+	// The record carries no region, so execution fails closed at the region
+	// guard before ReserveApprovedRIExchange: the approval ends in FailRIExchange.
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
@@ -968,6 +1012,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 	const cfgRegion = "us-west-2"
 
 	mockStore := &MockConfigStore{}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	// mock.Run captures every invocation's arguments without affecting
 	// the return value. Returning nil/nil from ListStoredRecommendations
 	// means "no recs in this region" which the downstream pipeline
@@ -1065,6 +1110,7 @@ func TestGetReshapeRecommendations_AlternativeCurrencyFromRIs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStore := &MockConfigStore{}
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 				Return([]config.RecommendationRecord{
 					{ID: "rec-1", ResourceType: "c6i.large", Count: 1, MonthlyCost: aws.Float64(40)},
@@ -2368,6 +2414,7 @@ func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	const actorID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -2623,6 +2670,7 @@ func spyOnAWSExchange(h *Handler) *int {
 func TestExecuteExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	ctx := context.Background()
 	store := &MockConfigStore{}
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 	h := newFourEyesExecuteExchangeHandler(t, store)
 	exchangeCalls := spyOnAWSExchange(h)
@@ -2644,6 +2692,7 @@ func TestExecuteExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 func TestExecuteExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	store := &MockConfigStore{}
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
 	h := newFourEyesExecuteExchangeHandler(t, store)
 	exchangeCalls := spyOnAWSExchange(h)
@@ -2777,6 +2826,7 @@ func TestConvertToExchangeTypes_ExcludesNonPositiveDuration(t *testing.T) {
 // UI can show them instead of silently giving them no recommendation.
 func TestGetReshapeRecommendations_ReportsExcludedRIs(t *testing.T) {
 	mockStore := &MockConfigStore{}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil)
 	h := &Handler{
@@ -2871,6 +2921,7 @@ func TestConvertToExchangeTypes_ExcludesRIWithoutPricing(t *testing.T) {
 // priced RI in the same account still does.
 func TestGetReshapeRecommendations_ReportsUnpricedRIs(t *testing.T) {
 	mockStore := &MockConfigStore{}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil)
 	h := &Handler{

@@ -228,6 +228,7 @@ func TestMFASetup_HappyPath(t *testing.T) {
 func TestMFASetup_WrongPassword(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	user := createTestUser(t, "SecurePass@123")
@@ -282,6 +283,7 @@ func TestMFAEnable_ExpiredPending(t *testing.T) {
 func TestMFAEnable_NoPending(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	user := createTestUser(t, "SecurePass@123")
@@ -295,6 +297,7 @@ func TestMFAEnable_NoPending(t *testing.T) {
 func TestMFAEnable_WrongCode(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -333,6 +336,7 @@ func TestMFADisable_WithTOTP(t *testing.T) {
 func TestMFADisable_WithRecoveryCode(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -382,6 +386,7 @@ func TestMFADisable_WithRecoveryCodePassesCodesAsRead(t *testing.T) {
 func TestMFADisable_WrongPassword(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	user := createTestUser(t, "SecurePass@123")
@@ -436,6 +441,7 @@ func TestMFASetupAndEnable_RefusedWhileEnabled(t *testing.T) {
 func TestMFASetup_WrongPasswordWhileEnabled_ReportsPassword(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	user := createTestUser(t, "SecurePass@123")
@@ -449,6 +455,7 @@ func TestMFASetup_WrongPasswordWhileEnabled_ReportsPassword(t *testing.T) {
 func TestMFARegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -478,6 +485,7 @@ func TestMFARegenerateRecoveryCodes_HappyPath(t *testing.T) {
 func TestMFARegenerateRecoveryCodes_WrongTOTP(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	user := createTestUser(t, "SecurePass@123")
@@ -494,6 +502,7 @@ func TestMFARegenerateRecoveryCodes_WrongTOTP(t *testing.T) {
 func TestLogin_WithMFA_RecoveryCode_ConsumedOnce(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	plaintextCode := "ABCD-2345"
@@ -508,7 +517,6 @@ func TestLogin_WithMFA_RecoveryCode_ConsumedOnce(t *testing.T) {
 	mockStore.On("GetUserByEmail", ctx, user.Email).Return(user, nil)
 	mockStore.On("ConsumeMFARecoveryCode", ctx, user.ID, []string{hash}, []string{}).Return(nil).Once()
 	mockStore.On("RecordSuccessfulLogin", ctx, user.ID).Return(nil)
-	mockStore.On("RecordFailedLogin", ctx, user.ID).Return(nil)
 	mockStore.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil)
 
 	resp, err := service.Login(ctx, LoginRequest{
@@ -755,6 +763,7 @@ func TestMFADisable_ReplayedTOTPIsRejected(t *testing.T) {
 func TestMFARegenerateRecoveryCodes_ReplayedTOTPIsRejected(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -773,6 +782,7 @@ func TestMFARegenerateRecoveryCodes_ReplayedTOTPIsRejected(t *testing.T) {
 func TestMFARegenerateRecoveryCodes_ClaimFailureFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -790,6 +800,7 @@ func TestMFARegenerateRecoveryCodes_ClaimFailureFailsClosed(t *testing.T) {
 func TestMFADisable_ClaimFailureFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	secret := "JBSWY3DPEHPK3PXP"
@@ -824,6 +835,7 @@ func TestMFALifecycle_LockedAccountRefusedBeforeCodeCheck(t *testing.T) {
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			service := createTestService(mockStore, new(MockEmailSender))
 			until := time.Now().Add(time.Minute)
 			expires := time.Now().Add(mfaPendingExpiry)

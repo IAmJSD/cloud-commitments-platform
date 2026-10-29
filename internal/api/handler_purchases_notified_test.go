@@ -17,9 +17,12 @@ import (
 
 const notifiedExecID = "11111111-1111-1111-1111-111111111111"
 
-func notifiedAdminHandler(ctx context.Context) (*Handler, *MockConfigStore, *events.LambdaFunctionURLRequest) {
+func notifiedAdminHandler(t *testing.T, ctx context.Context) (*Handler, *MockConfigStore, *events.LambdaFunctionURLRequest) {
+	t.Helper()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	auth.grantAdmin()
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
@@ -28,7 +31,7 @@ func notifiedAdminHandler(ctx context.Context) (*Handler, *MockConfigStore, *eve
 
 func TestPausePlannedPurchase_AcceptsNotifiedRow(t *testing.T) {
 	ctx := context.Background()
-	handler, store, req := notifiedAdminHandler(ctx)
+	handler, store, req := notifiedAdminHandler(t, ctx)
 	store.On("GetExecutionByID", ctx, notifiedExecID).Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "notified"}, nil)
 	store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"pending", "notified"}, "paused", mock.Anything).
 		Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "paused"}, nil)
@@ -53,7 +56,7 @@ func TestResumePlannedPurchase_PastScheduledDate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, store, req := notifiedAdminHandler(ctx)
+			handler, store, req := notifiedAdminHandler(t, ctx)
 			row := &config.PurchaseExecution{ExecutionID: notifiedExecID, PlanID: "plan-1", Status: "pending", Recommendations: tc.recs, ScheduledDate: tc.date}
 			store.On("GetExecutionByID", ctx, notifiedExecID).Return(row, nil).Maybe()
 			store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"paused"}, "pending", mock.Anything).Return(row, nil)
@@ -80,7 +83,11 @@ func TestResumePlannedPurchase_PastScheduledDate(t *testing.T) {
 
 func TestCancelOrRecoverExecution_ReleasesSuppressionsOfNotifiedRow(t *testing.T) {
 	ctx := context.Background()
-	handler, store, _ := notifiedAdminHandler(ctx)
+	// cancelOrRecoverExecution is called directly, after authorization, so no
+	// session is involved: a store-only handler.
+	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+	handler := &Handler{config: store}
 	store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).
 		Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "canceled"}, nil)
 	store.On("DeleteSuppressionsByExecution", ctx, notifiedExecID).Return(nil)
@@ -106,7 +113,7 @@ func TestResumePlannedPurchase_RefusesWithoutVetoWindow(t *testing.T) {
 		{"empty row past date, 0 days", nil, time.Now().Add(-time.Hour), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler, store, req := notifiedAdminHandler(ctx)
+			handler, store, req := notifiedAdminHandler(t, ctx)
 			row := &config.PurchaseExecution{ExecutionID: notifiedExecID, PlanID: "plan-1", Status: "paused", Recommendations: tc.recs, ScheduledDate: tc.date}
 			store.On("GetExecutionByID", ctx, notifiedExecID).Return(row, nil)
 			store.On("GetPurchasePlan", ctx, "plan-1").Return(&config.PurchasePlan{ID: "plan-1", NotificationDaysBefore: 0}, nil).Maybe()

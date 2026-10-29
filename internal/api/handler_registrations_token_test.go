@@ -33,6 +33,7 @@ func regTokenHandler(t *testing.T) (*Handler, *MockConfigStore) {
 	t.Helper()
 	store := new(MockConfigStore)
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("ValidateSession", mock.Anything, regTokenSession).
 		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	m.grantAdmin()
@@ -72,6 +73,7 @@ func assertNoReferenceToken(t *testing.T, body string) {
 
 func TestListRegistrations_DoesNotExposeReferenceToken(t *testing.T) {
 	h, store := regTokenHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListAccountRegistrations", mock.Anything, mock.Anything).
 		Return([]config.AccountRegistration{regTokenFixture()}, nil)
 
@@ -86,6 +88,7 @@ func TestListRegistrations_DoesNotExposeReferenceToken(t *testing.T) {
 
 func TestGetRegistration_DoesNotExposeReferenceToken(t *testing.T) {
 	h, store := regTokenHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	reg := regTokenFixture()
 	store.On("GetAccountRegistration", mock.Anything, regTokenID).Return(&reg, nil)
 

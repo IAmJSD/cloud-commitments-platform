@@ -114,7 +114,7 @@ func TestGetRIUtilization_ScopedUserDoesNotSeeLinkedMemberRIs(t *testing.T) {
 	ctx := context.Background()
 	ec2 := ownUtilEC2()
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
-	h := newUtilizationScopeHandler(scopedAuthMock(ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
+	h := newUtilizationScopeHandler(scopedAuthMock(t, ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
 
 	resp, err := h.getRIUtilization(ctx, scopedReq())
 	require.NoError(t, err)
@@ -128,6 +128,7 @@ func TestGetRIUtilization_ScopedUserDoesNotSeeLinkedMemberRIs(t *testing.T) {
 func TestGetRIUtilization_ScopeByAccountNameReachesNothing(t *testing.T) {
 	ctx := context.Background()
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{UserID: permsScopedUserID}, nil)
 	auth.On("HasPermissionAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything).Return(true, nil)
 	auth.On("GetAllowedAccountsAPI", ctx, permsScopedUserID).Return([]string{permsAccAName}, nil)
@@ -144,7 +145,7 @@ func TestGetRIUtilization_ScopeByAccountNameReachesNothing(t *testing.T) {
 // Unrestricted users keep every row and trigger no EC2 listing.
 func TestGetRIUtilization_UnrestrictedSeesAllRowsWithoutEC2Call(t *testing.T) {
 	ctx := context.Background()
-	auth, req := adminDashboardReq(ctx)
+	auth, req := adminDashboardReq(t, ctx)
 	ec2 := ownUtilEC2()
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
 	h := newUtilizationScopeHandler(auth, newUtilizationScopeStore(), ec2, recs, permsAccA)
@@ -161,7 +162,7 @@ func TestGetRIUtilization_ScopedEC2ListFailureFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	ec2 := &countingUtilEC2{err: errors.New("describe failed")}
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
-	h := newUtilizationScopeHandler(scopedAuthMock(ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
+	h := newUtilizationScopeHandler(scopedAuthMock(t, ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
 
 	resp, err := h.getRIUtilization(ctx, scopedReq())
 
@@ -175,7 +176,7 @@ func TestGetRIUtilization_ScopedWithNoOwnRIsSeesNothing(t *testing.T) {
 	ctx := context.Background()
 	ec2 := &countingUtilEC2{}
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
-	h := newUtilizationScopeHandler(scopedAuthMock(ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
+	h := newUtilizationScopeHandler(scopedAuthMock(t, ctx), newUtilizationScopeStore(), ec2, recs, permsAccA)
 
 	resp, err := h.getRIUtilization(ctx, scopedReq())
 	require.NoError(t, err)
@@ -189,7 +190,7 @@ func TestGetRIUtilization_OutOfScopeDeploymentMakesNoAWSCalls(t *testing.T) {
 	ctx := context.Background()
 	ec2 := ownUtilEC2()
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
-	h := newUtilizationScopeHandler(scopedAuthMock(ctx), newUtilizationScopeStore(), ec2, recs, permsAccB)
+	h := newUtilizationScopeHandler(scopedAuthMock(t, ctx), newUtilizationScopeStore(), ec2, recs, permsAccB)
 
 	resp, err := h.getRIUtilization(ctx, scopedReq())
 	require.NoError(t, err)
@@ -204,6 +205,7 @@ func TestGetRIUtilization_OutOfScopeDeploymentMakesNoAWSCalls(t *testing.T) {
 func TestGetRIUtilization_PermissionCheckedBeforeScope(t *testing.T) {
 	ctx := context.Background()
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{UserID: permsScopedUserID}, nil)
 	auth.On("HasPermissionAPI", ctx, permsScopedUserID, mock.Anything, mock.Anything).Return(false, nil)
 	ec2 := ownUtilEC2()
@@ -225,7 +227,7 @@ func TestGetRIUtilization_PermissionCheckedBeforeScope(t *testing.T) {
 // account's request was served the first account's cached rows.
 func TestGetRIUtilization_AccountsInSameRegionDoNotShareCache(t *testing.T) {
 	ctx := context.Background()
-	auth, req := adminDashboardReq(ctx)
+	auth, req := adminDashboardReq(t, ctx)
 	req.QueryStringParameters = map[string]string{"region": "us-east-1", "lookback_days": "30"}
 	recs := &countingUtilRecs{}
 	h := newUtilizationScopeHandler(auth, newUtilizationScopeStore(), ownUtilEC2(), recs, permsAccA)
@@ -261,7 +263,7 @@ func TestGetRIUtilization_AccountsInSameRegionDoNotShareCache(t *testing.T) {
 // the cache row cannot be keyed (issue #120).
 func TestGetRIUtilization_AccountResolutionErrorFailsClosed(t *testing.T) {
 	ctx := context.Background()
-	auth, req := adminDashboardReq(ctx)
+	auth, req := adminDashboardReq(t, ctx)
 	recs := &countingUtilRecs{rows: payerUtilizationRows()}
 	h := newUtilizationScopeHandler(auth, newUtilizationScopeStore(), ownUtilEC2(), recs, permsAccA)
 	h.reshapeAccountResolver = func(_ context.Context) (string, error) {

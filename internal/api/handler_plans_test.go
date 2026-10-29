@@ -19,7 +19,9 @@ import (
 func TestHandler_listPlans(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -61,7 +63,9 @@ func TestHandler_listPlans(t *testing.T) {
 func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -105,7 +109,9 @@ func TestHandler_listPlans_AccountIDsFilter(t *testing.T) {
 func TestHandler_listPlans_HealthScoreReflectsFailedExecutions(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -160,6 +166,7 @@ func TestHandler_listPlans_HealthScoreUnknownOnCountsFetchError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -199,6 +206,7 @@ func TestHandler_listPlans_HealthUsesExactCountsNotTruncatedPage(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -234,6 +242,7 @@ func TestHandler_listPlans_HealthCountsUseTheLookbackWindow(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -268,6 +277,7 @@ func TestHandler_listPlans_EmptyListSkipsCountsQuery(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -288,7 +298,9 @@ func TestHandler_listPlans_EmptyListSkipsCountsQuery(t *testing.T) {
 func TestHandler_createPlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -330,6 +342,7 @@ func TestHandler_createPlan(t *testing.T) {
 func TestHandler_createPlan_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -360,6 +373,7 @@ func TestHandler_createPlan_InvalidBody(t *testing.T) {
 func TestHandler_createPlan_RejectsEmptyTargetAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -406,7 +420,9 @@ func TestHandler_createPlan_RejectsEmptyTargetAccounts(t *testing.T) {
 func TestHandler_createPlan_RollbackDeleteFailureSurfacesOriginalError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -456,6 +472,7 @@ func TestHandler_createPlan_RejectsInvalidTargetAccountUUID(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -482,7 +499,9 @@ func TestHandler_createPlan_RejectsInvalidTargetAccountUUID(t *testing.T) {
 func TestHandler_getPlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -525,6 +544,7 @@ func TestHandler_getPlan_NotFound_MapsTo404(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -551,7 +571,9 @@ func TestHandler_getPlan_NotFound_MapsTo404(t *testing.T) {
 func TestHandler_updatePlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -597,7 +619,9 @@ func TestHandler_updatePlan(t *testing.T) {
 func TestHandler_updatePlan_PreservesCompletedRampSteps(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -667,7 +691,9 @@ func TestHandler_updatePlan_PreservesCompletedRampSteps(t *testing.T) {
 func TestHandler_deletePlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -695,6 +721,7 @@ func TestHandler_deletePlan(t *testing.T) {
 func TestHandler_updatePlan_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -762,7 +789,9 @@ func createStepsViaTx(ctx context.Context, h *Handler, count int, creator *strin
 func TestHandler_createPlannedPurchases_StampsCreator(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	userSession := &Session{UserID: userID, Email: "u@example.com"}
@@ -776,7 +805,8 @@ func TestHandler_createPlannedPurchases_StampsCreator(t *testing.T) {
 		},
 	}
 
-	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 
@@ -813,7 +843,9 @@ func TestHandler_createPlannedPurchases_StampsCreator(t *testing.T) {
 func TestHandler_createPlannedPurchases_AdminAPIKeyCreatorIsNil(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	apiKeySession := &Session{UserID: apiKeyAdminUserID, Email: "admin-api-key"}
 
@@ -826,7 +858,8 @@ func TestHandler_createPlannedPurchases_AdminAPIKeyCreatorIsNil(t *testing.T) {
 		},
 	}
 
-	mockAuth.On("ValidateSession", ctx, "api-key").Return(apiKeySession, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 
@@ -863,11 +896,7 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
-
-	adminSession := &Session{
-		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-		Email:  "admin@example.com",
-	}
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	plan := &config.PurchasePlan{
 		ID:   "11111111-1111-1111-1111-111111111111",
@@ -878,7 +907,8 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 		},
 	}
 
-	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 	mockStore.On("GetPurchasePlan", ctx, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
 
@@ -947,6 +977,7 @@ func TestHandler_createPlannedPurchases_MidLoopFailureRollsBack(t *testing.T) {
 func TestHandler_createPlannedPurchases_InvalidCount(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -974,6 +1005,7 @@ func TestHandler_createPlannedPurchases_InvalidCount(t *testing.T) {
 func TestHandler_createPlannedPurchases_InvalidDate(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1003,6 +1035,7 @@ func TestHandler_createPlannedPurchases_InvalidDate(t *testing.T) {
 func TestHandler_createPlannedPurchases_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1030,7 +1063,9 @@ func TestHandler_createPlannedPurchases_InvalidJSON(t *testing.T) {
 func TestHandler_createPlannedPurchases_PlanNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1116,7 +1151,9 @@ func TestCalculateNextExecutionDate(t *testing.T) {
 func TestHandler_patchPlan_Success(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1161,7 +1198,9 @@ func TestHandler_patchPlan_Success(t *testing.T) {
 func TestHandler_patchPlan_UpdateMultipleFields(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1225,6 +1264,7 @@ func TestHandler_patchPlan_InvalidUUID(t *testing.T) {
 func TestHandler_patchPlan_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1251,7 +1291,9 @@ func TestHandler_patchPlan_InvalidBody(t *testing.T) {
 func TestHandler_patchPlan_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1300,7 +1342,9 @@ func TestHandler_patchPlan_GetPlanDBError_NoPIILeak(t *testing.T) {
 	)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1346,7 +1390,9 @@ func TestHandler_updatePlan_GetPlanDBError_NoPIILeak(t *testing.T) {
 	)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1384,7 +1430,9 @@ func TestHandler_updatePlan_GetPlanDBError_NoPIILeak(t *testing.T) {
 func TestHandler_patchPlan_NilPlan(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1412,7 +1460,9 @@ func TestHandler_patchPlan_NilPlan(t *testing.T) {
 func TestHandler_patchPlan_EmptyName(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1446,7 +1496,9 @@ func TestHandler_patchPlan_EmptyName(t *testing.T) {
 func TestHandler_patchPlan_InvalidNotificationDays(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1480,7 +1532,9 @@ func TestHandler_patchPlan_InvalidNotificationDays(t *testing.T) {
 func TestHandler_patchPlan_NegativeNotificationDays(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -1514,17 +1568,25 @@ func TestHandler_patchPlan_NegativeNotificationDays(t *testing.T) {
 func TestHandler_patchPlan_UpdateError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
 	}
 
+	// A plan that passes validation once enabled, so the patch reaches the
+	// store write whose failure this test is about.
 	existingPlan := &config.PurchasePlan{
-		ID:      "11111111-1111-1111-1111-111111111111",
-		Name:    "Test Plan",
-		Enabled: false,
+		ID:                     "11111111-1111-1111-1111-111111111111",
+		Name:                   "Test Plan",
+		Enabled:                false,
+		NotificationDaysBefore: 3,
+		Services: map[string]config.ServiceConfig{
+			"aws/rds": {Provider: "aws", Service: "rds"},
+		},
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -1541,7 +1603,11 @@ func TestHandler_patchPlan_UpdateError(t *testing.T) {
 		Body: `{"enabled": true}`,
 	}
 	result, err := handler.patchPlan(ctx, req, "11111111-1111-1111-1111-111111111111")
-	assert.Error(t, err)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "want ClientError, got %T: %v", err, err)
+	assert.Equal(t, 500, ce.code)
+	assert.Equal(t, "failed to update plan", ce.message)
 	assert.Nil(t, result)
 }
 
@@ -1552,6 +1618,7 @@ func TestHandler_createPlan_UnknownAccountReturns404(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{
@@ -1602,6 +1669,7 @@ func TestHandler_createPlan_DBErrorOnCreateReturns500WithLog(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{
@@ -1641,6 +1709,7 @@ func TestHandler_listPlans_StuckRampFetchFailureLeavesHealthUnknown(t *testing.T
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -1672,6 +1741,7 @@ func TestHandler_listPlans_StuckRampProducesTheBlockedFactor(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
@@ -1730,10 +1800,11 @@ func TestHandler_createPlannedPurchases_RefusesAPartlyBoughtStep(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 
 	planID := "11111111-1111-1111-1111-111111111111"
@@ -1776,10 +1847,11 @@ func TestHandler_createPlannedPurchases_AllowsAnUnstartedStep(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 
 	planID := "11111111-1111-1111-1111-111111111111"
@@ -1819,10 +1891,11 @@ func TestHandler_createPlannedPurchases_FailsClosedWhenTheProbeFails(t *testing.
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
-	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	// createStepsViaTx drives the transactional step creation directly, so no
+	// request session is validated.
 	mockAuth.grantAdmin()
 
 	planID := "11111111-1111-1111-1111-111111111111"
@@ -1855,6 +1928,7 @@ func TestHandler_planWrites_RefuseZeroTargetCoverage(t *testing.T) {
 	for _, op := range []string{"create", "update"} {
 		t.Run(op, func(t *testing.T) {
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 			mockAuth.grantAdmin()
 			mockStore := new(MockConfigStore)

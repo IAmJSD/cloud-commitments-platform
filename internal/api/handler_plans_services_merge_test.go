@@ -107,6 +107,7 @@ func TestMergeUpdatedPlan_DoesNotMutateExistingServices(t *testing.T) {
 func TestHandler_updatePlan_RenameKeepsAllServices(t *testing.T) {
 	ctx := context.Background()
 	h, store := spHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetPurchasePlan", ctx, spPlanID).Return(multiServicePlan(), nil)
 	var stored *config.PurchasePlan
 	store.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).

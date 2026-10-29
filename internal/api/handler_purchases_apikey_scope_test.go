@@ -159,6 +159,7 @@ func ownerHeaders() map[string]string {
 func serveKeyScope(t *testing.T, rt keyScopeRoute, a *keyScopeAuth, creator string, headers map[string]string) (int, bool) {
 	t.Helper()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	purchaseMgr := new(MockPurchaseManager)
 	store.On("GetExecutionByID", mock.Anything, keyScopeExecID).Return(keyScopeExec(rt.status, creator), nil)
 	store.On("TransitionExecutionStatus", mock.Anything, keyScopeExecID, mock.Anything, mock.Anything, mock.Anything).
@@ -247,6 +248,7 @@ func TestPlannedPurchaseRoutes_APIKeyFullScopeProbeErrorRefuses(t *testing.T) {
 			store.On("TransitionExecutionStatus", mock.Anything, keyScopeExecID, mock.Anything, mock.Anything, mock.Anything).
 				Return(nil, errKeyScopeReached).Maybe()
 			m := new(MockAuthService)
+			t.Cleanup(func() { m.AssertExpectations(t) })
 			m.On("HasAPIKeyPermissionAPI", mock.Anything, keyScopeRawKey, tc.entryVerb, auth.ResourcePurchases).
 				Return(keyScopeOwnerID, keyScopeKeyID, true, nil)
 			m.On("GetAllowedAccountsAPI", mock.Anything, keyScopeOwnerID).Return([]string{}, nil)

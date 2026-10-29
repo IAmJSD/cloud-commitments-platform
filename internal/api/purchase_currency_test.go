@@ -114,7 +114,9 @@ func TestEnforcePurchaseConstraints_NonUSDOtherDimensionKeepsItsError(t *testing
 func TestHandler_executePurchase_NonUSDStoredPriceUnderCapRefused(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	authService := new(MockAuthService)
+	t.Cleanup(func() { authService.AssertExpectations(t) })
 	authService.On("ValidateSession", ctx, "eur-cap").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "capped@example.com"}, nil)
 	authService.grantPermissions([]auth.Permission{{Action: auth.ActionExecute, Resource: auth.ResourcePurchases, Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 1000}}})
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()

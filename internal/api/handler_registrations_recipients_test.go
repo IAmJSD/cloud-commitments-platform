@@ -15,6 +15,7 @@ func TestHandler_resolveRegistrationRecipients_AdminsBecomeApprovers(t *testing.
 	globalNotify := "global@cudly.example"
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	adminGroup := []string{"00000000-0000-5000-8000-000000000001"}
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
 		{Email: "admin-a@example.com", Groups: adminGroup},
@@ -24,6 +25,7 @@ func TestHandler_resolveRegistrationRecipients_AdminsBecomeApprovers(t *testing.
 	}, nil)
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &globalNotify,
 	}, nil)
@@ -43,11 +45,13 @@ func TestHandler_resolveRegistrationRecipients_NoAdminsTriggersBroadcastFallback
 	globalNotify := "global@cudly.example"
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
 		{Email: "user@example.com"},
 	}, nil)
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &globalNotify,
 	}, nil)
@@ -70,11 +74,13 @@ func TestHandler_resolveRegistrationRecipients_OmitsGlobalWhenAlreadyAdmin(t *te
 	globalNotify := "admin-a@example.com"
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ListUsersAPI", ctx).Return([]*auth.APIUser{
 		{Email: "admin-a@example.com", Groups: []string{"00000000-0000-5000-8000-000000000001"}},
 	}, nil)
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &globalNotify,
 	}, nil)

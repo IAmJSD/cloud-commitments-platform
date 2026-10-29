@@ -51,6 +51,7 @@ func TestGetHistory_PlanIDReachesStoreFilters(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			var rowFilter config.PurchaseHistoryFilter
 			mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 				Run(func(args mock.Arguments) { rowFilter = args.Get(1).(config.PurchaseHistoryFilter) }).
@@ -61,7 +62,7 @@ func TestGetHistory_PlanIDReachesStoreFilters(t *testing.T) {
 				Run(func(args mock.Arguments) { aggFilter = args.Get(1).(config.HistorySummaryFilter) }).
 				Return(&config.HistorySummaryGroups{}, nil)
 
-			mockAuth, req := adminHistoryReq(ctx)
+			mockAuth, req := adminHistoryReq(t, ctx)
 			handler := &Handler{auth: mockAuth, config: mockStore}
 			params := map[string]string{}
 			if tc.planID != "" {
@@ -77,7 +78,7 @@ func TestGetHistory_PlanIDReachesStoreFilters(t *testing.T) {
 
 func TestGetHistory_BadPlanIDIs400(t *testing.T) {
 	ctx := context.Background()
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: new(MockConfigStore)}
 	_, err := handler.getHistory(ctx, req, map[string]string{"plan_id": "garbage"})
 	require.Error(t, err)

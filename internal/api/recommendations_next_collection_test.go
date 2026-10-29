@@ -19,6 +19,7 @@ func freshnessJSON(t *testing.T, schedule string, now time.Time) string {
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	collected := now.Add(-3 * time.Hour)
 	mockStore.On("GetRecommendationsFreshness", ctx).
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &collected}, nil)

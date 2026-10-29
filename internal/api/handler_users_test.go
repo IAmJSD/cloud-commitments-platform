@@ -16,6 +16,7 @@ import (
 func TestHandler_listUsers_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -49,6 +50,7 @@ func TestHandler_listUsers_Success(t *testing.T) {
 func TestHandler_listUsers_NoPermission(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	userSession := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
@@ -75,6 +77,7 @@ func TestHandler_listUsers_NoPermission(t *testing.T) {
 func TestHandler_createUser_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -109,6 +112,7 @@ func TestHandler_createUser_Success(t *testing.T) {
 func TestHandler_getUser_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -143,6 +147,7 @@ func TestHandler_getUser_Success(t *testing.T) {
 func TestHandler_updateUser_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -184,6 +189,7 @@ func TestHandler_updateUser_Success(t *testing.T) {
 func TestHandler_updateUser_Deactivate(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -221,6 +227,7 @@ func TestHandler_updateUser_Deactivate(t *testing.T) {
 func TestHandler_deleteUser_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -249,6 +256,7 @@ func TestHandler_deleteUser_Success(t *testing.T) {
 func TestHandler_deleteUser_SelfDeletion(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -276,6 +284,7 @@ func TestHandler_deleteUser_SelfDeletion(t *testing.T) {
 func TestHandler_createUser_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -297,6 +306,7 @@ func TestHandler_createUser_InvalidJSON(t *testing.T) {
 func TestHandler_updateUser_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
