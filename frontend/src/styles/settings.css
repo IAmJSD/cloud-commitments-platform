@@ -67,28 +67,68 @@
     display: none;
 }
 
+/* The General description carries .page-hero-description (margin: 0), so
+ * give the form below it the gap instead. */
+#global-settings-form {
+    margin-top: var(--cudly-sp-5);
+}
+
+/* Settings section card. The legend is floated so it renders as an
+ * in-card heading instead of sitting on the border line, while keeping
+ * the <fieldset>/<legend> grouping (the legend still names the group). */
 .settings-category {
     /* A fieldset defaults to min-width: min-content, which widens the page. */
     min-width: 0;
     border: 1px solid var(--cudly-border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
+    padding: var(--cudly-sp-5);
+    margin-bottom: var(--cudly-sp-5);
 }
 
-.settings-category legend {
+.settings-category > legend {
+    float: left;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    padding: 0;
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-lg);
     font-weight: var(--cudly-fw-semibold);
-    font-size: 1.1rem;
-    color: var(--cudly-primary);
-    padding: 0 0.5rem;
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
 }
 
+.settings-category > legend + * {
+    clear: both;
+}
+
+/* Clearance swallows the summary's top margin when the collapsed service
+ * grid comes straight after the heading (Azure / GCP blocks). */
+.settings-category > legend + .service-defaults-details {
+    padding-top: var(--cudly-sp-1);
+}
+
+/* Section description: muted body text, readable line length. */
+.settings-category > .settings-description,
+.settings-category > .settings-help {
+    max-width: 48rem;
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
+}
+
+/* Rows: label + hint stacked on the left, control on the right; the control
+ * drops below the label when the row is too narrow for both. */
 .setting-row {
     display: flex;
     flex-wrap: wrap; /* allow inline range-error to drop below the label+input row */
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 0;
+    gap: var(--cudly-sp-2) var(--cudly-sp-6);
+    padding: var(--cudly-sp-4) 0;
     border-bottom: 1px solid var(--cudly-border);
 }
 
@@ -104,23 +144,40 @@
 }
 
 .setting-info {
-    flex: 1;
+    flex: 1 1 16rem;
+    min-width: 0;
+    max-width: 44rem; /* keeps hint lines readable */
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--cudly-sp-1) var(--cudly-sp-2);
 }
 
 .setting-info label,
-.setting-info .label-like {
+.setting-info .label-like,
+.setting-info > span:first-child {
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
 
+/* Hint text under the label (qualifiers, ranges, consequences). */
+.setting-info .setting-hint,
+.setting-info .help-text {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
+}
+
 .setting-input {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 1rem;
+    gap: var(--cudly-sp-2) var(--cudly-sp-4);
     /* A select sizes to its longest option; keep it inside the row. */
     max-width: 100%;
     min-width: 0;
@@ -130,19 +187,42 @@
     max-width: 100%;
 }
 
+/* Standard control size: 36px tall, widths by kind (email/text wide enough
+ * for a full address, numbers short). */
 .setting-input input[type="text"],
 .setting-input input[type="email"],
 .setting-input input[type="number"],
 .setting-input select {
-    padding: 0.5rem;
+    height: 2.25rem;
+    padding: 0 var(--cudly-sp-3);
     border: 1px solid var(--cudly-border-strong);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    min-width: 200px;
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    font-size: var(--cudly-fs-sm);
+    max-width: 100%;
+}
+
+.setting-input input[type="text"],
+.setting-input input[type="email"] {
+    width: 20rem;
+}
+
+.setting-input select {
+    min-width: 12rem;
 }
 
 .setting-input input[type="number"] {
-    min-width: 100px;
+    width: 7rem;
+}
+
+/* Checkbox groups (Enabled providers) read as a row of options. */
+.setting-input > label:has(> input[type="checkbox"]) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
 }
 
 .credential-status {
@@ -160,26 +240,53 @@
 
 .settings-buttons {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 1rem;
-    margin-top: 2rem;
-    padding-top: 1rem;
+    gap: var(--cudly-sp-3);
+    margin-top: var(--cudly-sp-5);
+    padding-top: var(--cudly-sp-4);
     border-top: 1px solid var(--cudly-border);
+}
+
+.settings-buttons .btn {
+    white-space: nowrap;
 }
 
 /* Settings sub-setting (indented) */
 .setting-row.sub-setting {
-    margin-left: 2rem;
-    padding-left: 1rem;
+    margin-left: var(--cudly-sp-5);
+    padding-left: var(--cudly-sp-4);
     border-left: 2px solid var(--cudly-border);
 }
 
 /* Settings help text */
 .settings-help {
-    font-size: 0.85rem;
+    font-size: var(--cudly-fs-sm);
     color: var(--cudly-text-muted);
-    margin-bottom: 1rem;
-    font-style: italic;
+    margin-bottom: var(--cudly-sp-3);
+}
+
+/* Narrow screens: the section card sits inside the page card, so trim its
+ * padding and the sub-setting indent to leave room for the controls. */
+@media (max-width: 640px) {
+    .settings-category {
+        padding: var(--cudly-sp-4);
+    }
+
+    .setting-row.sub-setting {
+        margin-left: var(--cudly-sp-2);
+        padding-left: var(--cudly-sp-3);
+    }
+}
+
+/* The touch-target rule in responsive.css turns any label wrapping a
+ * checkbox into a 44px flex box, which squashed the switch track into a
+ * blob. Keep the switch at its drawn size (50x26, above the 24px minimum). */
+@media (pointer: coarse) {
+    .setting-input label.toggle-label {
+        display: inline-block;
+        min-height: 0;
+    }
 }
 
 /* Subsection title */
@@ -204,7 +311,7 @@
 .provider-settings legend {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--cudly-sp-2);
 }
 
 /* Service defaults grid */
