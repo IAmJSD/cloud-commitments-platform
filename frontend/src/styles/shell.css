@@ -348,6 +348,25 @@
     display: none;
 }
 
+/* Phone drawer: who is signed in stays first, the avatar sits beside the
+ * email (one size down so a typical address still fits on one line), and
+ * Log out keeps a gap between its icon and its label. */
+.app-sidebar-extras #user-email-display {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    order: -2;
+    font-size: var(--cudly-fs-sm);
+}
+
+.app-sidebar-extras #user-role-display {
+    order: -1;
+}
+
+.app-sidebar-extras #logout-btn {
+    gap: var(--cudly-sp-2);
+}
+
 .app-sidebar-extras .user-info-divider {
     display: none;
 }
