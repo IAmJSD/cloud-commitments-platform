@@ -731,6 +731,13 @@ tr.override-disabled {
     white-space: nowrap;
 }
 
+/* The sr-only verb inside each icon button is absolutely positioned; give
+ * it the button as containing block, or inside the sideways-scrolling
+ * table on phones it lands at the table's far edge and widens the page. */
+.row-actions button.icon-btn {
+    position: relative;
+}
+
 /* Delete keeps .btn-destructive as its hook but uses the subtle danger look
  * (tinted, red icon) instead of a solid red block next to neutral actions;
  * it fills red only on hover. A little extra space sets it apart. */
