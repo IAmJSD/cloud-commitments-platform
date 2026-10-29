@@ -282,3 +282,98 @@
 #plan-editor-panel .schedule-preview-scroll { min-height: 372px; }
 #plan-editor-panel .schedule-preview-scroll[hidden] { display: none; }
 #plan-editor-panel [data-editor="changes"] { margin-top: 16px; border-top: 1px solid var(--cudly-border); }
+
+/* ---- Plan cards: actions, enabled switch, sections (ui/modernize-modals) */
+.plan-status {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+/* The card's on/off switch, labelled "Enabled" and set apart from the badges. */
+.plan-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0 0 0 var(--cudly-sp-2);
+    padding-left: var(--cudly-sp-3);
+    border-left: 1px solid var(--cudly-border);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+}
+
+.plan-toggle .toggle-label {
+    width: 36px;
+    height: 20px;
+}
+
+.plan-toggle .slider:before {
+    width: 14px;
+    height: 14px;
+}
+
+.plan-toggle input:checked + .slider:before {
+    transform: translateX(16px);
+}
+
+.plan-toggle input:focus-visible + .slider {
+    box-shadow: var(--cudly-focus-ring);
+}
+
+.plan-actions {
+    align-items: center;
+}
+
+/* Secondary card actions: no box until hovered. */
+.plan-actions button.plan-action-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--cudly-text);
+}
+
+.plan-actions button.plan-action-ghost:hover {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-border);
+}
+
+/* A boxless first action (read-only cards) lines its text up with the card. */
+.plan-actions button.plan-action-ghost:first-child {
+    margin-left: calc(-1 * var(--cudly-sp-4));
+}
+
+/* Delete: red text on the card surface, pushed to the far end of the row.
+ * The confirm dialog it opens carries the solid red action. */
+.plan-actions button.plan-action-delete {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+    margin-left: auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--cudly-error-fg);
+}
+
+.plan-actions button.plan-action-delete:hover {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error-bg);
+}
+
+/* "Unassigned" plans heading: a section heading with its note below it and
+ * room above, instead of plain text flush against the next card. */
+.plans-section-header {
+    margin: var(--cudly-sp-6) 0 var(--cudly-sp-3);
+}
+
+.plans-section-header h4 {
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+.plans-section-description {
+    display: block;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+/* ---- end plan cards ------------------------------------------------------ */
