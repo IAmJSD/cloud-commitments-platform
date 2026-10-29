@@ -142,17 +142,27 @@
 
 /* Sub-tab bar: a quiet underline row between the page header and the
  * sub-tab content. */
+/* The hairline is an inset shadow, not a border, so the active tab's 2px
+ * underline paints over it inside the scroll box instead of being clipped. */
 .settings-tabs,
 .inventory-subnav {
     gap: var(--cudly-sp-1);
-    border-bottom-width: 1px;
+    border-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--cudly-border);
     margin-bottom: var(--cudly-sp-5);
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar,
+.inventory-subnav::-webkit-scrollbar {
+    display: none;
 }
 
 .sub-tab-btn {
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
-    margin-bottom: -1px;
     border-bottom-width: 2px;
+    scroll-snap-align: start;
     font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     white-space: nowrap;
@@ -340,6 +350,12 @@
 
 #logout-btn .logout-icon {
     flex-shrink: 0;
+}
+
+/* The display rules above must not reveal the profile button before a user
+ * is known (auth.ts keeps it [hidden] until then). */
+:is(.app-topbar, .app-sidebar-extras) #user-email-display[hidden] {
+    display: none;
 }
 
 .app-sidebar-extras .user-info-divider {
@@ -766,4 +782,83 @@ div.error::before {
 
 .card .error-callout {
     box-shadow: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile shell.
+ * ------------------------------------------------------------------------- */
+
+/* Section headers (chart titles + range buttons, Savings History controls)
+ * wrap the controls onto a second line instead of squeezing the title into
+ * one word per line. */
+.section-header {
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+}
+
+.section-header > :is(h2, h3) {
+    flex: 1 1 auto;
+    min-width: min(100%, max-content);
+}
+
+@media (max-width: 768px) {
+    .app-main {
+        padding: var(--cudly-sp-4);
+    }
+
+    .page-header {
+        margin-bottom: var(--cudly-sp-4);
+    }
+
+    .page-header-actions {
+        justify-content: flex-start;
+    }
+
+    /* Sub-tab bars scroll edge to edge of the content column. */
+    .settings-tabs,
+    .inventory-subnav {
+        margin-left: calc(-1 * var(--cudly-sp-4));
+        margin-right: calc(-1 * var(--cudly-sp-4));
+        padding: 0 var(--cudly-sp-4);
+        scroll-padding: 0 var(--cudly-sp-4);
+    }
+
+}
+
+/* Mid-width desktops (tablet landscape, small laptops): the top bar drops
+ * the email text (the avatar stays, and the button keeps the address as its
+ * accessible name and tooltip) and the brand stops reserving the sidebar
+ * column, so the bar never pushes the page wider than the window. */
+@media (min-width: 769px) and (max-width: 1279px) {
+    .app-topbar-brand {
+        width: auto;
+        margin-right: var(--cudly-sp-3);
+    }
+
+    .app-topbar #user-email-display {
+        padding: 0 var(--cudly-sp-1);
+        font-size: 0;
+        gap: 0;
+    }
+
+    .app-topbar #user-email-display[data-initials]::before {
+        width: 1.75rem;
+        height: 1.75rem;
+        font-size: 0.6875rem;
+    }
+
+    .user-info-divider {
+        margin: 0 var(--cudly-sp-1);
+    }
+}
+
+/* The skip link appears just under the top bar when focused, instead of on
+ * top of the hamburger and the brand. */
+.skip-to-main {
+    top: calc(var(--cudly-topbar-h) + var(--cudly-sp-2));
+    transform: translateY(calc(-100% - var(--cudly-topbar-h) - var(--cudly-sp-4)));
+}
+
+.skip-to-main:focus {
+    transform: translateY(0);
 }
