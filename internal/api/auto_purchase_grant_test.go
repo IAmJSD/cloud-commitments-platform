@@ -119,6 +119,7 @@ func TestAutoPurchaseGate_PlanWrites(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetPurchasePlan", mock.Anything, apgPlanID).Return(tc.stored, nil)
 			store.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil).Maybe()
 			h, req := tc.caller.handlerAndReq(store, tc.body)
@@ -153,6 +154,7 @@ func TestAutoPurchaseGate_CreatePlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("CreatePurchasePlan", mock.Anything, mock.Anything).Return(nil).Maybe()
 			store.On("SetPlanAccounts", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
@@ -172,20 +174,29 @@ func TestAutoPurchaseGate_CreatePlan(t *testing.T) {
 }
 
 func TestAutoPurchaseGate_CapValidation(t *testing.T) {
-	for _, tc := range []struct{ name, body string }{
-		{"zero", `{"name":"p","max_step_commitment":0}`},
-		{"negative", `{"name":"p","max_step_commitment":-5}`},
-		{"below one cent", `{"name":"p","max_step_commitment":0.004}`},
-		{"1e308 overflows the column", `{"name":"p","max_step_commitment":1e308}`},
-		{"quoted number", `{"name":"p","max_step_commitment":"100"}`},
-		{"half cent 1.005", `{"name":"p","max_step_commitment":1.005}`},
-		{"0.015", `{"name":"p","max_step_commitment":0.015}`},
-		{"1.0049", `{"name":"p","max_step_commitment":1.0049}`},
-		{"1e-3", `{"name":"p","max_step_commitment":1e-3}`},
+	for _, tc := range []struct {
+		name, body string
+		// decodeRefused: the body does not decode, so the stored plan is
+		// never read.
+		decodeRefused bool
+	}{
+		{"zero", `{"name":"p","max_step_commitment":0}`, false},
+		{"negative", `{"name":"p","max_step_commitment":-5}`, false},
+		{"below one cent", `{"name":"p","max_step_commitment":0.004}`, false},
+		{"1e308 overflows the column", `{"name":"p","max_step_commitment":1e308}`, false},
+		{"quoted number", `{"name":"p","max_step_commitment":"100"}`, true},
+		{"half cent 1.005", `{"name":"p","max_step_commitment":1.005}`, false},
+		{"0.015", `{"name":"p","max_step_commitment":0.015}`, false},
+		{"1.0049", `{"name":"p","max_step_commitment":1.0049}`, false},
+		{"1e-3", `{"name":"p","max_step_commitment":1e-3}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
-			store.On("GetPurchasePlan", mock.Anything, apgPlanID).Return(apgStoredPlan(false, nil), nil)
+			t.Cleanup(func() { store.AssertExpectations(t) })
+			planRead := store.On("GetPurchasePlan", mock.Anything, apgPlanID).Return(apgStoredPlan(false, nil), nil)
+			if tc.decodeRefused {
+				planRead.Maybe()
+			}
 			store.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil).Maybe()
 			h, req := apgCaller{perms: apgAdminPlus}.handlerAndReq(store, tc.body)
 			_, err := h.updatePlan(context.Background(), req, apgPlanID)

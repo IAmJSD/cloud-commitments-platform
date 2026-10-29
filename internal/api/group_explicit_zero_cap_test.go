@@ -56,6 +56,7 @@ func TestGroupWritesHTTP_ExplicitZeroSpendCap(t *testing.T) {
 	for _, tc := range cases {
 		run := func(t *testing.T, write func(h *Handler, req *events.LambdaFunctionURLRequest) (any, error)) {
 			store := new(MockStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetGroup", mock.Anything, zeroCapGroupID).Return(&auth.Group{ID: zeroCapGroupID, Name: "Team"}, nil).Maybe()
 			store.On("CreateGroup", mock.Anything, mock.Anything).Return(nil).Maybe()
 			store.On("UpdateGroup", mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -63,6 +64,7 @@ func TestGroupWritesHTTP_ExplicitZeroSpendCap(t *testing.T) {
 			// issue #1409 member check lists users; the group has none.
 			store.On("ListUsers", mock.Anything).Return([]auth.User{}, nil).Maybe()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: auth.AdminAPIKeyActorID}, nil)
 			mockAuth.grantAdmin()
 			h := &Handler{auth: &realGroupAuth{MockAuthService: mockAuth, svc: auth.NewService(auth.ServiceConfig{Store: store})}}

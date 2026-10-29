@@ -136,6 +136,7 @@ func TestGetCurrentUserPermissions_ScopeLookupError_ReportsRestricted(t *testing
 
 func TestGetCurrentUserPermissions_AdminAPIKey_ReportsUnrestricted(t *testing.T) {
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	h := &Handler{auth: m, apiKey: "admin-key-619"}
 
 	got := routeMePermissions(t, h, &events.LambdaFunctionURLRequest{
@@ -188,6 +189,7 @@ func TestGetCurrentUserPermissions_UserAPIKey_FlagMatchesRefreshGate(t *testing.
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := new(MockAuthService)
+			t.Cleanup(func() { m.AssertExpectations(t) })
 			m.On("ValidateUserAPIKeyAPI", mock.Anything, meScopeRawKey).
 				Return(&auth.UserAPIKey{ID: meScopeKeyID}, &auth.User{ID: meScopeKeyOwnerID}, nil).Maybe()
 			m.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, meScopeKeyID, meScopeKeyOwnerID).

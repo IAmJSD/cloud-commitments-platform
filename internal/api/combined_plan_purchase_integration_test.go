@@ -135,6 +135,7 @@ func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, 
 	require.NoError(t, err)
 	require.NoError(t, f.pool.QueryRow(ctx, `SELECT id FROM users WHERE email='creator@example.com'`).Scan(&f.creator))
 	creatorAuth := new(MockAuthService)
+	t.Cleanup(func() { creatorAuth.AssertExpectations(t) })
 	creatorAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: f.creator, Email: "creator@example.com"}, nil).Maybe()
 	creatorAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	creatorAuth.grantAdminPurchaser()
@@ -227,6 +228,7 @@ func (f *combinedPlanFixture) assertAttached(t *testing.T) {
 func (f *combinedPlanFixture) approveAs(t *testing.T, userID string, maxAmount float64) events.LambdaFunctionURLResponse {
 	t.Helper()
 	a := new(MockAuthService)
+	t.Cleanup(func() { a.AssertExpectations(t) })
 	a.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: userID}, nil).Maybe()
 	a.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	a.grantPermissionsScoped([]auth.Permission{{Action: "approve-any", Resource: "purchases", Constraints: &auth.PermissionConstraints{AccountIDs: []string{f.account}, MaxPurchaseAmount: maxAmount}}}, []string{f.account})

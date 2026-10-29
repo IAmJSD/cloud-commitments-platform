@@ -36,17 +36,15 @@ func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 	// dispatch branch could pass the test without ever asserting on
 	// `err`.
 	//
-	// Wire a minimal MockConfigStore that returns a clean "execution
-	// not found" error from GetExecutionByID so the dispatch reaches a
-	// proper NewClientError(404) instead of nil-deref'ing on h.config.
-	// (Pre-#286 the empty-token check short-circuited at the very top
-	// of approvePurchase, so a zero-Handler test was sufficient. The
-	// dispatch refactor moved that check after GetExecutionByID; the
-	// test surface adapts in step.)
+	// approvePurchase now requires a session before it looks the
+	// execution up (requireSessionBeforeLookup), so the caller is refused
+	// with a 401 and the store is never read. The store has no
+	// expectations: a GetExecutionByID call would panic, which the recover
+	// below turns into a failure.
 	ctx := context.Background()
 	execID := "11111111-1111-1111-1111-111111111111"
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("GetExecutionByID", ctx, execID).Return(nil, errors.New("execution not found"))
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	h := &Handler{config: mockConfig}
 
 	defer func() {
@@ -56,6 +54,9 @@ func TestHandler_approvePurchase_EmptyToken(t *testing.T) {
 	}()
 	_, err := h.approvePurchase(ctx, nil, execID, "")
 	require.Error(t, err, "approvePurchase with empty token + zero handler must fail")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error, got %v", err)
+	assert.Equal(t, 401, ce.code)
 }
 
 func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
@@ -64,6 +65,7 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
@@ -84,6 +86,7 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
@@ -100,6 +103,7 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil)
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveExecution", ctx, execID, "tok", approver).
 		Return(nil, "", errors.New("approval failed"))
 
@@ -127,6 +131,7 @@ func TestHandler_cancelPurchase_InvalidUUID(t *testing.T) {
 func TestHandler_cancelPurchase_EmptyToken_FallsThroughToSession(t *testing.T) {
 	execID := "11111111-1111-1111-1111-111111111111"
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	h := &Handler{config: mockConfig}
 	_, err := h.cancelPurchase(context.Background(), nil, execID, "")
 	ce, ok := IsClientError(err)
@@ -141,6 +146,7 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	approver := "approver@example.com"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
@@ -159,6 +165,7 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
@@ -172,6 +179,7 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("CancelExecution", ctx, execID, "tok", approver).
 		Return(errors.New("cancel failed"))
 
@@ -191,6 +199,7 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 func TestHandler_forgotPassword_RateLimitExceeded(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	rl := NewInMemoryRateLimiter()
 	rl.SetLimit("forgot_password", NewRateLimitConfig(1, 60))
@@ -252,6 +261,7 @@ func TestApplyOverrideSlices_NilFields(t *testing.T) {
 func TestHandler_sendPurchaseApprovalEmail_ConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, errors.New("db down"))
 
 	h := &Handler{
@@ -271,7 +281,9 @@ func TestHandler_sendPurchaseApprovalEmail_ConfigError(t *testing.T) {
 func TestHandler_updateRIExchangeConfig_GetGlobalConfigError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -290,7 +302,9 @@ func TestHandler_updateRIExchangeConfig_GetGlobalConfigError(t *testing.T) {
 func TestHandler_updateRIExchangeConfig_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	adminSession := &Session{UserID: "uid"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -314,6 +328,7 @@ func TestHandler_updateRIExchangeConfig_SaveError(t *testing.T) {
 func TestHandler_rejectRIExchange_RecordNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(nil, nil)
 
 	h := &Handler{config: mockStore}
@@ -329,6 +344,7 @@ func TestHandler_rejectRIExchange_RecordNotFound(t *testing.T) {
 func TestHandler_rejectRIExchange_WrongToken(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: config.HashApprovalToken("correct")}, nil)
 
@@ -341,6 +357,7 @@ func TestHandler_rejectRIExchange_WrongToken(t *testing.T) {
 func TestHandler_rejectRIExchange_AlreadyProcessed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: config.HashApprovalToken("tok")}, nil)
 	// Transition returns nil indicating already processed.
@@ -361,6 +378,7 @@ func TestHandler_rejectRIExchange_AlreadyProcessed(t *testing.T) {
 func TestHandler_validateExchangeApproval_DBError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").
 		Return(nil, errors.New("db error"))
 
@@ -377,6 +395,7 @@ func TestHandler_validateExchangeApproval_DBError(t *testing.T) {
 func TestHandler_approveRIExchange_AlreadyProcessed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetRIExchangeRecord", ctx, "11111111-1111-1111-1111-111111111111").Return(
 		&config.RIExchangeRecord{ID: "11111111-1111-1111-1111-111111111111", ApprovalToken: config.HashApprovalToken("tok")}, nil)
 	mockStore.On("TransitionRIExchangeStatus", ctx, "11111111-1111-1111-1111-111111111111", "pending", "processing", mock.Anything).

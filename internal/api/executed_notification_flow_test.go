@@ -105,6 +105,7 @@ func TestExecutedNotification_TokenApprovePath(t *testing.T) {
 	}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
@@ -178,6 +179,7 @@ func TestExecutedNotification_TokenApprovePath_RefetchFailureStillEmailsToken(t 
 	}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
@@ -226,6 +228,7 @@ func TestExecutedNotification_SessionApprovePath(t *testing.T) {
 	freshToken := "session-revoke-token"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := approvalTestExec(execID, contact, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
@@ -233,6 +236,7 @@ func TestExecutedNotification_SessionApprovePath(t *testing.T) {
 	}, nil)
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: adminEmail}, nil)
 	mockAuth.grantAdminPurchaser()
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
@@ -281,6 +285,7 @@ func TestExecutedNotification_DirectExecutePath(t *testing.T) {
 	freshToken := "direct-execute-revoke-token"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "valid-token",
@@ -292,9 +297,9 @@ func TestExecutedNotification_DirectExecutePath(t *testing.T) {
 	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, ContactEmail: contact}, nil
 	}
-	// directExecutePurchase stamps audit fields, then sendPurchaseExecutedEmail
+	// DirectExecute stamps the audit fields after its claim (the handler
+	// no longer saves the row itself), then sendPurchaseExecutedEmail
 	// reads the global config.
-	mockConfig.On("SavePurchaseExecution", ctx, exec).Return(nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &contact,
 	}, nil)
@@ -338,6 +343,7 @@ func TestExecutedNotification_DirectExecute_NilNotifierNoPanic(t *testing.T) {
 	adminEmail := "admin@example.com"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "valid-token",
@@ -346,7 +352,6 @@ func TestExecutedNotification_DirectExecute_NilNotifierNoPanic(t *testing.T) {
 			{ID: "r1"},
 		},
 	}
-	mockConfig.On("SavePurchaseExecution", ctx, exec).Return(nil)
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("DirectExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil, "", nil)

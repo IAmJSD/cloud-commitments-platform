@@ -23,6 +23,7 @@ func TestGetConfig_ServiceRowsCarryStamps(t *testing.T) {
 	updated := created.Add(26 * time.Hour)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{EnabledProviders: []string{"aws"}}, nil)
 	mockStore.On("ListServiceConfigs", mock.Anything).Return([]config.ServiceConfig{
 		{Provider: "aws", Service: "ec2", CreatedAt: &created, UpdatedAt: &updated},
@@ -57,12 +58,14 @@ func TestGetConfig_ServiceRowsCarryStamps(t *testing.T) {
 func TestUpdateServiceConfig_IgnoresClientStamps(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
 	}, nil)
 	mockAuth.grantAdmin()
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 	var saved *config.ServiceConfig
 	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).
