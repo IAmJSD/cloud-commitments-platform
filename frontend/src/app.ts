@@ -29,6 +29,7 @@ import { setOpenAccountsHandler } from './first-run-empty-state';
 import { setupMobileNav } from './nav/mobile-nav';
 import { initPurchasingNav } from './purchasing-nav';
 import { renderInitError } from './init-error';
+import { initSubtabScroll } from './nav/subtab-scroll';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -208,6 +209,8 @@ export function setupEventListeners(): void {
   // role="tablist" promises (issue #730).
   document.querySelectorAll<HTMLElement>('.inventory-subnav[role="tablist"], .settings-tabs[role="tablist"]')
     .forEach(wireTablistKeyboard);
+  // Narrow screens: edge fade on bars that scroll, selected tab kept in view.
+  initSubtabScroll();
 
   // Settings sub-tab switching
   document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {

@@ -54,7 +54,8 @@ const LAYOUTS: Array<[number, number[]]> = [
   [1100, [2, 2]],
   [1024, [2, 2]],
   [800, [2, 2]],
-  [390, [1, 1, 1, 1]],
+  // Phones keep a 2x2 grid rather than one tile per row (mobile shell polish).
+  [390, [2, 2]],
 ];
 
 for (const [section, path] of [['#summary', '/home'], ['#recommendations-summary', '/opportunities']] as const) {

@@ -142,17 +142,27 @@
 
 /* Sub-tab bar: a quiet underline row between the page header and the
  * sub-tab content. */
+/* The hairline is an inset shadow, not a border, so the active tab's 2px
+ * underline paints over it inside the scroll box instead of being clipped. */
 .settings-tabs,
 .inventory-subnav {
     gap: var(--cudly-sp-1);
-    border-bottom-width: 1px;
+    border-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--cudly-border);
     margin-bottom: var(--cudly-sp-5);
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar,
+.inventory-subnav::-webkit-scrollbar {
+    display: none;
 }
 
 .sub-tab-btn {
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
-    margin-bottom: -1px;
     border-bottom-width: 2px;
+    scroll-snap-align: start;
     font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     white-space: nowrap;
@@ -346,25 +356,6 @@
  * is known (auth.ts keeps it [hidden] until then). */
 :is(.app-topbar, .app-sidebar-extras) #user-email-display[hidden] {
     display: none;
-}
-
-/* Phone drawer: who is signed in stays first, the avatar sits beside the
- * email (one size down so a typical address still fits on one line), and
- * Log out keeps a gap between its icon and its label. */
-.app-sidebar-extras #user-email-display {
-    display: flex;
-    align-items: center;
-    gap: var(--cudly-sp-2);
-    order: -2;
-    font-size: var(--cudly-fs-sm);
-}
-
-.app-sidebar-extras #user-role-display {
-    order: -1;
-}
-
-.app-sidebar-extras #logout-btn {
-    gap: var(--cudly-sp-2);
 }
 
 .app-sidebar-extras .user-info-divider {
@@ -791,6 +782,47 @@ div.error::before {
 
 .card .error-callout {
     box-shadow: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile shell.
+ * ------------------------------------------------------------------------- */
+
+/* Section headers (chart titles + range buttons, Savings History controls)
+ * wrap the controls onto a second line instead of squeezing the title into
+ * one word per line. */
+.section-header {
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+}
+
+.section-header > :is(h2, h3) {
+    flex: 1 1 auto;
+    min-width: min(100%, max-content);
+}
+
+@media (max-width: 768px) {
+    .app-main {
+        padding: var(--cudly-sp-4);
+    }
+
+    .page-header {
+        margin-bottom: var(--cudly-sp-4);
+    }
+
+    .page-header-actions {
+        justify-content: flex-start;
+    }
+
+    /* Sub-tab bars scroll edge to edge of the content column. */
+    .settings-tabs,
+    .inventory-subnav {
+        margin-left: calc(-1 * var(--cudly-sp-4));
+        margin-right: calc(-1 * var(--cudly-sp-4));
+        padding: 0 var(--cudly-sp-4);
+        scroll-padding: 0 var(--cudly-sp-4);
+    }
+
 }
 
 /* Mid-width desktops (tablet landscape, small laptops): the top bar drops
