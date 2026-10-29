@@ -160,6 +160,20 @@ func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.R
 	return args.Error(1)
 }
 
+// PageRecommendations returns the registered page when the test sets an
+// expectation; otherwise it sends the handler to the scan, so tests written
+// against ScanRecommendations keep exercising the paginated list.
+func (m *MockScheduler) PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error) {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "PageRecommendations" {
+			args := m.Called(ctx, scope, afterID, limit)
+			page, _ := args.Get(0).(*config.RecommendationPage)
+			return page, args.Error(1)
+		}
+	}
+	return nil, scheduler.ErrRecommendationsPageNeedsScan
+}
+
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {
 	args := m.Called(ctx, id)
 	var rec *config.RecommendationRecord

@@ -16,6 +16,9 @@ type SchedulerInterface interface {
 	// ScanRecommendations walks the same rows as ListRecommendations in
 	// ID-ordered chunks for the paginated list endpoint (issue #981).
 	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
+	// PageRecommendations reads one list page and the full-set summary in
+	// SQL for the paginated list endpoint (issue #981).
+	PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error)
 	// GetRecommendationByID fetches a single rec by application-level id,
 	// bypassing account-override filtering. hiddenBy is non-nil when the rec
 	// exists but would be dropped by the override filter. Returns nil, nil,

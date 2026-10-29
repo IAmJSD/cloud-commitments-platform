@@ -15,6 +15,7 @@ type MockScheduler struct {
 	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	GetRecommendationByIDFunc  func(ctx context.Context, id string) (*config.RecommendationRecord, []string, error)
 	ScanRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
+	PageRecommendationsFunc    func(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error)
 }
 
 func (m *MockScheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
@@ -37,6 +38,15 @@ func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.R
 		return m.ScanRecommendationsFunc(ctx, filter, chunkSize, fn)
 	}
 	return nil
+}
+
+// PageRecommendations defaults to sending the caller to the scan, so a test
+// that only sets ScanRecommendationsFunc keeps driving the paginated list.
+func (m *MockScheduler) PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error) {
+	if m.PageRecommendationsFunc != nil {
+		return m.PageRecommendationsFunc(ctx, scope, afterID, limit)
+	}
+	return nil, scheduler.ErrRecommendationsPageNeedsScan
 }
 
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {

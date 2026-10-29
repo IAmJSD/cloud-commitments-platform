@@ -682,6 +682,14 @@ type StoreInterface interface {
 	// keyset walk: at most limit rows after the position after, in
 	// byte-wise ID order then primary-key order (issue #981).
 	ListStoredRecommendationsChunk(ctx context.Context, filter RecommendationFilter, after *RecommendationScanKey, limit int) (RecommendationChunk, error)
+	// ListStoredRecommendationTriples lists the distinct (account,
+	// provider, service) keys of the rows scope selects, for resolving
+	// account overrides before PageStoredRecommendations (issue #981).
+	ListStoredRecommendationTriples(ctx context.Context, scope RecommendationListScope) ([]RecommendationTriple, error)
+	// PageStoredRecommendations reads one page of the recommendations list
+	// and the summary of the whole filtered set with every list filter
+	// evaluated in SQL, in one snapshot (issue #981).
+	PageStoredRecommendations(ctx context.Context, q RecommendationPageQuery) (RecommendationPage, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// SetRecommendationsCollectionPartial records (or, with nil, clears) the

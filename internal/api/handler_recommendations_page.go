@@ -17,9 +17,9 @@ import (
 // which passes the 6 MB Lambda response cap once a tenant accumulates a few
 // thousand recommendations. A caller that sends `limit` (and, for later
 // pages, the `cursor` returned as `next_cursor`) gets one bounded page.
-// A paginated request scans the filtered cache in ID-ordered chunks and keeps
-// only the page (issue #981, see handler_recommendations_scan.go). A
-// page is bounded twice: by row count (limit) and by serialized bytes
+// A paginated request reads only the page (plus one row) from the store, with
+// the summary totaled by an SQL aggregate (issue #981, see
+// handler_recommendations_scan.go). A page is bounded twice: by row count (limit) and by serialized bytes
 // (recommendationsPageByteBudget), because the opaque Details blob makes the
 // size of a row data-dependent.
 // A request carrying neither parameter keeps the existing unpaginated shape

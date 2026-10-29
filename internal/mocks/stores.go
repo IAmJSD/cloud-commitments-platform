@@ -1859,6 +1859,37 @@ func (m *MockConfigStore) ListStoredRecommendationsChunk(ctx context.Context, fi
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) ListStoredRecommendationTriples(ctx context.Context, scope config.RecommendationListScope) ([]config.RecommendationTriple, error) {
+	m.record("ListStoredRecommendationTriples", ctx, scope)
+	if !isExpected(&m.Mock, "ListStoredRecommendationTriples") {
+		return nil, nil
+	}
+	args := m.Called(ctx, scope)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RecommendationTriple)
+	if !ok {
+		m.reporter.wrongReturnType("ListStoredRecommendationTriples", "[]config.RecommendationTriple", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
+// PageStoredRecommendations defaults to an empty cache: an empty page with a
+// zero summary.
+func (m *MockConfigStore) PageStoredRecommendations(ctx context.Context, q config.RecommendationPageQuery) (config.RecommendationPage, error) {
+	m.record("PageStoredRecommendations", ctx, q)
+	if !isExpected(&m.Mock, "PageStoredRecommendations") {
+		return config.RecommendationPage{}, nil
+	}
+	args := m.Called(ctx, q)
+	v, ok := args.Get(0).(config.RecommendationPage)
+	if !ok {
+		m.reporter.wrongReturnType("PageStoredRecommendations", "config.RecommendationPage", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
 	m.record("GetRecommendationsFreshness", ctx)
 	if !isExpected(&m.Mock, "GetRecommendationsFreshness") {

@@ -172,6 +172,11 @@ type SchedulerInterface interface {
 	// byte-wise ID order, chunkSize store rows at a time, calling fn with
 	// each chunk's survivors (issue #981).
 	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
+	// PageRecommendations returns one page of the list and the summary of
+	// the whole filtered set with every filter evaluated in SQL (issue
+	// #981). An error wrapping scheduler.ErrRecommendationsPageNeedsScan
+	// means the request must be served by ScanRecommendations instead.
+	PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error)
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by
