@@ -16,6 +16,7 @@ import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefresh
 import { getRecommendationsFreshness } from './api/recommendations';
 import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { buildErrorCallout } from './lib/error-callout';
 import { filterByEnabledProviders } from './lib/enabled-providers';
 import { buildKpiTile } from './lib/kpi-tile';
 import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
@@ -255,10 +256,10 @@ export async function loadDashboard(): Promise<void> {
       teardownSkeleton(summary);
       const err = error as Error;
       while (summary.firstChild) summary.removeChild(summary.firstChild);
-      const p = document.createElement('p');
-      p.classList.add('error');
-      p.textContent = `Failed to load dashboard: ${err.message}`;
-      summary.appendChild(p);
+      summary.appendChild(buildErrorCallout({
+        message: `Failed to load dashboard: ${err.message}`,
+        onRetry: () => void loadDashboard(),
+      }));
     }
     // Clear the upcoming-list skeleton too — shimmer next to a dashboard
     // error reads as a fresh fetch in-flight, which is misleading.

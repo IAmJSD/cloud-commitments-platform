@@ -9,6 +9,8 @@
  * panels with an explicit error card makes the failure visible instead.
  */
 
+import { buildAlertIcon } from './lib/error-callout';
+
 export const INIT_ERROR_ID = 'init-error';
 export const INIT_ERROR_TITLE = 'CUDly — Could not load';
 
@@ -48,7 +50,7 @@ export function renderInitError(
 
   const card = document.createElement('section');
   card.id = INIT_ERROR_ID;
-  card.className = 'empty-state';
+  card.className = 'empty-state init-error-card';
   card.setAttribute('role', 'alert');
 
   const heading = document.createElement('h3');
@@ -69,7 +71,10 @@ export function renderInitError(
   retry.textContent = 'Try again';
   retry.addEventListener('click', () => reload());
 
-  card.append(heading, body, detail, retry);
+  const icon = buildAlertIcon();
+  icon.classList.add('init-error-icon');
+
+  card.append(icon, heading, body, detail, retry);
 
   document.getElementById(INIT_ERROR_ID)?.remove();
   main.prepend(card);
