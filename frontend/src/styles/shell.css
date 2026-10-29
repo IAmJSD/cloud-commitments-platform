@@ -342,6 +342,50 @@
     flex-shrink: 0;
 }
 
+/* The display rules above must not reveal the profile button before a user
+ * is known (auth.ts keeps it [hidden] until then). */
+:is(.app-topbar, .app-sidebar-extras) #user-email-display[hidden] {
+    display: none;
+}
+
 .app-sidebar-extras .user-info-divider {
     display: none;
+}
+
+/* Mid-width desktops (tablet landscape, small laptops): the top bar drops
+ * the email text (the avatar stays, and the button keeps the address as its
+ * accessible name and tooltip) and the brand stops reserving the sidebar
+ * column, so the bar never pushes the page wider than the window. */
+@media (min-width: 769px) and (max-width: 1279px) {
+    .app-topbar-brand {
+        width: auto;
+        margin-right: var(--cudly-sp-3);
+    }
+
+    .app-topbar #user-email-display {
+        padding: 0 var(--cudly-sp-1);
+        font-size: 0;
+        gap: 0;
+    }
+
+    .app-topbar #user-email-display[data-initials]::before {
+        width: 1.75rem;
+        height: 1.75rem;
+        font-size: 0.6875rem;
+    }
+
+    .user-info-divider {
+        margin: 0 var(--cudly-sp-1);
+    }
+}
+
+/* The skip link appears just under the top bar when focused, instead of on
+ * top of the hamburger and the brand. */
+.skip-to-main {
+    top: calc(var(--cudly-topbar-h) + var(--cudly-sp-2));
+    transform: translateY(calc(-100% - var(--cudly-topbar-h) - var(--cudly-sp-4)));
+}
+
+.skip-to-main:focus {
+    transform: translateY(0);
 }
