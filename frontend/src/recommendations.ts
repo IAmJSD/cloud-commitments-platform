@@ -3272,7 +3272,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'service':
       return `<td><span class="service-badge" title="${escapeHtml(rec.service)}">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
-      return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
     case 'capacity': {
       const cap = formatCapacity(rec.vcpu, rec.memory_gb);
       return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;

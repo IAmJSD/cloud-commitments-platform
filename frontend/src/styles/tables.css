@@ -254,9 +254,10 @@ tr.history-row-highlight:hover {
  * line; long names and ids truncate with an ellipsis and keep the full
  * value in a title tooltip; text that has to wrap (reasons, failure
  * details) opts in with .cell-wrap. */
+/* 12px between columns (6px each side): Opportunities has sixteen. */
 .table-compact th,
 .table-compact td {
-    padding-inline: var(--cudly-sp-2);
+    padding-inline: calc(var(--cudly-sp-3) / 2);
 }
 
 .table-compact :is(th, td):first-child {
@@ -284,7 +285,7 @@ tr.history-row-highlight:hover {
 
 .cell-truncate {
     display: inline-block;
-    max-width: 12rem;
+    max-width: 11rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -319,17 +320,24 @@ tr.history-row-highlight:hover {
 }
 
 .table-compact .service-badge {
-    max-width: 11rem;
+    max-width: 9rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     vertical-align: middle;
 }
 
-/* Header: one line, with the sort chevron and the filter funnel inline to
- * the right of the label. */
+/* Header: the sort chevron and the filter funnel sit inline to the right
+ * of the label. A sort button's label (and a plain header with no
+ * buttons) may wrap between words when the table is squeezed
+ * (Opportunities has sixteen columns); the icons stay beside the label. */
 .table-compact th {
     white-space: nowrap;
+}
+
+.table-compact th .sort-btn > span:first-child,
+.table-compact th:not(:has(button)) {
+    white-space: normal;
 }
 
 th.sortable .sort-btn {
@@ -344,15 +352,12 @@ th.sortable .sort-indicator {
     margin-left: 0;
 }
 
-/* An unsorted column's chevrons stay faint until the header is hovered or
- * focused; the active sort keeps its full colour. */
-th.sortable .sort-indicator:not(.active) {
-    opacity: 0.55;
-}
-
-th.sortable:hover .sort-indicator,
-th.sortable .sort-btn:focus-visible .sort-indicator {
-    opacity: 1;
+/* Only the active sort column shows its chevron. Idle up/down chevrons on
+ * every header cost ~20px per column, which pushed the sixteen-column
+ * Opportunities table past 1920px; the header label button still reads as
+ * sortable (pointer, hover background) and exposes aria-sort when active. */
+.table-compact th.sortable .sort-indicator:not(.active) {
+    display: none;
 }
 
 /* One compact funnel style for every table: the purchase history and

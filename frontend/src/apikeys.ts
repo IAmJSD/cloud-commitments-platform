@@ -122,8 +122,8 @@ export function renderApiKeysList(): void {
           <th>Status</th>
           <th>Created</th>
           <th>Last Used</th>
-          <th>Requests (window)</th>
-          <th>Requests (total)</th>
+          <th class="num">Requests (window)</th>
+          <th class="num">Requests (total)</th>
           <th>Expires</th>
           <th>Actions</th>
         </tr>
@@ -143,8 +143,8 @@ export function renderApiKeysList(): void {
               <td><span class="badge ${statusClass}">${statusText}</span></td>
               <td>${formatDateTime(key.created_at)}</td>
               <td>${key.last_used_at ? `<span title="${escapeHtml(isoOrEmpty(key.last_used_at))}">${escapeHtml(formatRelativeTime(key.last_used_at) || '--')}</span>` : '<span class="text-muted">Never</span>'}</td>
-              <td class="apikeys-count-cell">${countWindow}</td>
-              <td class="apikeys-count-cell">${countTotal}</td>
+              <td class="num apikeys-count-cell">${countWindow}</td>
+              <td class="num apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
                 <div class="row-actions">
