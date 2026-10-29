@@ -438,6 +438,12 @@ func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerT
 // re-records it straight after (issue #87). The two writes mirror the
 // existing error-column pattern and are not atomic: if the second write
 // fails, the run is logged and reads as complete until the next collection.
+//
+// After a successful write it prunes the rows of (provider, account) pairs
+// that have not collected for CUDLY_STALE_RECOMMENDATION_RETENTION_DAYS
+// (default 30), best-effort, so a removed provider or a disabled account
+// stops showing instead of staying forever (issue #120). A failed write skips
+// the prune.
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string, partial *config.RecommendationsCollectionPartial) {
 	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
@@ -458,6 +464,8 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 			logging.Errorf("Failed to record partial collection: %v", err)
 		}
 	}
+
+	s.pruneStaleRecommendationsBestEffort(ctx)
 }
 
 // joinProviderErrors formats a "provider: err; provider: err" string for

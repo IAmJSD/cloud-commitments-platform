@@ -29,6 +29,16 @@ is scoped to providers that actually succeeded in the current run, so
 rows from a provider whose collect failed stay visible instead of being
 blanked out.
 
+Those kept rows are not kept forever. After every persisted collection,
+`PruneStaleRecommendations` deletes the rows of each (provider, account)
+pair that has no row collected in the last
+`CUDLY_STALE_RECOMMENDATION_RETENTION_DAYS` days: a disabled provider, a
+disabled account or credentials that keep failing (issue #120). A pair
+with even one row inside the window keeps all of its rows. The prune takes
+a `SHARE ROW EXCLUSIVE` lock on `recommendations`, so it waits for any
+in-flight collection to commit and never judges a pair on a snapshot older
+than that collection.
+
 Per-account cloud-API calls within each provider are fanned out via
 `errgroup.SetLimit`, bounded by `CUDLY_MAX_ACCOUNT_PARALLELISM`
 (default 20). Partial failures are logged and the run continues.
@@ -70,6 +80,11 @@ Lambda deploys rely on scheduled + manual refresh only.
 - `CUDLY_RECOMMENDATION_CACHE_TTL` (default `6h`) — parsed by
   `time.ParseDuration`. Invalid values fall back to the default with a
   warning. Controls when in-request stale-while-revalidate fires.
+- `CUDLY_STALE_RECOMMENDATION_RETENTION_DAYS` (default `30`): how many
+  days a (provider, account) pair may go without collecting before its
+  cached rows are pruned. Collection is daily by default, so this is about
+  30 missed collections. Read on every collection; a value that is not a
+  positive whole number falls back to the default with a warning.
 - `CUDLY_MAX_ACCOUNT_PARALLELISM` (default `20`) — caps per-account
   concurrency inside each provider phase. Shared with the purchase
   manager so both honour the same operator override.
