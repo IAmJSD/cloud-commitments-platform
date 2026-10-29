@@ -41,12 +41,48 @@ let savingsByServiceChart: Chart | null = null;
 // Maximum number of services to show in the bar chart before truncating.
 const SAVINGS_BY_SERVICE_MAX = 10;
 
-// #744: a 2px card-coloured gap on top of every stacked segment, so adjacent
-// layers are separated by an edge as well as by their layer colour. The
-// colour is the --cudly-surface token (#699), read at render time.
+// #744: a 2px card-coloured gap at the end of every stacked segment, so
+// adjacent layers are separated by an edge as well as by their layer colour.
+// The bars are horizontal, so a segment ends on its right edge. The colour is
+// the --cudly-surface token (#699), read at render time.
 function segmentGap() {
-  return { borderColor: surfaceColor(), borderWidth: { top: 2, right: 0, bottom: 0, left: 0 } } as const;
+  return { borderColor: surfaceColor(), borderWidth: { top: 0, right: 2, bottom: 0, left: 0 } } as const;
 }
+
+// Display names for the per-service chart's axis and tooltips. The chart
+// groups by service slug across providers, so shared slugs (compute, cache,
+// relational-db) get a provider-neutral name. Unknown slugs pass through.
+const SERVICE_CHART_LABELS: Readonly<Record<string, string>> = {
+  ec2: 'EC2',
+  rds: 'RDS',
+  elasticache: 'ElastiCache',
+  opensearch: 'OpenSearch',
+  memorydb: 'MemoryDB',
+  redshift: 'Redshift',
+  'savings-plans-compute': 'Compute Savings Plans',
+  'savings-plans-ec2instance': 'EC2 Instance Savings Plans',
+  'savings-plans-sagemaker': 'SageMaker Savings Plans',
+  'savings-plans-database': 'Database Savings Plans',
+  compute: 'Compute',
+  'relational-db': 'Relational DB',
+  cache: 'Cache',
+  search: 'Search',
+  nosql: 'NoSQL',
+};
+
+export function serviceChartLabel(slug: string, compact = false): string {
+  const label = SERVICE_CHART_LABELS[slug] ?? slug;
+  // Narrow charts abbreviate "Savings Plans" the way plan cards do ("Compute SP").
+  return compact ? label.replace(/ Savings Plans$/, ' SP') : label;
+}
+
+// Below this chart width the category labels use the compact names.
+const SERVICE_CHART_COMPACT_PX = 560;
+
+// Row height of one horizontal bar plus the legend and value axis, so the
+// chart grows with the number of services instead of being a fixed 560px.
+const SERVICE_CHART_ROW_PX = 36;
+const SERVICE_CHART_CHROME_PX = 84;
 
 // Ids of the "View as table" text alternatives for the Home charts (#744).
 const SAVINGS_BY_SERVICE_TABLE_ID = 'savings-by-service-table';
@@ -909,8 +945,8 @@ export function computeServiceStatsFromRecs(
  * (no further upside surfaced). Services present in recs but absent from
  * byService default to current = 0 (no committed savings yet).
  *
- * The top SAVINGS_BY_SERVICE_MAX services are shown; the heading notes
- * "+N more" when truncated.
+ * The top SAVINGS_BY_SERVICE_MAX services are shown; the note under the
+ * heading says so when truncated (every service is in the table).
  *
  * Empty state: shown when no bar (across all three layers) has any positive
  * value.
@@ -927,6 +963,7 @@ export function renderSavingsByService(
 
   const stats = computeServiceStatsFromRecs(recs);
   const heading = section?.querySelector('h3');
+  const note = document.getElementById('savings-by-service-note');
 
   // Build the union of services from both recs and byService. Services in
   // byService-only (commitment exists, no new rec) still show a Current band.
@@ -971,6 +1008,7 @@ export function renderSavingsByService(
 
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
+    note?.classList.add('hidden');
     savingsByServiceChart?.destroy();
     savingsByServiceChart = null;
     canvas.classList.add('hidden');
@@ -989,14 +1027,20 @@ export function renderSavingsByService(
   canvas.classList.remove('hidden');
   emptyEl?.classList.add('hidden');
 
-  // Cap at maximum and update heading with "+N more" if truncated.
+  // Cap at maximum; the note under the heading says how many are drawn.
   const truncated = positive.length > SAVINGS_BY_SERVICE_MAX;
   const visible = positive.slice(0, SAVINGS_BY_SERVICE_MAX);
-  if (heading) {
-    heading.textContent = truncated
-      ? `Potential savings range per service (+${positive.length - SAVINGS_BY_SERVICE_MAX} more)`
-      : 'Potential savings range per service';
+  if (heading) heading.textContent = 'Potential savings range per service';
+  if (note) {
+    note.textContent = truncated
+      ? `Monthly savings. Top ${SAVINGS_BY_SERVICE_MAX} of ${positive.length} services shown; the table lists all.`
+      : 'Monthly savings.';
+    note.classList.remove('hidden');
   }
+  // Height follows the bar count (both bounds, so Chart.js sizes to it).
+  const chartHeight = `${visible.length * SERVICE_CHART_ROW_PX + SERVICE_CHART_CHROME_PX}px`;
+  canvas.style.minHeight = chartHeight;
+  canvas.style.maxHeight = chartHeight;
 
   const labels = visible.map(e => e.svc);
 
@@ -1044,7 +1088,7 @@ export function renderSavingsByService(
           label: 'Current / Committed',
           data: currentData,
           backgroundColor: layerColors.current,
-          borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
+          borderRadius: { topLeft: 4, topRight: 0, bottomLeft: 4, bottomRight: 0 },
           ...gap,
           stack: 'savings',
         },
@@ -1060,7 +1104,7 @@ export function renderSavingsByService(
           label: 'Upside',
           data: upsideData,
           backgroundColor: layerColors.upside,
-          borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+          borderRadius: { topLeft: 0, topRight: 4, bottomLeft: 0, bottomRight: 4 },
           ...gap,
           stack: 'savings',
         },
@@ -1069,15 +1113,20 @@ export function renderSavingsByService(
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      // Horizontal bars: service names read left to right at full length
+      // instead of rotated slugs under narrow columns.
+      indexAxis: 'y',
       plugins: {
         legend: {
           display: true,
           position: 'top',
+          align: 'start',
           // Default swatches: each one is its dataset's single bar colour.
           labels: { boxWidth: 12 },
         },
         tooltip: {
           callbacks: {
+            title: (items) => serviceChartLabel(items[0]?.label ?? ''),
             label: (ctx) => {
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
@@ -1098,7 +1147,7 @@ export function renderSavingsByService(
               const total = current + lowestOption + upside;
               const pct = totalSavings > 0 ? ((total / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
-                `Service: ${svc}`,
+                `Service: ${serviceChartLabel(svc)}`,
                 `Total: ${formatCurrency(total)} (${pct}% of all services)`,
                 `Current / Committed: ${formatCurrency(current)}`,
                 `Lowest option: ${formatCurrency(lowestOption)}`,
@@ -1112,17 +1161,26 @@ export function renderSavingsByService(
         },
       },
       scales: {
+        // Value axis. Its unit ("Monthly savings") is the note under the
+        // heading, so no axis title; light gridlines only.
         x: {
           stacked: true,
-          // No axis title: the tick labels are the service names (#189).
-          // Keep every service label on narrow screens (rotate instead of skipping).
-          ticks: { autoSkip: false, maxRotation: 60 },
+          beginAtZero: true,
+          grid: { color: chartColor('--cudly-chart-grid-faint') },
+          border: { display: false },
+          // Skip ticks rather than rotate them on narrow screens.
+          ticks: { callback: (v) => formatCurrency(v as number), maxTicksLimit: 8, maxRotation: 0, autoSkipPadding: 12 },
         },
+        // Category axis: one service per row, every label kept (#189).
         y: {
           stacked: true,
-          beginAtZero: true,
-          title: { display: true, text: 'Monthly savings ($)' },
-          ticks: { callback: (v) => formatCurrency(v as number) },
+          grid: { display: false },
+          ticks: {
+            autoSkip: false,
+            callback(value) {
+              return serviceChartLabel(this.getLabelForValue(value as number), this.chart.width < SERVICE_CHART_COMPACT_PX);
+            },
+          },
         },
       },
     },
@@ -1298,6 +1356,8 @@ export async function loadSavingsTrendChart(): Promise<void> {
             type: 'linear',
             min: axisMinMs,
             max: nowMs,
+            // Date gridlines add nothing to a cumulative line; keep the value ones, faint.
+            grid: { display: false },
             ticks: {
               maxTicksLimit: 6,
               callback: (value) => formatTrendAxisTick(value as number, interval),
@@ -1305,7 +1365,9 @@ export async function loadSavingsTrendChart(): Promise<void> {
           },
           y: {
             beginAtZero: true,
-            ticks: { callback: (v) => formatCurrency(v as number) },
+            grid: { color: chartColor('--cudly-chart-grid-faint') },
+            border: { display: false },
+            ticks: { callback: (v) => formatCurrency(v as number), maxTicksLimit: 6 },
           },
         },
       },
