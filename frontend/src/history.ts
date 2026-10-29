@@ -1036,7 +1036,7 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
   const buttons: string[] = [];
   const user = getCurrentUser();
   if (canApprovePendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}">Approve</button>`);
+    buttons.push(`<button type="button" class="btn-small icon-btn history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}" aria-label="Approve" title="Approve purchase">${iconSvg('check')}</button>`);
   } else if (user && rbacAllowsApprove(p, user) && !canApproveUnder4Eyes(p, user.id)) {
     // RBAC would allow Approve, but 4-eyes dual-control (issue #1005) blocks
     // this session from approving its own row. Surface the reason inline
@@ -1048,9 +1048,10 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
     buttons.push(`<span class="badge badge-muted">${reason}</span>`);
   }
   if (canCancelPendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}">Cancel</button>`);
+    buttons.push(`<button type="button" class="btn-small btn-danger icon-btn history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}" aria-label="Cancel" title="Cancel purchase">${iconSvg('x')}</button>`);
   }
-  return buttons.join(' ');
+  // Compact icon buttons side by side (aria-label + title carry the verb).
+  return buttons.length ? `<span class="row-actions">${buttons.join('')}</span>` : '';
 }
 
 // renderActionCell returns the HTML for the Plan / action column on a
@@ -1428,7 +1429,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
-    <table class="table-compact">
+    <table class="table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Status</th>
@@ -2066,7 +2067,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
-    <table class="approval-queue-table table-compact">
+    <table class="approval-queue-table table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Date</th>

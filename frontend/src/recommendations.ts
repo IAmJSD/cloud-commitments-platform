@@ -3628,7 +3628,7 @@ function buildListMarkup(
   }
 
   return `
-    <table class="table-compact">
+    <table class="table-compact table-sticky-start">
       <thead>
         <tr>
           ${checkboxColHeader}
