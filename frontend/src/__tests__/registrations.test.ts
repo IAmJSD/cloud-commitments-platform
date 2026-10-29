@@ -71,3 +71,37 @@ describe('loadRegistrations default filter', () => {
     expect(api.listRegistrations).toHaveBeenCalledWith(undefined);
   });
 });
+
+describe('registration row actions', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    jest.clearAllMocks();
+  });
+
+  test('Approve stays a text button; Reject and Delete are named icon buttons in one row', async () => {
+    const container = document.createElement('div');
+    container.id = 'registrations-list';
+    document.body.appendChild(container);
+    (api.listRegistrations as jest.Mock).mockResolvedValue([{
+      id: 'r1', provider: 'aws', account_name: 'Checkout', external_id: '650412398877',
+      contact_email: 'c@example.com', status: 'pending', created_at: '2026-10-28T12:00:00Z',
+    }]);
+
+    await loadRegistrations();
+
+    const actions = container.querySelector('tbody tr td:last-child .row-actions')!;
+    const buttons = Array.from(actions.querySelectorAll('button'));
+    expect(buttons.map(b => b.getAttribute('aria-label'))).toEqual([
+      'Approve registration Checkout',
+      'Reject registration Checkout',
+      'Delete registration Checkout',
+    ]);
+    expect(buttons[0]!.textContent).toBe('Approve');
+    for (const [btn, icon, title] of [[buttons[1]!, 'x-circle', 'Reject registration'], [buttons[2]!, 'trash-2', 'Delete registration']] as const) {
+      expect(btn.classList.contains('icon-btn')).toBe(true);
+      expect(btn.querySelector(`svg.icon-${icon}`)).not.toBeNull();
+      expect(btn.title).toBe(title);
+    }
+    expect(buttons[2]!.classList.contains('btn-danger')).toBe(true);
+  });
+});

@@ -67,28 +67,72 @@
     display: none;
 }
 
+/* The General description carries .page-hero-description (margin: 0), so
+ * give the form below it the gap instead. */
+#global-settings-form {
+    margin-top: var(--cudly-sp-5);
+}
+
+/* Settings section card. The legend is floated so it renders as an
+ * in-card heading instead of sitting on the border line, while keeping
+ * the <fieldset>/<legend> grouping (the legend still names the group). */
 .settings-category {
     /* A fieldset defaults to min-width: min-content, which widens the page. */
     min-width: 0;
     border: 1px solid var(--cudly-border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
+    padding: var(--cudly-sp-5);
+    margin-bottom: var(--cudly-sp-5);
 }
 
-.settings-category legend {
+.settings-category > legend {
+    float: left;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    padding: 0;
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-lg);
     font-weight: var(--cudly-fw-semibold);
-    font-size: 1.1rem;
-    color: var(--cudly-primary);
-    padding: 0 0.5rem;
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
 }
 
+/* Everything after the floated legend starts below it. Clearing only the
+ * first sibling is not enough: when that sibling is hidden (the provider
+ * disabled banner), a flex row next to the full-width float is pushed out
+ * of the card. */
+.settings-category > :not(legend) {
+    clear: both;
+}
+
+/* Clearance swallows the summary's top margin when the collapsed service
+ * grid comes straight after the heading (Azure / GCP blocks). */
+.settings-category > legend + .service-defaults-details {
+    padding-top: var(--cudly-sp-1);
+}
+
+/* Section description: muted body text, readable line length. */
+.settings-category > .settings-description,
+.settings-category > .settings-help {
+    max-width: 48rem;
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
+}
+
+/* Rows: label + hint stacked on the left, control on the right; the control
+ * drops below the label when the row is too narrow for both. */
 .setting-row {
     display: flex;
     flex-wrap: wrap; /* allow inline range-error to drop below the label+input row */
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 0;
+    gap: var(--cudly-sp-2) var(--cudly-sp-6);
+    padding: var(--cudly-sp-4) 0;
     border-bottom: 1px solid var(--cudly-border);
 }
 
@@ -104,23 +148,40 @@
 }
 
 .setting-info {
-    flex: 1;
+    flex: 1 1 16rem;
+    min-width: 0;
+    max-width: 44rem; /* keeps hint lines readable */
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--cudly-sp-1) var(--cudly-sp-2);
 }
 
 .setting-info label,
-.setting-info .label-like {
+.setting-info .label-like,
+.setting-info > span:first-child {
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
 
+/* Hint text under the label (qualifiers, ranges, consequences). */
+.setting-info .setting-hint,
+.setting-info .help-text {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
+}
+
 .setting-input {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 1rem;
+    gap: var(--cudly-sp-2) var(--cudly-sp-4);
     /* A select sizes to its longest option; keep it inside the row. */
     max-width: 100%;
     min-width: 0;
@@ -130,19 +191,42 @@
     max-width: 100%;
 }
 
+/* Standard control size: 36px tall, widths by kind (email/text wide enough
+ * for a full address, numbers short). */
 .setting-input input[type="text"],
 .setting-input input[type="email"],
 .setting-input input[type="number"],
 .setting-input select {
-    padding: 0.5rem;
+    height: 2.25rem;
+    padding: 0 var(--cudly-sp-3);
     border: 1px solid var(--cudly-border-strong);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    min-width: 200px;
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    font-size: var(--cudly-fs-sm);
+    max-width: 100%;
+}
+
+.setting-input input[type="text"],
+.setting-input input[type="email"] {
+    width: 20rem;
+}
+
+.setting-input select {
+    min-width: 12rem;
 }
 
 .setting-input input[type="number"] {
-    min-width: 100px;
+    width: 7rem;
+}
+
+/* Checkbox groups (Enabled providers) read as a row of options. */
+.setting-input > label:has(> input[type="checkbox"]) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-regular);
 }
 
 .credential-status {
@@ -160,26 +244,53 @@
 
 .settings-buttons {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 1rem;
-    margin-top: 2rem;
-    padding-top: 1rem;
+    gap: var(--cudly-sp-3);
+    margin-top: var(--cudly-sp-5);
+    padding-top: var(--cudly-sp-4);
     border-top: 1px solid var(--cudly-border);
+}
+
+.settings-buttons .btn {
+    white-space: nowrap;
 }
 
 /* Settings sub-setting (indented) */
 .setting-row.sub-setting {
-    margin-left: 2rem;
-    padding-left: 1rem;
+    margin-left: var(--cudly-sp-5);
+    padding-left: var(--cudly-sp-4);
     border-left: 2px solid var(--cudly-border);
 }
 
 /* Settings help text */
 .settings-help {
-    font-size: 0.85rem;
+    font-size: var(--cudly-fs-sm);
     color: var(--cudly-text-muted);
-    margin-bottom: 1rem;
-    font-style: italic;
+    margin-bottom: var(--cudly-sp-3);
+}
+
+/* Narrow screens: the section card sits inside the page card, so trim its
+ * padding and the sub-setting indent to leave room for the controls. */
+@media (max-width: 640px) {
+    .settings-category {
+        padding: var(--cudly-sp-4);
+    }
+
+    .setting-row.sub-setting {
+        margin-left: var(--cudly-sp-2);
+        padding-left: var(--cudly-sp-3);
+    }
+}
+
+/* The touch-target rule in responsive.css turns any label wrapping a
+ * checkbox into a 44px flex box, which squashed the switch track into a
+ * blob. Keep the switch at its drawn size (50x26, above the 24px minimum). */
+@media (pointer: coarse) {
+    .setting-input label.toggle-label {
+        display: inline-block;
+        min-height: 0;
+    }
 }
 
 /* Subsection title */
@@ -204,7 +315,7 @@
 .provider-settings legend {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--cudly-sp-2);
 }
 
 /* Service defaults grid */
@@ -306,66 +417,119 @@ select.dirty {
 
 .target-cloud-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1rem 0;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+    padding: var(--cudly-sp-2) 0 var(--cudly-sp-4);
+    margin-bottom: var(--cudly-sp-4);
     border-bottom: 1px solid var(--cudly-border);
 }
 
 .target-cloud-row label {
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
 
+/* Target cloud: one segmented control that stays on one line (it used to
+ * stack into a column of separate pills on phones). */
 .target-cloud-pills {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-left: 0.5rem;
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface-muted);
 }
 
 .target-cloud-pills .target-cloud-pill {
     min-width: 4.5rem;
-    border: 1px solid #c8d6ea;
-    background: #f4f8fd;
-    color: #355273;
+    margin: 0;
+    padding: var(--cudly-sp-1) var(--cudly-sp-4);
+    border: 1px solid transparent;
+    border-radius: var(--cudly-r-sm);
+    background: transparent;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
+}
+
+.target-cloud-pills .target-cloud-pill:hover {
+    background: var(--cudly-surface);
+    border-color: var(--cudly-border);
+    color: var(--cudly-text);
 }
 
 .target-cloud-pills .target-cloud-pill[aria-pressed="true"],
 .target-cloud-pills .target-cloud-pill.selected {
-    background: var(--cudly-primary-hover);
-    border-color: var(--cudly-primary-hover);
-    color: white;
+    background: var(--cudly-primary);
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary-fg);
 }
 
+/* IaC download cards: icon tile on the left, readable name and a muted
+ * one-line description. */
 .federation-format-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: var(--cudly-sp-3);
 }
 
 .federation-format-buttons .btn-multiline {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+        "icon label"
+        "icon sublabel";
+    grid-template-rows: auto auto;
+    align-content: center;
+    align-items: start;
+    column-gap: var(--cudly-sp-3);
+    row-gap: 2px;
+    margin: 0;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
     text-align: left;
-    padding: 0.5rem 0.75rem;
-    flex: 1 1 11rem;
-    line-height: 1.2;
+    line-height: var(--cudly-lh-tight);
+}
+
+.federation-format-buttons .btn-multiline:hover {
+    border-color: var(--cudly-primary);
+    background: var(--cudly-surface);
+}
+
+.federation-format-buttons .btn-multiline .download-icon {
+    grid-area: icon;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    margin: 0;
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+    font-size: var(--cudly-fs-md);
+    align-self: center;
 }
 
 .federation-format-buttons .btn-multiline .label {
+    grid-area: label;
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
 }
 
 .federation-format-buttons .btn-multiline .sublabel {
-    font-size: 0.72rem;
-    opacity: 0.72;
-    font-weight: normal;
-    margin-top: 0.15rem;
+    grid-area: sublabel;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-regular);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
 }
 
 .federation-account-row {
@@ -383,9 +547,17 @@ select.dirty {
  * registered account). Uses the accent border to pull the eye without
  * reading as an error. */
 .self-account-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-2) var(--cudly-sp-4);
     border-left: 3px solid var(--cudly-primary);
-    padding: 8px 12px;
-    margin-bottom: 8px;
+    border-radius: 0 var(--cudly-r-sm) var(--cudly-r-sm) 0;
+    background: var(--cudly-info-bg);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    margin-bottom: var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
 }
 
 .federation-account-info {
@@ -720,4 +892,159 @@ tr.override-disabled {
 
 .override-transfer-account {
     white-space: nowrap;
+}
+
+/* Admin > Accounts row actions: compact icon buttons in one row, as on the
+ * Users rows. The cell stays a table cell (components.css made it a flex
+ * box, which pulled its bottom border out of line with the row). */
+.accounts-table td.account-actions {
+    display: table-cell;
+    width: 1%;
+    white-space: nowrap;
+}
+
+/* The sr-only verb inside each icon button is absolutely positioned; give
+ * it the button as containing block, or inside the sideways-scrolling
+ * table on phones it lands at the table's far edge and widens the page. */
+.row-actions button.icon-btn {
+    position: relative;
+}
+
+/* Delete keeps .btn-destructive as its hook but uses the subtle danger look
+ * (tinted, red icon) instead of a solid red block next to neutral actions;
+ * it fills red only on hover. A little extra space sets it apart. */
+.row-actions button.icon-btn.btn-destructive {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
+.row-actions button.icon-btn.btn-destructive:hover {
+    background: var(--cudly-error);
+    border-color: var(--cudly-error);
+    color: var(--cudly-primary-fg);
+}
+
+.row-actions .account-delete-btn {
+    margin-left: var(--cudly-sp-2);
+}
+
+/* Test credentials result, shown for a few seconds after the check. */
+.row-actions button[data-test-result="ok"] {
+    border-color: var(--cudly-success);
+    color: var(--cudly-success);
+}
+
+.row-actions button[data-test-result="failed"] {
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
+/* Registrations: Approve is the one text button in the row; match the icon
+ * buttons' height so the row lines up. */
+.row-actions .btn-small.btn-primary {
+    height: 1.75rem;
+    margin: 0;
+    padding: 0 var(--cudly-sp-3);
+}
+
+/* Quiet destructive action for page-level buttons such as "Reset to
+ * Defaults": red text on the neutral outline, tinted on hover. Solid red
+ * stays reserved for the final confirm in the confirm dialog. */
+.btn.btn-quiet-danger {
+    background: var(--cudly-surface);
+    border-color: var(--cudly-border-strong);
+    color: var(--cudly-error-fg);
+}
+
+.btn.btn-quiet-danger:hover {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
+/* Permission overview: ticks granted through admin:* are grey, direct
+ * grants green; * marks an admin tick with carved-out exceptions. */
+.permission-matrix .has-perm.via-admin {
+    color: var(--cudly-text-muted);
+    font-weight: var(--cudly-fw-regular);
+}
+
+.permission-matrix .perm-partial-mark {
+    margin-left: 1px;
+    font-size: var(--cudly-fs-xs);
+}
+
+.permission-matrix-note {
+    margin: var(--cudly-sp-3) 0 0;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+/* Accounts page polish: registration filter label and status pills, and
+ * the override import row (file picker styled as a button, labels on the
+ * controls' line). */
+#accounts-registrations .controls-bar > label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.registration-status {
+    white-space: nowrap;
+}
+
+.override-transfer-controls label {
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.override-transfer-controls > input[type="file"] {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+}
+
+.override-transfer-controls > input[type="file"]::file-selector-button {
+    margin-right: var(--cudly-sp-3);
+    padding: var(--cudly-sp-1) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font: inherit;
+    font-weight: var(--cudly-fw-medium);
+    cursor: pointer;
+    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
+}
+
+.override-transfer-controls > input[type="file"]:hover::file-selector-button {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-text-subtle);
+}
+
+.override-transfer-controls > input[type="file"]:hover {
+    border-color: transparent;
+}
+
+/* Empty import status / report slots must not pad the card's bottom. The
+ * status is a live region, so it stays rendered (only its margin goes). */
+#override-import-status:empty {
+    margin: 0;
+}
+
+#override-import-report:empty {
+    display: none;
+}
+
+/* "No accounts configured." reads as plain muted text, not italic. */
+.accounts-list > .accounts-empty {
+    font-style: normal;
+    font-size: var(--cudly-fs-sm);
 }

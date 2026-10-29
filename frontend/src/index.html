@@ -451,9 +451,9 @@
                                          three checkboxes below. Use a span with an id that the grouping
                                          div references via aria-labelledby instead. -->
                                     <span id="enabled-providers-label" class="label-like">Enabled Providers</span>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
+                                    <p class="setting-hint" id="enabled-providers-hint">Select which cloud providers to monitor for commitment recommendations.</p>
                                 </div>
-                                <div class="setting-input" role="group" aria-labelledby="enabled-providers-label">
+                                <div class="setting-input" role="group" aria-labelledby="enabled-providers-label" aria-describedby="enabled-providers-hint">
                                     <label><input type="checkbox" id="provider-aws" value="aws" checked> AWS</label>
                                     <label><input type="checkbox" id="provider-azure" value="azure"> Azure</label>
                                     <label><input type="checkbox" id="provider-gcp" value="gcp"> GCP</label>
@@ -462,10 +462,10 @@
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-notification-email">Notification Email</label>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
+                                    <p class="setting-hint" id="setting-notification-email-hint">Email address for purchase notifications and approval requests.</p>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email" autocapitalize="none" autocorrect="off">
+                                    <input type="email" id="setting-notification-email" aria-describedby="setting-notification-email-hint" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email" autocapitalize="none" autocorrect="off">
                                 </div>
                             </div>
                             <div class="setting-row">
@@ -475,11 +475,11 @@
                                          input and provides the click target. aria-labelledby on the input keeps
                                          the descriptive text as the toggle's accessible name. Issue #464. -->
                                     <span id="setting-auto-collect-label">Auto-collect Recommendations</span>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
+                                    <p class="setting-hint" id="setting-auto-collect-hint">Automatically fetch recommendations from cloud providers on a schedule.</p>
                                 </div>
                                 <div class="setting-input">
                                     <label class="toggle-label">
-                                        <input type="checkbox" id="setting-auto-collect" aria-labelledby="setting-auto-collect-label" checked>
+                                        <input type="checkbox" id="setting-auto-collect" aria-describedby="setting-auto-collect-hint" aria-labelledby="setting-auto-collect-label" checked>
                                         <span class="slider"></span>
                                     </label>
                                 </div>
@@ -487,10 +487,10 @@
                             <div class="setting-row sub-setting" id="collection-schedule-row">
                                 <div class="setting-info">
                                     <label for="setting-collection-schedule">Collection Schedule</label>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">How often to automatically fetch recommendations.</span></span>
+                                    <p class="setting-hint" id="setting-collection-schedule-hint">How often to automatically fetch recommendations.</p>
                                 </div>
                                 <div class="setting-input">
-                                    <select id="setting-collection-schedule">
+                                    <select id="setting-collection-schedule" aria-describedby="setting-collection-schedule-hint">
                                         <option value="hourly">Every Hour</option>
                                         <option value="daily" selected>Daily</option>
                                         <option value="weekly">Weekly</option>
@@ -500,25 +500,25 @@
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-notification-days">Notification Days Before Purchase</label>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
+                                    <p class="setting-hint" id="setting-notification-days-hint">How many days before a scheduled purchase to send email notification.</p>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+                                    <input type="number" id="setting-notification-days" aria-describedby="setting-notification-days-hint" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                                 </div>
                             </div>
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-recs-stale-hours">Recommendations Cache Stale Threshold (hours)</label>
-                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
+                                    <p class="setting-hint" id="setting-recs-stale-hours-hint">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</p>
                                 </div>
                                 <div class="setting-input">
-                                    <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+                                    <input type="number" id="setting-recs-stale-hours" aria-describedby="setting-recs-stale-hours-hint" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
                                 </div>
                             </div>
                         </fieldset>
 
                         <div class="settings-buttons">
-                            <button type="button" id="reset-settings-btn" class="btn btn-destructive">Reset to Defaults</button>
+                            <button type="button" id="reset-settings-btn" class="btn btn-quiet-danger">Reset to Defaults</button>
                             <button type="submit" id="save-settings-btn" class="btn btn-primary">Save Settings</button>
                         </div>
                     </form>
@@ -594,10 +594,10 @@
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="setting-recs-lookback-days"><span class="provider-badge aws">AWS</span> lookback period</label>
-                                <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</span></span>
+                                <p class="setting-hint" id="setting-recs-lookback-days-hint">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</p>
                             </div>
                             <div class="setting-input">
-                                <select id="setting-recs-lookback-days">
+                                <select id="setting-recs-lookback-days" aria-describedby="setting-recs-lookback-days-hint">
                                     <option value="7" selected>7 days</option>
                                     <option value="30">30 days</option>
                                     <option value="60">60 days</option>
@@ -809,7 +809,7 @@
                     <div id="commitment-laddering-settings"></div>
 
                     <div class="settings-buttons">
-                        <button type="button" id="reset-purchasing-btn" class="btn btn-destructive">Reset to Defaults</button>
+                        <button type="button" id="reset-purchasing-btn" class="btn btn-quiet-danger">Reset to Defaults</button>
                         <button type="button" id="save-purchasing-btn" class="btn btn-primary">Save Settings</button>
                     </div>
                 </section>
