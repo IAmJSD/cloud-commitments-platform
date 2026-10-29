@@ -79,6 +79,14 @@ are the full record until the next release.
   Lambda or Fargate) instead; see `docs/DEPLOYMENT.md`. The target-account role
   templates (`cloudformation/stacks/CUDly-CrossAccount` and the federation
   CloudFormation templates under `iac/federation/`) are unchanged (#1432)
+- The standalone cleanup job `cmd/cleanup-lambda` and its three deploy modules
+  (`terraform/modules/compute/aws/cleanup-lambda`,
+  `terraform/modules/compute/gcp/cleanup-function` and
+  `terraform/modules/compute/azure/cleanup-function`). No environment root used
+  the modules. The job only deleted executions whose `expires_at` had passed,
+  and no code path sets that column, so it never deleted an execution. The server's
+  `cleanup` scheduled task (`CleanupOldExecutions`) already covers execution and
+  session retention; see "Database Cleanup Jobs" in `docs/DEPLOYMENT.md` (#357)
 
 ### Fixed
 

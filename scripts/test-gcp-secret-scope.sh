@@ -221,11 +221,6 @@ run_role_lines_case "every disallowed or lookalike per-secret role is reported (
 run_case "waived per-secret role outside the allowed pair exits 0 (#505)" 0 \
   "${FIXTURES}/per-secret-role-waived.tf.fixture"
 
-# The regression half of issue #1614: the module that carried the over-broad
-# grant must stay free of one.
-run_case "cleanup-function module has no scope-wide Secret Manager grant" 0 \
-  "${REPO_ROOT}/terraform/modules/compute/gcp/cleanup-function/main.tf"
-
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 

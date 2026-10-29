@@ -49,7 +49,9 @@ func TestRampRetention_OldCleanupWritersPreserveHeldRows(t *testing.T) {
 	deleted, err := f.store.CleanupOldExecutions(ctx, 30)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, deleted, "only canceled spellings and expired are eligible and unheld")
-	// This is the other production writer, cmd/cleanup-lambda/main.go.
+	// A raw expires_at DELETE, the shape the deleted cmd/cleanup-lambda ran
+	// (#357) and an operator could still run by hand: the ramp ledger trigger,
+	// not the caller's predicate, must keep held rows.
 	tag, err := f.store.db.Exec(ctx, `DELETE FROM purchase_executions WHERE expires_at < NOW()`)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, tag.RowsAffected(), "failed/no-submission is unheld but excluded by ordinary health retention")

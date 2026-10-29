@@ -96,7 +96,6 @@ sanity_report*.json
 # Compiled binaries
 cudly-final
 cudly-test
-cleanup-lambda
 /server
 /lambda
 

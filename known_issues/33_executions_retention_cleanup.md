@@ -10,6 +10,10 @@
 > "matches what the cleanup-lambda Terraform actually configures" sentence
 > under "Original problem". Only Azure Container Apps schedules cleanup today. Retention
 > scheduling is tracked by #712; retention is scheduled via the server `cleanup` task on AWS Lambda, AWS Fargate, GCP Cloud Run, GKE and AKS when opted in.
+>
+> **Amendment (#357):** the unconsumed `aws/cleanup-lambda`, `gcp/cleanup-function`
+> and `azure/cleanup-function` modules and `cmd/cleanup-lambda` were deleted. The
+> server `cleanup` task is the only cleanup job.
 
 ## Resolution
 
@@ -18,7 +22,7 @@
 `TaskCleanupExpiredRecords` scheduled task type and triggered by:
 
 - **AWS:** ~~EventBridge rule `cleanup_schedule` in
-  `terraform/modules/compute/aws/cleanup-lambda/main.tf:98`~~ (unconsumed module, see amendment)
+  `terraform/modules/compute/aws/cleanup-lambda/main.tf:98`~~ (unconsumed module, see amendment; deleted in #357)
 - **AWS Lambda (opt-in):** the `enable_cleanup_schedule` / `cleanup_schedule`
   sweep `<stack>-sweep-cleanup` runs the server cleanup task.
 - **AWS Fargate (opt-in):** the same `enable_cleanup_schedule` /
@@ -29,8 +33,7 @@
   the server cleanup task.~~ (the CloudFormation install stack was removed in
   #1432; use the Terraform AWS install)
 - **Azure Container Apps:** a Logic App calls `/api/scheduled/cleanup` daily
-  when `enable_scheduled_tasks` is true. (The `azure/cleanup-function` module
-  is not consumed by any environment.)
+  when `enable_scheduled_tasks` is true.
 - **GCP Cloud Run and GKE (opt-in):** `enable_cleanup_schedule` /
   `cleanup_schedule` add a `<name>-cleanup` Cloud Scheduler job that calls
   `/api/scheduled/cleanup` (#712), when the module's `enable_scheduled_tasks`

@@ -435,7 +435,8 @@ jobs:
         # in the three-leg layout): api 87s, config 85s, auth 62s, server
         # 55s, purchase 53s, migrations 64s, and the rest 95s together
         # (testhelpers 32s, cleanup-lambda 15s, database 15s, scheduler 12s,
-        # analytics 12s, commitmentopts 9s). api is the floor, as one package
+        # analytics 12s, commitmentopts 9s; cleanup-lambda was deleted in
+        # #357, so the rest is about 80s now). api is the floor, as one package
         # is never split; migrations and the rest run side by side within it.
         include:
           - shard: api

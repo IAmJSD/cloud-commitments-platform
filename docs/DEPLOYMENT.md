@@ -106,7 +106,6 @@ terraform/
 │   ├── compute/
 │   │   ├── aws/lambda/
 │   │   ├── aws/fargate/
-│   │   ├── aws/cleanup-lambda/
 │   │   ├── azure/container-apps/
 │   │   └── gcp/cloud-run/
 │   ├── database/       # aws/ (Aurora), azure/ (Flexible Server), gcp/ (Cloud SQL)
@@ -605,8 +604,8 @@ The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecuti
 
 - **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
 - **AWS Lambda (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `rate(1 day)`) in `terraform/environments/aws`. The first run deletes the whole backlog older than 30 days, so export any history you want to keep first.
-- **AWS Fargate (opt-in):** the same `enable_cleanup_schedule` / `cleanup_schedule` variables in `terraform/environments/aws` add a `<stack>-fargate-sweep-cleanup` EventBridge rule that runs `./cudly --task cleanup` as a one-off ECS task (`terraform/modules/compute/aws/fargate/sweeps.tf`). The same backlog warning applies. (The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.)
-- **GCP Cloud Run and GKE (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) in `terraform/environments/gcp`. It runs as a Cloud Scheduler job (`scheduled-tasks.tf` in each module) only when the module's `enable_scheduled_tasks` is true; that environment passes it to Cloud Run but not to GKE. The same backlog warning applies. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
+- **AWS Fargate (opt-in):** the same `enable_cleanup_schedule` / `cleanup_schedule` variables in `terraform/environments/aws` add a `<stack>-fargate-sweep-cleanup` EventBridge rule that runs `./cudly --task cleanup` as a one-off ECS task (`terraform/modules/compute/aws/fargate/sweeps.tf`). The same backlog warning applies.
+- **GCP Cloud Run and GKE (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) in `terraform/environments/gcp`. It runs as a Cloud Scheduler job (`scheduled-tasks.tf` in each module) only when the module's `enable_scheduled_tasks` is true; that environment passes it to Cloud Run but not to GKE. The same backlog warning applies.
 - **AKS (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) on the AKS module. Like the module's other scheduled tasks, it runs as a Kubernetes CronJob (`terraform/modules/compute/azure/aks/scheduled-tasks.tf`) only when `deploy_kubernetes_resources` is true.
 
 Alternatively, use pg_cron for database-native scheduling.

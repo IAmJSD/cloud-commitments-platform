@@ -108,12 +108,10 @@ run_case "unknown flag exits 2" 2 --bogus-flag
 run_case "tf.json is rejected rather than silently passed" 2 \
   "${FIXTURES}/json-encoding.tf.json"
 
-# The regression half of issue #1621: the two modules that carried the inert
-# access policy must stay free of one. This is a claim the guard can check
-# directly, and it is the reason the guard exists.
-run_case "cleanup-function module declares no access policy" 0 \
-  "${REPO_ROOT}/terraform/modules/compute/azure/cleanup-function/main.tf"
-
+# The regression half of issue #1621: the module that carried the inert access
+# policy must stay free of one. This is a claim the guard can check directly,
+# and it is the reason the guard exists. (The other module that carried it,
+# compute/azure/cleanup-function, was deleted in #357.)
 run_case "aks module declares no access policy" 0 \
   "${REPO_ROOT}/terraform/modules/compute/azure/aks/main.tf"
 

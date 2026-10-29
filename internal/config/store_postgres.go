@@ -2325,8 +2325,9 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 //     dead, so without this branch it would accumulate indefinitely.
 //
 //     The status gate is an ALLOWLIST: status = ANY(TerminalExecutionStatuses)
-//     AND status <> ALL(HealthScoredExecutionStatuses), the same predicate
-//     cmd/cleanup-lambda's expiredExecutionsWhere uses (#998, #1173). A lapsed
+//     AND status <> ALL(HealthScoredExecutionStatuses) (#998, #1173). This
+//     is the only expires_at retention path since cmd/cleanup-lambda, which
+//     ran its own copy of the predicate, was deleted (#357). A lapsed
 //     TTL says nothing about whether an executor, scheduler or reaper still
 //     needs the row: `expires_at` is set at insert and never rewritten, so an
 //     `approved` or `running` row stranded by a dead executor (the rows
@@ -2380,8 +2381,8 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 	//
 	// Branch 3's allowlist and exclusion are parameterized from
 	// TerminalExecutionStatuses and HealthScoredExecutionStatuses instead of
-	// repeating literal lists, so this branch, cmd/cleanup-lambda and the
-	// plan health score cannot drift. `status` is NOT NULL (migration
+	// repeating literal lists, so this branch and the plan health score
+	// cannot drift. `status` is NOT NULL (migration
 	// 000001), so neither array test is exposed to three-valued logic.
 	//
 	// Under READ COMMITTED a row another transaction is updating is
