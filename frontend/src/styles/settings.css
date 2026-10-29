@@ -721,3 +721,21 @@ tr.override-disabled {
 .override-transfer-account {
     white-space: nowrap;
 }
+
+/* Permission overview: ticks granted through admin:* are grey, direct
+ * grants green; * marks an admin tick with carved-out exceptions. */
+.permission-matrix .has-perm.via-admin {
+    color: var(--cudly-text-muted);
+    font-weight: var(--cudly-fw-regular);
+}
+
+.permission-matrix .perm-partial-mark {
+    margin-left: 1px;
+    font-size: var(--cudly-fs-xs);
+}
+
+.permission-matrix-note {
+    margin: var(--cudly-sp-3) 0 0;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
