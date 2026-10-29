@@ -583,16 +583,42 @@ th .history-column-filter-btn:focus-visible {
     border-color: var(--cudly-success);
 }
 
-/* Long failure hints in the purchase history action column wrap at a
- * readable width instead of widening the sticky column. */
+/* Purchase history: an operator hint on a failed row is a status note
+ * under the pill (like the approver and failure details), muted, with a
+ * warning icon; long provider error codes break instead of widening the
+ * column. */
 .table-compact .history-ops-hint {
-    display: inline-block;
-    /* A fixed width (not max-width): with overflow-wrap: anywhere the
-       min-content would collapse and push the Retry link out of the cell. */
-    width: 13rem;
-    vertical-align: middle;
-    /* AWS / Azure error codes are long unbroken words. */
+    max-width: 16rem;
+    margin-top: 0.35rem;
+    color: var(--cudly-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.25;
     overflow-wrap: anywhere;
+}
+
+.table-compact .history-ops-hint > .icon {
+    color: var(--cudly-warn-fg);
+}
+
+/* The history's sticky Plan / action column stays narrow: plan names
+ * truncate, links and buttons wrap as whole units. */
+.table-compact td.history-plan-cell {
+    max-width: 14rem;
+    white-space: normal;
+}
+
+.history-plan-cell :is(button, a, .history-retry-link) {
+    white-space: nowrap;
+}
+
+.history-plan-cell .cell-truncate {
+    max-width: 100%;
+}
+
+.table-compact .history-retry-btn {
+    height: 1.75rem;
+    margin: 0;
+    padding: 0 var(--cudly-sp-2);
 }
 
 .table-compact :is(.history-approver, .status-detail) {

@@ -1095,6 +1095,18 @@ function renderLineageLinks(p: HistoryPurchase): string[] {
   return lineage;
 }
 
+// opsHintHtml renders a failed row's operator hint (issue #47) as a note
+// under the status pill, where the other status details already go. It
+// used to fill the narrow, sticky action column with long provider error
+// text. Empty for rows without a hint.
+function opsHintHtml(p: HistoryPurchase): string {
+  if ((p.status || '').toLowerCase() !== 'failed' || !p.ops_hint) return '';
+  const title = p.redrive_unsafe
+    ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
+    : 'Operator action required — Retry will not help until this is fixed';
+  return `<div class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</div>`;
+}
+
 function renderActionCell(p: HistoryPurchase): string {
   // Pending → the Approval queue card is the one place to approve or cancel
   // (issue #183). Where the session has a pending action (or a 4-eyes reason
@@ -1111,20 +1123,21 @@ function renderActionCell(p: HistoryPurchase): string {
   // misconfig is guaranteed to fail again.
   if ((p.status || '').toLowerCase() === 'failed') {
     if (p.ops_hint) {
-      const title = p.redrive_unsafe
-        ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
-        : 'Operator action required — Retry will not help until this is fixed';
-      // Keep the lineage links next to the hint (issue #1040): a legacy row
-      // retried before the re-drive gate (#967) now carries the permanent
-      // hint, and the operator still needs the link to its successor.
-      return [`<span class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
+      // The hint itself sits under the status pill (opsHintHtml); this
+      // column keeps only the lineage links (issue #1040: a legacy row
+      // retried before the re-drive gate (#967) carries the permanent hint
+      // and the operator still needs the link to its successor).
+      const lineage = renderLineageLinks(p);
+      return lineage.length > 0 ? lineage.join(' ') : MUTED_DASH;
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
       const label = overThreshold
-        ? `${iconSvg('alert-triangle')} Retried ${Number(p.retry_attempt_n) || 0}× — click to override`
-        : `${iconSvg('rotate-cw')} Retry`;
-      const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
+        ? `${iconSvg('alert-triangle')}<span>Retried ${Number(p.retry_attempt_n) || 0}× — click to override</span>`
+        : `${iconSvg('rotate-cw')}<span>Retry</span>`;
+      const cls = overThreshold
+        ? 'btn-small icon-label history-retry-btn history-retry-over-threshold'
+        : 'btn-small icon-label history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
   }
@@ -1156,7 +1169,9 @@ function renderActionCell(p: HistoryPurchase): string {
     return [...lineage, ...trailingActions].join(' ');
   }
 
-  return escapeHtml(p.plan_name || '-');
+  return p.plan_name
+    ? `<span class="cell-truncate" title="${escapeHtmlAttr(p.plan_name)}">${escapeHtml(p.plan_name)}</span>`
+    : '-';
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,9 +1406,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         return `${badge}<div class="history-approver">awaiting approval from <strong>${escapeHtml(p.approver)}</strong></div>`;
       }
       if (p.status_description) {
-        return `${badge}<div class="history-approver">${escapeHtml(p.status_description)}</div>`;
+        return `${badge}<div class="history-approver">${escapeHtml(p.status_description)}</div>${opsHintHtml(p)}`;
       }
-      return badge;
+      return `${badge}${opsHintHtml(p)}`;
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
@@ -1419,7 +1434,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         ${empty ? `<td class="num">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
         <td class="num">${dashOr(monthlyCostCell)}</td>
         <td class="num savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
-        <td>${planCellContent}</td>
+        <td class="history-plan-cell">${planCellContent}</td>
       </tr>
     `;
   }).join('');
