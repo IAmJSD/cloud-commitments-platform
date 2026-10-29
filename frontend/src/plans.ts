@@ -13,7 +13,7 @@ import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
 import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
-import { openModal, closeModal } from './modal';
+import { openModal, closeModal, modalCloseButtonHtml } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
@@ -1955,10 +1955,16 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
 
   const modal = document.createElement('div');
   modal.id = 'add-purchases-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'add-purchases-modal-title');
   modal.innerHTML = `
     <div class="modal-overlay">
       <div class="modal-content">
-        <h2>Add Planned Purchases</h2>
+        <div class="modal-header">
+          <h2 id="add-purchases-modal-title">Add Planned Purchases</h2>
+          ${modalCloseButtonHtml('add-purchases-cancel')}
+        </div>
         <p class="help-text">Schedule additional purchases for <strong>${escapeHtml(planName)}</strong></p>
 
         <form id="add-purchases-form">

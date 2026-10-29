@@ -413,7 +413,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   modal.dataset.requireAck = 'true';
   modal.innerHTML = `
     <div class="modal-content">
-      <h2>API Key Created Successfully</h2>
+      <div class="modal-header"><h2>API Key Created Successfully</h2></div>
       <div class="warning-box">
         <strong>Important:</strong> This is the only time you'll see this API key.
         Please copy it now and store it securely.

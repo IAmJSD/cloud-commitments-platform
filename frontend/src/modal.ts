@@ -17,7 +17,16 @@
  *
  * The helper toggles the existing `.hidden` CSS class so it slots into the
  * established show/hide convention without touching the stylesheet.
+ *
+ * Header close button: every dialog header carries a close-X marked with
+ * `data-modal-dismiss` (see modalCloseButtonHtml / createModalCloseButton).
+ * Its value names the dialog's own Cancel/Close button, which the X clicks,
+ * so the X runs exactly the same close path (state resets, confirmation
+ * guards, disabled-while-submitting) as that button. An empty value closes
+ * the dialog through closeModal, the same path as Escape.
  */
+
+import { createIcon, iconSvg } from './icons';
 
 /**
  * Single source of truth for "what counts as a focusable element inside a
@@ -37,7 +46,47 @@ export const FOCUSABLE_SELECTOR = [
 interface ModalState {
   trigger: Element | null;
   keydownHandler: (e: KeyboardEvent) => void;
+  clickHandler: (e: MouseEvent) => void;
   onClose?: () => void;
+}
+
+/** Marks a dialog header's close-X; the value is the id of the button it stands in for. */
+const DISMISS_ATTR = 'data-modal-dismiss';
+// The header close-X is reachable by Tab but is not where focus lands on
+// open: the dialog's first field or action is.
+const HEADER_CLOSE_SELECTOR = `[${DISMISS_ATTR}], .modal-header .modal-close`;
+
+/**
+ * Markup for a dialog header's close-X, for template-literal dialogs.
+ * `dismissTargetId` is the id of the dialog's Cancel/Close button the X
+ * clicks; omit it to close through closeModal (the Escape path).
+ */
+export function modalCloseButtonHtml(dismissTargetId = '', label = 'Close'): string {
+  return `<button type="button" class="modal-close" ${DISMISS_ATTR}="${dismissTargetId}" aria-label="${label}" title="${label}">${iconSvg('x')}</button>`;
+}
+
+/** DOM version of modalCloseButtonHtml. */
+export function createModalCloseButton(dismissTargetId = '', label = 'Close'): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'modal-close';
+  btn.setAttribute(DISMISS_ATTR, dismissTargetId);
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+  btn.appendChild(createIcon('x'));
+  return btn;
+}
+
+/**
+ * A dialog header: the title plus, unless `closable` is false (dialogs that
+ * must be acknowledged), the close-X.
+ */
+export function createModalHeader(heading: HTMLElement, opts: { dismissTargetId?: string; closable?: boolean; closeLabel?: string } = {}): HTMLDivElement {
+  const header = document.createElement('div');
+  header.className = 'modal-header';
+  header.appendChild(heading);
+  if (opts.closable !== false) header.appendChild(createModalCloseButton(opts.dismissTargetId, opts.closeLabel));
+  return header;
 }
 
 // WeakMap so a removed modal element doesn't leak its handler reference.
@@ -83,7 +132,7 @@ function resolveInitialFocus(
         : initialFocus;
     if (target) return target;
   }
-  return focusables[0] ?? null;
+  return focusables.find(f => !f.matches(HEADER_CLOSE_SELECTOR)) ?? focusables[0] ?? null;
 }
 
 /**
@@ -146,8 +195,19 @@ export function openModal(
     }
   };
 
+  // Header close-X: stand in for the dialog's own Cancel/Close button.
+  const clickHandler = (e: MouseEvent): void => {
+    const btn = (e.target as Element | null)?.closest?.(`[${DISMISS_ATTR}]`);
+    if (!btn || !el.contains(btn)) return;
+    const targetId = btn.getAttribute(DISMISS_ATTR);
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (target) target.click();
+    else closeModal(el);
+  };
+
   el.addEventListener('keydown', keydownHandler);
-  openModals.set(el, { trigger, keydownHandler, onClose: opts?.onClose });
+  el.addEventListener('click', clickHandler);
+  openModals.set(el, { trigger, keydownHandler, clickHandler, onClose: opts?.onClose });
 
   const focusables = getFocusables(el);
   const initialTarget = resolveInitialFocus(el, opts?.initialFocus, focusables);
@@ -182,5 +242,6 @@ function teardown(el: HTMLElement): void {
   const state = openModals.get(el);
   if (!state) return;
   el.removeEventListener('keydown', state.keydownHandler);
+  el.removeEventListener('click', state.clickHandler);
   openModals.delete(el);
 }

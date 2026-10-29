@@ -271,7 +271,7 @@
     .plan-editor-layout.has-editor-draft { grid-template-columns: minmax(0, 1fr); grid-template-areas: "form" "panel"; }
     #plan-editor-panel { position: static; max-height: none; overflow: visible; }
 }
-@media (max-width: 480px) { #plan-modal .modal-content { padding: 12px; } }
+@media (max-width: 480px) { #plan-modal .modal-content { --modal-pad: 12px; } }
 
 #plan-advanced-settings { border-top: 1px solid var(--cudly-border); margin-top: 16px; padding-top: 16px; }
 #plan-advanced-settings > summary, #plan-editor-panel summary { cursor: pointer; padding: 8px 0; }
