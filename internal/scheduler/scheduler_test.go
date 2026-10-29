@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
@@ -997,14 +998,23 @@ func staleListRecommendations(t *testing.T, staleHours int) <-chan struct{} {
 // store call is the second GetGlobalConfig in CollectRecommendations, so that
 // is what must never happen (MarkCollectionStarted belongs to the cold-start
 // path and says nothing about stale refreshes).
+//
+// The check runs in a synctest bubble: synctest.Wait returns only once every
+// goroutine the call started has finished or is durably blocked, so a refresh
+// it kicked off has already made that store call. The non-blocking receive is
+// then a complete answer; a quiet window could pass a refresh goroutine that a
+// loaded runner had not scheduled yet.
 func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t *testing.T) {
-	refreshed := staleListRecommendations(t, 0)
+	synctest.Test(t, func(t *testing.T) {
+		refreshed := staleListRecommendations(t, 0)
+		synctest.Wait()
 
-	select {
-	case <-refreshed:
-		t.Fatal("background refresh started although RecommendationsCacheStaleHours == 0 disables it")
-	case <-time.After(200 * time.Millisecond):
-	}
+		select {
+		case <-refreshed:
+			t.Fatal("background refresh started although RecommendationsCacheStaleHours == 0 disables it")
+		default:
+		}
+	})
 }
 
 // Positive control for the test above: with a finite TTL the same stale cache
