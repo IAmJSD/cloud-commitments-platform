@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
+import { formatCurrency, formatDate, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
 import { historyConfirmBody } from './history-confirm-body';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import type { RevokeQuote } from './api';
@@ -13,6 +13,7 @@ import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { iconSvg } from './icons';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import {
   historyTruncationMessage,
   mergeHistoryPages,
@@ -665,7 +666,7 @@ const NO_RECS_HTML = `<span class="no-recommendations" title="${NO_RECOMMENDATIO
 // Years", $0) and a "0 commitment(s)" type; render dashes and say why
 // instead. A 0 term on a real row (a mixed-term basket) is also a dash.
 function termCell(p: HistoryPurchase): string {
-  return isRealTerm(p.term) ? escapeHtml(formatTerm(p.term)) : MUTED_DASH;
+  return isRealTerm(p.term) ? escapeHtml(formatTermShort(p.term)) : MUTED_DASH;
 }
 
 function providerCell(p: HistoryPurchase): string {
@@ -1265,7 +1266,7 @@ function purchaseHistoryDisplayLabel(
   if (column === 'term') {
     // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
+    return isRealTerm(n) ? formatTermShort(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   return value;
 }
@@ -1956,12 +1957,13 @@ function approvalQueueDisplayLabel(
   if (column === 'term') {
     // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
+    return isRealTerm(n) ? formatTermShort(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   if (column === 'account') {
     // Account cells render via getAccountName() — mirror the same display.
     return getAccountName(value);
   }
+  if (column === 'payment') return formatPaymentOption(value);
   return value;
 }
 
@@ -2033,7 +2035,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       : `<span class="muted">${NO_VALUE}</span>`;
     const empty = hasNoCommitments(p);
     const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
-    const paymentCell = p.payment ? escapeHtml(p.payment) : `<span class="muted">${NO_VALUE}</span>`;
+    const paymentCell = p.payment ? escapeHtml(formatPaymentOption(p.payment)) : `<span class="muted">${NO_VALUE}</span>`;
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))

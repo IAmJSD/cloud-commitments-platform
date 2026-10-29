@@ -38,6 +38,7 @@ function canActOnRecommendations(): boolean {
   return canAccess('execute', 'purchases') || canAccess('create', 'plans');
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import { fetchOverridesForAccounts } from './lib/overrides';
 import { ownValue } from './lib/own-property';
 import { HOURS_PER_MONTH } from './lib/hours-per-month';
@@ -1596,10 +1597,10 @@ function formatPaybackRange(min: number, max: number): string {
   return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
 }
 
-/** Format a term range, collapsing "1yr – 1yr" to "1yr". */
+/** Format a term range, collapsing "1 yr – 1 yr" to "1 yr". */
 function formatTermRange(min: number, max: number): string {
-  const lo = formatTerm(min);
-  const hi = formatTerm(max);
+  const lo = formatTermShort(min);
+  const hi = formatTermShort(max);
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -2261,7 +2262,10 @@ function categoricalDisplayLabel(
   }
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return Number.isFinite(n) ? formatTermShort(n) : value;
+  }
+  if (column === 'payment') {
+    return formatPaymentOption(value);
   }
   if (column === 'provider') {
     return providerDisplayName(value);
@@ -3181,7 +3185,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
+  return formatPaymentOption(payment);
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3252,7 +3256,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'count':
       return `<td class="num">${rec.count}</td>`;
     case 'term':
-      return `<td>${formatTerm(rec.term)}</td>`;
+      return `<td>${formatTermShort(rec.term)}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
@@ -3481,7 +3485,7 @@ function buildListMarkup(
           ? formatCurrency(selectedChildVariant.upfront_cost)
           : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
         const childTermDisplay = selectedChildVariant
-          ? formatTerm(selectedChildVariant.term)
+          ? formatTermShort(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
@@ -3550,7 +3554,7 @@ function buildListMarkup(
       : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
 
     const termDisplay = selectedVariant
-      ? formatTerm(selectedVariant.term)
+      ? formatTermShort(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');

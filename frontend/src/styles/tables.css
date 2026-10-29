@@ -292,7 +292,12 @@ tr.history-row-highlight:hover {
 }
 
 .cell-truncate--sm {
-    max-width: 10rem;
+    max-width: 9rem;
+}
+
+.table-compact td.cell-wrap-narrow {
+    white-space: normal;
+    max-width: 9rem;
 }
 
 /* A chip (RI exchange alternatives) is one unit: it wraps as a whole. */

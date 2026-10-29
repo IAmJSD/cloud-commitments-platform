@@ -428,9 +428,9 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     await loadHistory();
 
     const queue = document.getElementById('purchases-approval-queue')!;
-    // formatTerm mock renders "3 Years"
-    expect(queue.textContent).toContain('3 Years');
-    expect(queue.textContent).toContain('no-upfront');
+    // Table cells use the compact term and the human payment label.
+    expect(queue.textContent).toContain('3 yr');
+    expect(queue.textContent).toContain('No Upfront');
   });
 
   test('renders Monthly Cost column when monthly_cost is present', async () => {
@@ -489,8 +489,8 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     // Find by content rather than column index so a reorder doesn't break this.
     expect(cellTexts).toEqual(expect.arrayContaining([
       expect.stringContaining('Production Account'),
-      expect.stringContaining('1 Year'),
-      expect.stringContaining('all-upfront'),
+      expect.stringContaining('1 yr'),
+      expect.stringContaining('All Upfront'),
       expect.stringContaining('7.5'),
     ]));
     // No dash fallback may appear on the populated cells.

@@ -17,6 +17,7 @@ import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import {
   openColumnFilterPopover,
   rebindColumnFilterPopover,
@@ -326,7 +327,10 @@ function plansCategoricalDisplayLabel(column: state.PlansColumnId, value: string
   if (value === '') return '(empty)';
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? formatTerm(n) : value;
+    return Number.isFinite(n) && n > 0 ? formatTermShort(n) : value;
+  }
+  if (column === 'payment') {
+    return formatPaymentOption(value);
   }
   if (column === 'provider') {
     return value.toUpperCase();
@@ -391,9 +395,9 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const canRun = isPending || isPaused;
   // Term and payment are separate columns, each with its own filter (the
   // two funnels used to share one header).
-  const termCell = purchase.term > 0 ? `${purchase.term}yr` : '—';
+  const termCell = purchase.term > 0 ? formatTermShort(purchase.term) : '—';
   const paymentCell = purchase.term > 0
-    ? escapeHtml((purchase.payment ?? '').replace('-', ' '))
+    ? escapeHtml(formatPaymentOption(purchase.payment))
     : '—';
   // Show an em-dash for upfront=0 unless the plan truly is all-upfront;
   // $0 upfront on "partial" or "no-upfront" is informative ($0 is real).

@@ -20,7 +20,8 @@ import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import {
   buildCoverageBar, coverageTargetFor, coverageTargetsFromConfig, type CoverageTargets,
 } from './lib/coverage-bar';
-import { formatCurrency, formatDate, amortizedMonthly } from './utils';
+import { formatCurrency, formatDate, amortizedMonthly, providerBadgeClass } from './utils';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
 import { syncTabStops } from './lib/tablist';
@@ -273,14 +274,14 @@ function renderActiveCommitmentsTable(
 function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   const tr = document.createElement('tr');
 
-  appendCell(tr, c.provider);
+  tr.appendChild(buildProviderCell(c.provider));
   tr.appendChild(buildAccountCell(c));
-  appendTruncatedCell(tr, c.service);
-  appendTruncatedCell(tr, c.resource_type ?? '');
+  appendNarrowWrapCell(tr, c.service);
+  appendNarrowWrapCell(tr, c.resource_type ?? '');
   appendCell(tr, c.region);
   appendCell(tr, String(c.count), true);
-  appendCell(tr, `${c.term_years}y`);
-  appendCell(tr, c.payment_option ?? '');
+  appendCell(tr, formatTermShort(c.term_years));
+  appendCell(tr, formatPaymentOption(c.payment_option));
 
   // When amortize is on, fold the upfront cost over the term years.
   const amortize = state.getAmortizeUpfront();
@@ -305,15 +306,24 @@ function appendCell(tr: HTMLTableRowElement, text: string, numeric = false): voi
   tr.appendChild(td);
 }
 
-// Long free-form values (savings plan descriptions, service slugs) truncate
-// with an ellipsis so the row stays one line; the title keeps the full text.
-function appendTruncatedCell(tr: HTMLTableRowElement, text: string): void {
+// The same provider badge the other tables use (lowercase "aws" before).
+function buildProviderCell(provider: string): HTMLTableCellElement {
   const td = document.createElement('td');
-  const span = document.createElement('span');
-  span.className = 'cell-truncate cell-truncate--sm';
-  span.textContent = text;
-  if (text) span.title = text;
-  td.appendChild(span);
+  const badge = document.createElement('span');
+  const cls = providerBadgeClass(provider);
+  badge.className = cls ? `provider-badge ${cls}` : 'provider-badge';
+  badge.textContent = (provider || '').toUpperCase();
+  td.appendChild(badge);
+  return td;
+}
+
+// Long free-form values (savings plan descriptions, service slugs) wrap at a
+// narrow width: the account cell already makes every row two lines high, so
+// a second line here costs no height and keeps the whole value visible.
+function appendNarrowWrapCell(tr: HTMLTableRowElement, text: string): void {
+  const td = document.createElement('td');
+  td.className = 'cell-wrap-narrow';
+  td.textContent = text;
   tr.appendChild(td);
 }
 
