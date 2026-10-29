@@ -19,27 +19,28 @@ import (
 )
 
 // insertBarrierStore holds each submit transaction at its INSERT until every
-// participant has reached it (or the wait times out). That forces the
-// interleaving MON-01 describes: both transactions have already run their
-// duplicate check before either inserts. A guard that serializes the check
-// (the per-creator lock) keeps the second transaction out of the barrier, so
-// the first one times out and inserts alone.
+// participant has either reached it or is parked on the per-creator submit
+// lock. That forces the interleaving MON-01 describes: both transactions have
+// already run their duplicate check before either inserts. A guard that
+// serializes the check (the per-creator lock) keeps the second transaction
+// waiting on that lock, which the barrier observes, so the first one inserts
+// alone. The barrier never opens on a timeout: on a slow runner a fixed wait
+// could let the first transaction insert and commit before an unguarded second
+// one ran its check, hiding the missing guard.
 type insertBarrierStore struct {
 	*config.PostgresStore
+	db      testhelpers.LockDB // a pool connection other than the transactions'
 	arrived chan struct{}
 	parties int
-	wait    time.Duration
 }
+
+// submitLockWait matches ListRecentSubmitsTx's per-creator advisory lock.
+const submitLockWait = "%pg_advisory_xact_lock%"
 
 func (s *insertBarrierStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, e *config.PurchaseExecution) error {
 	s.arrived <- struct{}{}
-	deadline := time.After(s.wait)
-	for len(s.arrived) < s.parties {
-		select {
-		case <-deadline:
-			return s.PostgresStore.SavePurchaseExecutionTx(ctx, tx, e)
-		case <-time.After(10 * time.Millisecond):
-		}
+	if err := testhelpers.AwaitArrivalsOrLockWaits(ctx, s.db, s.parties, func() int { return len(s.arrived) }, submitLockWait); err != nil {
+		return err
 	}
 	return s.PostgresStore.SavePurchaseExecutionTx(ctx, tx, e)
 }
@@ -79,7 +80,7 @@ func setupSubmitDB(t *testing.T) (*testhelpers.PostgresContainer, *config.Postgr
 func TestPersistExecution_ConcurrentIdenticalSubmitsCreateOneRow(t *testing.T) {
 	pg, store := setupSubmitDB(t)
 	recs, key := submitFixture(t)
-	barrier := &insertBarrierStore{PostgresStore: store, arrived: make(chan struct{}, 2), parties: 2, wait: time.Second}
+	barrier := &insertBarrierStore{PostgresStore: store, db: pg.DB.Pool(), arrived: make(chan struct{}, 2), parties: 2}
 	h := &Handler{config: barrier}
 
 	var wg sync.WaitGroup
