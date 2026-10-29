@@ -19,7 +19,9 @@ test('the rounded table clips its header corners', async ({ page }) => {
   });
   // border-radius only takes effect in the separate model, and the clip keeps
   // the header's square background inside the rounded corner.
-  expect(styles).toEqual({ collapse: 'separate', overflow: 'clip', radius: '8px', transform: 'uppercase' });
+  // Headers render in the case they are written in (Title Case); uppercase
+  // only ever reached the non-sortable ones, so tables mixed the two.
+  expect(styles).toEqual({ collapse: 'separate', overflow: 'clip', radius: '8px', transform: 'none' });
   // The top-left corner pixel of the table sits outside the rounded edge, so
   // the header background must not paint there.
   const box = (await table.boundingBox())!;

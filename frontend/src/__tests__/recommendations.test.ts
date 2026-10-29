@@ -2900,10 +2900,10 @@ describe('Bundle B: column header filter triggers', () => {
       document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
     );
     const labels = items.map((l) => l.querySelector('span')?.textContent);
-    expect(labels.sort()).toEqual(['1 Year', '3 Years']);
+    expect(labels.sort()).toEqual(['1 yr', '3 yr']);
     // Both boxes start checked (no active filter → all included). Untick
     // "1 Year"; remaining checked = ["3"] → filter narrows to that.
-    const oneYearLabel = items.find((l) => l.textContent === '1 Year');
+    const oneYearLabel = items.find((l) => l.textContent === '1 yr');
     const cb = oneYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(cb?.dataset['value']).toBe('1');
     expect(cb?.checked).toBe(true);

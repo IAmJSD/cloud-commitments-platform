@@ -38,6 +38,7 @@ import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
 import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
+import { formatDecimalStringCurrency, formatIsoTermShort, formatPaymentOption } from './lib/table-format';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -416,7 +417,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
   };
 
   container.innerHTML = `
-    <table>
+    <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
           <th>RI ID</th>
@@ -441,7 +442,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
             <td>${escapeHtml(ri.instance_type)}</td>
             <td>${escapeHtml(ri.availability_zone)}</td>
             <td class="num">${ri.instance_count}</td>
-            <td>${escapeHtml(ri.offering_type)}</td>
+            <td>${escapeHtml(formatPaymentOption(ri.offering_type))}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
             ${canExchange ? `<td><button class="btn-small" data-action="quote-ri" data-ri-id="${escapeHtml(ri.reserved_instance_id)}" data-count="${ri.instance_count}" aria-label="Exchange ${escapeHtml(ri.reserved_instance_id)}">Exchange</button></td>` : ''}
@@ -499,6 +500,7 @@ function renderAzureRIsTable(
   container.textContent = '';
   const table = document.createElement('table');
   const canExchange = canPreviewAzureExchange();
+  table.className = canExchange ? 'table-compact table-sticky-start' : 'table-compact';
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
@@ -531,7 +533,7 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
   appendAzureCell(tr, r.sku);
   appendAzureCell(tr, String(r.quantity), true);
   appendAzureCell(tr, r.region || '—');
-  appendAzureCell(tr, r.term || '—');
+  appendAzureCell(tr, formatIsoTermShort(r.term) || '—');
   appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
 
   return tr;
@@ -597,6 +599,7 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
   if (!excluded || excluded.length === 0) {
     notice.textContent = '';
     notice.className = '';
+    notice.removeAttribute('role');
     return;
   }
   const byReason = new Map<string, string[]>();
@@ -606,11 +609,40 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
     if (ids) ids.push(e.ri_id);
     else byReason.set(reason, [e.ri_id]);
   }
-  notice.className = 'freshness-banner warning';
-  // textContent keeps server-provided reasons and ids inert.
-  notice.textContent = [...byReason]
-    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${reason}: ${ids.join(', ')}`)
-    .join('; ');
+  // textContent keeps server-provided reasons and ids inert. The server
+  // writes reasons as sentences ("Expires in 35 days; ... the term."), so
+  // the trailing full stop and a leading capital are dropped to read
+  // inside "... left out because <reason>: <ids>" (it used to end ".:").
+  const lines = [...byReason]
+    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${inlineReason(reason)}: ${ids.join(', ')}`);
+  renderTableCallout(notice, 'warning', lines);
+}
+
+/** "Expires in 35 days; extend the term." -> "expires in 35 days; extend the term". */
+function inlineReason(reason: string): string {
+  const trimmed = reason.trim().replace(/[.\s]+$/, '');
+  // Lower-case a capitalised first word, but leave acronyms ("AWS") alone.
+  return /^[A-Z][a-z]/.test(trimmed) ? trimmed[0]!.toLowerCase() + trimmed.slice(1) : trimmed;
+}
+
+/**
+ * Fill `el` as a table callout: an alert icon and a muted body, one line
+ * per entry. Used for the reshape staleness and excluded-RI notices, which
+ * used to be bold run-on paragraphs with a "!" prefix.
+ */
+function renderTableCallout(el: HTMLElement, tone: 'warning' | 'error', lines: string[]): void {
+  el.className = `freshness-banner ${tone} table-callout`;
+  el.setAttribute('role', 'note');
+  el.textContent = '';
+  el.appendChild(createIcon('alert-triangle'));
+  const body = document.createElement('div');
+  body.className = 'table-callout-body';
+  for (const line of lines) {
+    const p = document.createElement('p');
+    p.textContent = line;
+    body.appendChild(p);
+  }
+  el.appendChild(body);
 }
 
 /**
@@ -641,6 +673,7 @@ export function renderReshapeStalenessBanner(
   if (!staleness) {
     banner.textContent = '';
     banner.className = '';
+    banner.removeAttribute('role');
     return;
   }
 
@@ -654,18 +687,10 @@ export function renderReshapeStalenessBanner(
   }
 
   const isSoft = staleness === 'soft';
-  banner.className = isSoft ? 'freshness-banner warning' : 'freshness-banner error';
-
-  const icon = isSoft ? '!' : '!!';
   const copy = isSoft
     ? `Cross-family alternatives are based on Cost Explorer recommendations that may be up to 24h old${ageLabel}. Some prices may be stale.`
     : `Cross-family alternatives are based on Cost Explorer recommendations older than 24h${ageLabel}. Prices may be significantly out of date.`;
-
-  banner.textContent = '';
-  const strong = document.createElement('strong');
-  strong.textContent = icon + ' ';
-  banner.appendChild(strong);
-  banner.appendChild(document.createTextNode(copy));
+  renderTableCallout(banner, isSoft ? 'warning' : 'error', [copy]);
 }
 
 // ──────────────────────────────────────────────
@@ -958,6 +983,13 @@ function renderRecommendations(container: HTMLElement): void {
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
     return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
+  // Columns that pack two values ("4x m5.large", "26.6 / 64.0") have one
+  // filter per value. Two bare funnels side by side gave no hint which was
+  // which, so each one is named under the header label. The visible word is
+  // part of the button's accessible name ("Filter Source count").
+  const namedFilterBtn = (column: state.RiExchangeColumnId, name: string): string =>
+    filterBtn(column).replace('</button>', `<span class="column-filter-btn-name">${name}</span></button>`);
+  const filterGroup = (...btns: string[]): string => `<span class="th-filter-group">${btns.join('')}</span>`;
 
   // Render an indexable list so per-row Exchange buttons can find the
   // matching original recommendation (idx into currentRecommendations).
@@ -974,15 +1006,15 @@ function renderRecommendations(container: HTMLElement): void {
   }));
 
   container.innerHTML = `
-    <table>
+    <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
           <th>Source RI${filterBtn('source_ri_id')}</th>
-          <th>Current${filterBtn('source_count')}${filterBtn('source_instance_type')}</th>
-          <th>Suggested${filterBtn('target_count')}${filterBtn('target_instance_type')}</th>
+          <th>Current${filterGroup(namedFilterBtn('source_count', 'count'), namedFilterBtn('source_instance_type', 'instance'))}</th>
+          <th>Suggested${filterGroup(namedFilterBtn('target_count', 'count'), namedFilterBtn('target_instance_type', 'instance'))}</th>
           <th>Alternatives</th>
           <th>Utilization${filterBtn('utilization_percent')}</th>
-          <th>Normalized Units${filterBtn('normalized_used')}${filterBtn('normalized_purchased')}</th>
+          <th>Normalized Units${filterGroup(namedFilterBtn('normalized_used', 'used'), namedFilterBtn('normalized_purchased', 'purchased'))}</th>
           <th>Reason${filterBtn('reason')}</th>
           ${canExchange ? '<th>Actions</th>' : ''}
         </tr>
@@ -1000,13 +1032,13 @@ function renderRecommendations(container: HTMLElement): void {
           const altCell = renderAlternativesCell(rec.alternative_targets);
           return `
           <tr>
-            <td class="monospace">${escapeHtml(rec.source_ri_id)}</td>
+            <td class="monospace"><span class="cell-truncate cell-truncate--xs" title="${escapeHtml(rec.source_ri_id)}">${escapeHtml(rec.source_ri_id)}</span></td>
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
             <td>${renderSuggestedCell(rec)}</td>
-            <td>${altCell}</td>
+            <td class="cell-wrap">${altCell}</td>
             <td class="${utilClass}">${utilPct === null ? '—' : `${utilPct.toFixed(1)}%`}</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
-            <td>${escapeHtml(rec.reason)}</td>
+            <td class="cell-wrap">${escapeHtml(rec.reason)}</td>
             ${canExchange ? `<td>${renderReshapeExchangeButton(rec, idx)}</td>` : ''}
           </tr>`;
         }).join('')}
@@ -2079,14 +2111,14 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
-      + '<td class="num">' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
+      + '<td class="num">' + (rec.payment_due ? escapeHtml(formatDecimalStringCurrency(rec.payment_due)) : '&mdash;') + '</td>'
       + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
       + '</tr>';
   }).join('');
 
-  const tableHTML = '<table>'
+  const tableHTML = '<table class="table-compact table-sticky-end">'
     + '<thead><tr>'
     + '<th>Date</th><th>Source Type</th><th>Target Type</th><th class="num">Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'

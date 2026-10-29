@@ -39,6 +39,7 @@ function canActOnRecommendations(): boolean {
   return canAccess('execute', 'purchases') || canAccess('create', 'plans');
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import { fetchOverridesForAccounts } from './lib/overrides';
 import { ownValue } from './lib/own-property';
 import { HOURS_PER_MONTH } from './lib/hours-per-month';
@@ -1600,10 +1601,10 @@ function formatPaybackRange(min: number, max: number): string {
   return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
 }
 
-/** Format a term range, collapsing "1yr – 1yr" to "1yr". */
+/** Format a term range, collapsing "1 yr – 1 yr" to "1 yr". */
 function formatTermRange(min: number, max: number): string {
-  const lo = formatTerm(min);
-  const hi = formatTerm(max);
+  const lo = formatTermShort(min);
+  const hi = formatTermShort(max);
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -2265,7 +2266,10 @@ function categoricalDisplayLabel(
   }
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return Number.isFinite(n) ? formatTermShort(n) : value;
+  }
+  if (column === 'payment') {
+    return formatPaymentOption(value);
   }
   if (column === 'provider') {
     return providerDisplayName(value);
@@ -3067,6 +3071,8 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   // reflect any active hidden-column count.
   mountColumnsButton(bar);
 
+  mountSavingsStripeLegend(bar);
+
   // Sort-hidden indicator: show a note when the active sort column is hidden
   // so users aren't confused by inexplicable row ordering (#318).
   let sortHiddenNote = bar.querySelector<HTMLSpanElement>('.sort-hidden-note');
@@ -3084,6 +3090,30 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   } else {
     if (sortHiddenNote) sortHiddenNote.remove();
   }
+}
+
+// Rows with large savings carry a coloured stripe on their left edge
+// (tr.high-savings / tr.medium-savings, set in buildVariantRowMarkup from the
+// monthly savings). The legend names the two thresholds; mounted once.
+function mountSavingsStripeLegend(bar: HTMLElement): void {
+  if (bar.querySelector('.savings-stripe-legend')) return;
+  const legend = document.createElement('span');
+  legend.className = 'savings-stripe-legend';
+  const items: Array<[string, string]> = [
+    ['high', 'Over $1,000/mo savings'],
+    ['medium', 'Over $100/mo'],
+  ];
+  for (const [tone, text] of items) {
+    const item = document.createElement('span');
+    item.className = 'savings-stripe-legend-item';
+    const swatch = document.createElement('span');
+    swatch.className = `savings-stripe-swatch savings-stripe-swatch--${tone}`;
+    swatch.setAttribute('aria-hidden', 'true');
+    item.append(swatch, text);
+    legend.appendChild(item);
+  }
+  legend.title = 'Row marker on the left edge: monthly savings of the recommendation';
+  bar.appendChild(legend);
 }
 
 /**
@@ -3185,7 +3215,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
+  return formatPaymentOption(payment);
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3242,11 +3272,11 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'provider':
       return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
     case 'account':
-      return `<td>${escapeHtml(ctx.accountName)}</td>`;
+      return `<td><span class="cell-truncate" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
     case 'service':
-      return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
+      return `<td><span class="service-badge" title="${escapeHtml(rec.service)}">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
-      return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
     case 'capacity': {
       const cap = formatCapacity(rec.vcpu, rec.memory_gb);
       return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;
@@ -3256,7 +3286,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'count':
       return `<td class="num">${rec.count}</td>`;
     case 'term':
-      return `<td>${formatTerm(rec.term)}</td>`;
+      return `<td>${formatTermShort(rec.term)}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
@@ -3316,7 +3346,7 @@ function buildVariantRowMarkup(
   // modal pre-seeded with this rec. Only rendered when the session has
   // create:plans permission (mirrors the bulk Create Plan button gate).
   const planBtnHtml = canAccess('create', 'plans')
-    ? `<button type="button" class="btn btn-small rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">Plan</button>`
+    ? `<button type="button" class="btn-small icon-btn rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">${iconSvg('clipboard-check')}</button>`
     : '';
   const selectLabel = escapeHtml(
     [
@@ -3330,7 +3360,7 @@ function buildVariantRowMarkup(
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
-    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</td>`
+    ? `<td class="checkbox-col"><span class="rec-select-cell"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</span></td>`
     : `<td class="checkbox-col"></td>`;
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
@@ -3371,7 +3401,9 @@ function buildListMarkup(
     const ariaSort = sort.column === col.key
       ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
       : '';
-    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
+    // .th-inner is a nowrap flex row: when the table is squeezed the sort
+    // label wraps inside its button and the funnel stays in the cell.
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><span class="th-inner"><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</span></th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -3485,7 +3517,7 @@ function buildListMarkup(
           ? formatCurrency(selectedChildVariant.upfront_cost)
           : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
         const childTermDisplay = selectedChildVariant
-          ? formatTerm(selectedChildVariant.term)
+          ? formatTermShort(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
@@ -3554,7 +3586,7 @@ function buildListMarkup(
       : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
 
     const termDisplay = selectedVariant
-      ? formatTerm(selectedVariant.term)
+      ? formatTermShort(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
@@ -3632,7 +3664,7 @@ function buildListMarkup(
   }
 
   return `
-    <table>
+    <table class="table-compact table-sticky-start">
       <thead>
         <tr>
           ${checkboxColHeader}
