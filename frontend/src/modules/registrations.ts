@@ -128,6 +128,7 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     row.appendChild(createCell(formatDateTime(reg.created_at)));
 
     const statusTd = document.createElement('td');
+    statusTd.className = 'registration-status';
     statusTd.appendChild(createStatusBadge(reg.status));
     if (reg.has_credentials) {
       const credBadge = document.createElement('span');

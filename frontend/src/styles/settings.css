@@ -417,66 +417,119 @@ select.dirty {
 
 .target-cloud-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1rem 0;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+    padding: var(--cudly-sp-2) 0 var(--cudly-sp-4);
+    margin-bottom: var(--cudly-sp-4);
     border-bottom: 1px solid var(--cudly-border);
 }
 
 .target-cloud-row label {
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
 
+/* Target cloud: one segmented control that stays on one line (it used to
+ * stack into a column of separate pills on phones). */
 .target-cloud-pills {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-left: 0.5rem;
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface-muted);
 }
 
 .target-cloud-pills .target-cloud-pill {
     min-width: 4.5rem;
-    border: 1px solid #c8d6ea;
-    background: #f4f8fd;
-    color: #355273;
+    margin: 0;
+    padding: var(--cudly-sp-1) var(--cudly-sp-4);
+    border: 1px solid transparent;
+    border-radius: var(--cudly-r-sm);
+    background: transparent;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
+}
+
+.target-cloud-pills .target-cloud-pill:hover {
+    background: var(--cudly-surface);
+    border-color: var(--cudly-border);
+    color: var(--cudly-text);
 }
 
 .target-cloud-pills .target-cloud-pill[aria-pressed="true"],
 .target-cloud-pills .target-cloud-pill.selected {
-    background: var(--cudly-primary-hover);
-    border-color: var(--cudly-primary-hover);
-    color: white;
+    background: var(--cudly-primary);
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary-fg);
 }
 
+/* IaC download cards: icon tile on the left, readable name and a muted
+ * one-line description. */
 .federation-format-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+    gap: var(--cudly-sp-3);
 }
 
 .federation-format-buttons .btn-multiline {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+        "icon label"
+        "icon sublabel";
+    grid-template-rows: auto auto;
+    align-content: center;
+    align-items: start;
+    column-gap: var(--cudly-sp-3);
+    row-gap: 2px;
+    margin: 0;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
     text-align: left;
-    padding: 0.5rem 0.75rem;
-    flex: 1 1 11rem;
-    line-height: 1.2;
+    line-height: var(--cudly-lh-tight);
+}
+
+.federation-format-buttons .btn-multiline:hover {
+    border-color: var(--cudly-primary);
+    background: var(--cudly-surface);
+}
+
+.federation-format-buttons .btn-multiline .download-icon {
+    grid-area: icon;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    margin: 0;
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+    font-size: var(--cudly-fs-md);
+    align-self: center;
 }
 
 .federation-format-buttons .btn-multiline .label {
+    grid-area: label;
+    font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
 }
 
 .federation-format-buttons .btn-multiline .sublabel {
-    font-size: 0.72rem;
-    opacity: 0.72;
-    font-weight: normal;
-    margin-top: 0.15rem;
+    grid-area: sublabel;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-regular);
+    line-height: var(--cudly-lh-normal);
+    color: var(--cudly-text-muted);
 }
 
 .federation-account-row {
@@ -918,4 +971,66 @@ tr.override-disabled {
     margin: var(--cudly-sp-3) 0 0;
     font-size: var(--cudly-fs-sm);
     color: var(--cudly-text-muted);
+}
+
+/* Accounts page polish: registration filter label and status pills, and
+ * the override import row (file picker styled as a button, labels on the
+ * controls' line). */
+#accounts-registrations .controls-bar > label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.registration-status {
+    white-space: nowrap;
+}
+
+.override-transfer-controls label {
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.override-transfer-controls > input[type="file"] {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+}
+
+.override-transfer-controls > input[type="file"]::file-selector-button {
+    margin-right: var(--cudly-sp-3);
+    padding: var(--cudly-sp-1) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font: inherit;
+    font-weight: var(--cudly-fw-medium);
+    cursor: pointer;
+    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
+}
+
+.override-transfer-controls > input[type="file"]:hover::file-selector-button {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-text-subtle);
+}
+
+.override-transfer-controls > input[type="file"]:hover {
+    border-color: transparent;
+}
+
+/* Empty import status / report slots must not pad the card's bottom. The
+ * status is a live region, so it stays rendered (only its margin goes). */
+#override-import-status:empty {
+    margin: 0;
+}
+
+#override-import-report:empty {
+    display: none;
 }
