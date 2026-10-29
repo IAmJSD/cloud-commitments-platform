@@ -208,6 +208,16 @@ describe('dialog header close-X', () => {
       expect(closeXOf(d).getAttribute('data-modal-dismiss')).toBe('');
     });
 
+    test('the header keeps the modal-header class and renders the title before the X', () => {
+      const h3 = document.createElement('h3');
+      h3.textContent = 'RI Exchange';
+      const header = createModalHeader(h3, { closeLabel: 'Close dialog' });
+      expect(header.classList.contains('modal-header')).toBe(true);
+      expect(header.querySelector('h3')?.textContent).toBe('RI Exchange');
+      expect(header.firstElementChild).toBe(h3);
+      expect(header.lastElementChild?.matches('button.modal-close')).toBe(true);
+    });
+
     test('clicking the X closes the dialog and runs its onClose', () => {
       const { d } = buildRiExchangeDialog();
       const onClose = jest.fn();
