@@ -547,9 +547,17 @@ select.dirty {
  * registered account). Uses the accent border to pull the eye without
  * reading as an error. */
 .self-account-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-2) var(--cudly-sp-4);
     border-left: 3px solid var(--cudly-primary);
-    padding: 8px 12px;
-    margin-bottom: 8px;
+    border-radius: 0 var(--cudly-r-sm) var(--cudly-r-sm) 0;
+    background: var(--cudly-info-bg);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    margin-bottom: var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
 }
 
 .federation-account-info {
@@ -1033,4 +1041,10 @@ tr.override-disabled {
 
 #override-import-report:empty {
     display: none;
+}
+
+/* "No accounts configured." reads as plain muted text, not italic. */
+.accounts-list > .accounts-empty {
+    font-style: normal;
+    font-size: var(--cudly-fs-sm);
 }
