@@ -495,6 +495,188 @@
     border-color: var(--cudly-primary);
 }
 
+/* ---------------------------------------------------------------------------
+ * Signed-out screens (login, MFA code, forgot / reset password, first-admin
+ * setup, API-unreachable notice): authDialog.ts marks the gate .auth-screen.
+ * While one is up the app chrome is not rendered at all, and the gate is a
+ * centred card on a plain branded background with the logo above it.
+ * ------------------------------------------------------------------------- */
+body:has(> .auth-screen) #app {
+    display: none;
+}
+
+.auth-screen .modal-overlay {
+    flex-direction: column;
+    align-items: center;
+    justify-content: safe center;
+    gap: var(--cudly-sp-5);
+    padding: var(--cudly-sp-7) var(--cudly-sp-4);
+    overflow-y: auto;
+    background:
+        radial-gradient(60rem 30rem at 50% -10%, var(--cudly-info-bg), transparent 70%),
+        var(--cudly-bg);
+}
+
+.auth-brand {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: var(--cudly-sp-2);
+    flex-shrink: 0;
+}
+
+.auth-brand-mark {
+    grid-row: span 2;
+    color: var(--cudly-primary);
+}
+
+.auth-brand-name {
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
+}
+
+.auth-brand-tagline {
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
+
+.auth-screen .modal-content {
+    flex-shrink: 0;
+    width: 400px;
+    max-width: 100%;
+    max-height: none;
+    overflow: visible;
+    padding: var(--cudly-sp-6);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-lg);
+}
+
+.auth-screen .modal-content h2 {
+    margin-bottom: var(--cudly-sp-5);
+    text-align: center;
+    font-size: var(--cudly-fs-xl);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content h3 {
+    margin-bottom: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content p {
+    margin-bottom: var(--cudly-sp-4);
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+}
+
+.auth-screen .modal-content label {
+    display: block;
+    margin-bottom: var(--cudly-sp-4);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    color: var(--cudly-text);
+}
+
+.auth-screen .modal-content :is(input[type="email"], input[type="password"], input[type="text"]) {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    margin-top: var(--cudly-sp-1);
+    padding: 0 var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+}
+
+.auth-screen .modal-content .password-input-wrapper input {
+    padding-right: 2.75rem;
+}
+
+.auth-screen .modal-content .toggle-password {
+    top: calc(50% + var(--cudly-sp-1) / 2);
+}
+
+.auth-screen .modal-content :is(input[type="email"], input[type="password"], input[type="text"]):focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 3px var(--cudly-info-bg);
+}
+
+/* Full-width primary action. */
+.auth-screen .modal-content button.primary {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    margin-top: var(--cudly-sp-2);
+    border-radius: var(--cudly-r-md);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content a {
+    color: var(--cudly-primary);
+    font-weight: var(--cudly-fw-medium);
+    text-decoration: none;
+}
+
+.auth-screen .modal-content a:hover {
+    text-decoration: underline;
+}
+
+/* "Forgot password?" sits under the password field, right-aligned. */
+.auth-screen .modal-content p:has(> #forgot-password-link) {
+    margin-top: calc(-1 * var(--cudly-sp-2));
+    text-align: right;
+}
+
+/* Secondary way out ("Back to login", "Already have an account?") under
+ * the primary button. */
+.auth-screen .modal-content :is(button, form) + p:has(> a:only-child) {
+    margin: var(--cudly-sp-4) 0 0;
+    text-align: center;
+}
+
+.auth-screen .password-requirements {
+    margin: 0 0 var(--cudly-sp-4);
+    border-color: var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.auth-screen .error-message,
+.auth-screen .success-message {
+    border-radius: var(--cudly-r-md);
+    font-size: var(--cudly-fs-sm);
+}
+
+.auth-screen .modal-content code {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+    .auth-screen .modal-overlay {
+        padding: var(--cudly-sp-6) var(--cudly-sp-3);
+    }
+
+    .auth-screen .modal-content {
+        width: 100%;
+        padding: var(--cudly-sp-5);
+        border-radius: var(--cudly-r-lg);
+    }
+}
+
+/* Keep the alert-to-button gap (base.css) over the button's own margin. */
+.auth-screen .modal-content .error-message:not(.hidden) ~ button.primary,
+.auth-screen .modal-content .success-message:not(.hidden) + button.primary {
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Mid-width desktops (tablet landscape, small laptops): the top bar drops
  * the email text (the avatar stays, and the button keeps the address as its
  * accessible name and tooltip) and the brand stops reserving the sidebar
