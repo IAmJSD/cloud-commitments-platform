@@ -70,7 +70,9 @@
 }
 
 .ladder-config-dialog .ladder-field textarea {
-    min-height: 6rem;
+    /* Room for a two-step schedule without scrolling. */
+    min-height: 10rem;
+    line-height: 1.45;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.85rem;
 }

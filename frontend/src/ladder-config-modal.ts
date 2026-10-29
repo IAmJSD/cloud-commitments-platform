@@ -124,7 +124,7 @@ export function renderLadderConfigModal(): string {
 
         <div class="ladder-field ladder-field-full">
           <label for="ladder-cfg-ramp-schedule">Ramp Schedule (JSON)</label>
-          <textarea id="ladder-cfg-ramp-schedule" rows="4" aria-describedby="ladder-cfg-ramp-schedule-hint"
+          <textarea id="ladder-cfg-ramp-schedule" rows="8" spellcheck="false" aria-describedby="ladder-cfg-ramp-schedule-hint"
                     placeholder='{"steps":[{"after_days":0,"fraction":1.0}]}'></textarea>
           <span id="ladder-cfg-ramp-schedule-hint" class="form-hint">
             An array of steps. Each step has <code>after_days</code> (integer) and
