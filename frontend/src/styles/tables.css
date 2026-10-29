@@ -332,7 +332,7 @@ tr.history-row-highlight:hover {
 }
 
 .table-compact .service-badge {
-    max-width: 9rem;
+    max-width: 8rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -564,16 +564,42 @@ th .history-column-filter-btn:focus-visible {
     border-color: var(--cudly-success);
 }
 
-/* Long failure hints in the purchase history action column wrap at a
- * readable width instead of widening the sticky column. */
+/* Purchase history: an operator hint on a failed row is a status note
+ * under the pill (like the approver and failure details), muted, with a
+ * warning icon; long provider error codes break instead of widening the
+ * column. */
 .table-compact .history-ops-hint {
-    display: inline-block;
-    /* A fixed width (not max-width): with overflow-wrap: anywhere the
-       min-content would collapse and push the Retry link out of the cell. */
-    width: 13rem;
-    vertical-align: middle;
-    /* AWS / Azure error codes are long unbroken words. */
+    max-width: 16rem;
+    margin-top: 0.35rem;
+    color: var(--cudly-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.25;
     overflow-wrap: anywhere;
+}
+
+.table-compact .history-ops-hint > .icon {
+    color: var(--cudly-warn-fg);
+}
+
+/* The history's sticky Plan / action column stays narrow: plan names
+ * truncate, links and buttons wrap as whole units. */
+.table-compact td.history-plan-cell {
+    max-width: 14rem;
+    white-space: normal;
+}
+
+.history-plan-cell :is(button, a, .history-retry-link) {
+    white-space: nowrap;
+}
+
+.history-plan-cell .cell-truncate {
+    max-width: 100%;
+}
+
+.table-compact .history-retry-btn {
+    height: 1.75rem;
+    margin: 0;
+    padding: 0 var(--cudly-sp-2);
 }
 
 .table-compact :is(.history-approver, .status-detail) {
@@ -796,5 +822,116 @@ th .history-column-filter-btn:focus-visible {
 
     .table-cards-mobile .cell-truncate {
         max-width: 100%;
+    }
+}
+
+/* Opportunities bottom action bar (#recommendations-action-box, built in
+ * recommendations.ts mountBottomActionBox): a tidy sticky footer. The
+ * selection summary sits on the left with the muted disabled-state hint
+ * under it; the labelled Capacity input and Purchase / Create Plan sit on
+ * the right at one control height. Grid areas keep that order whatever
+ * the DOM order is; hidden buttons drop out. */
+.recommendations-action-box {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+        "summary capacity purchase plan"
+        "hint    capacity purchase plan"
+        "banner  banner   banner   banner";
+    align-items: center;
+    column-gap: var(--cudly-sp-3);
+    row-gap: 0;
+    min-height: 0;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+}
+
+.recommendations-action-box > .recommendations-action-summary {
+    grid-area: summary;
+    margin-right: 0;
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+}
+
+.recommendations-action-box > .recommendations-action-disabled-hint {
+    grid-area: hint;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-xs);
+}
+
+.recommendations-action-box > label {
+    grid-area: capacity;
+    gap: var(--cudly-sp-2);
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    white-space: nowrap;
+}
+
+.recommendations-action-box > #bulk-purchase-btn {
+    grid-area: purchase;
+}
+
+.recommendations-action-box > #create-plan-btn {
+    grid-area: plan;
+}
+
+.recommendations-action-box > .info-banner {
+    grid-area: banner;
+    margin: var(--cudly-sp-2) 0 0;
+}
+
+/* One control height for the input and both buttons. */
+.recommendations-action-box > label > input,
+.recommendations-action-box > button {
+    box-sizing: border-box;
+    height: 2.25rem;
+}
+
+.recommendations-action-box > label > input {
+    width: 4.5rem;
+    padding: 0 var(--cudly-sp-2);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.recommendations-action-box > label > input:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 1px;
+}
+
+.recommendations-action-box > button {
+    padding: 0 var(--cudly-sp-4);
+    white-space: nowrap;
+}
+
+/* The bar is sticky in normal flow, so it never covers the last rows once
+ * the page is scrolled to the end; the list needs only a normal gap above
+ * it, not the bar's whole height (the old fixed-bar padding left a large
+ * empty band). */
+#recommendations-list {
+    padding-bottom: var(--cudly-sp-4);
+}
+
+@media (max-width: 640px) {
+    .recommendations-action-box {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-areas:
+            "summary  summary"
+            "hint     hint"
+            "capacity capacity"
+            "purchase plan"
+            "banner   banner";
+        row-gap: var(--cudly-sp-2);
+    }
+
+    .recommendations-action-box > button {
+        min-width: 0;
+        padding: 0 var(--cudly-sp-2);
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 }
