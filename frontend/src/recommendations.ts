@@ -3397,7 +3397,9 @@ function buildListMarkup(
     const ariaSort = sort.column === col.key
       ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
       : '';
-    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
+    // .th-inner is a nowrap flex row: when the table is squeezed the sort
+    // label wraps inside its button and the funnel stays in the cell.
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><span class="th-inner"><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</span></th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
