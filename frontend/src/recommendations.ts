@@ -3067,6 +3067,8 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   // reflect any active hidden-column count.
   mountColumnsButton(bar);
 
+  mountSavingsStripeLegend(bar);
+
   // Sort-hidden indicator: show a note when the active sort column is hidden
   // so users aren't confused by inexplicable row ordering (#318).
   let sortHiddenNote = bar.querySelector<HTMLSpanElement>('.sort-hidden-note');
@@ -3084,6 +3086,30 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   } else {
     if (sortHiddenNote) sortHiddenNote.remove();
   }
+}
+
+// Rows with large savings carry a coloured stripe on their left edge
+// (tr.high-savings / tr.medium-savings, set in buildVariantRowMarkup from the
+// monthly savings). The legend names the two thresholds; mounted once.
+function mountSavingsStripeLegend(bar: HTMLElement): void {
+  if (bar.querySelector('.savings-stripe-legend')) return;
+  const legend = document.createElement('span');
+  legend.className = 'savings-stripe-legend';
+  const items: Array<[string, string]> = [
+    ['high', 'Over $1,000/mo savings'],
+    ['medium', 'Over $100/mo'],
+  ];
+  for (const [tone, text] of items) {
+    const item = document.createElement('span');
+    item.className = 'savings-stripe-legend-item';
+    const swatch = document.createElement('span');
+    swatch.className = `savings-stripe-swatch savings-stripe-swatch--${tone}`;
+    swatch.setAttribute('aria-hidden', 'true');
+    item.append(swatch, text);
+    legend.appendChild(item);
+  }
+  legend.title = 'Row marker on the left edge: monthly savings of the recommendation';
+  bar.appendChild(legend);
 }
 
 /**
@@ -3316,7 +3342,7 @@ function buildVariantRowMarkup(
   // modal pre-seeded with this rec. Only rendered when the session has
   // create:plans permission (mirrors the bulk Create Plan button gate).
   const planBtnHtml = canAccess('create', 'plans')
-    ? `<button type="button" class="btn btn-small rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">Plan</button>`
+    ? `<button type="button" class="btn-small icon-btn rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">${iconSvg('clipboard-check')}</button>`
     : '';
   const selectLabel = escapeHtml(
     [
@@ -3330,7 +3356,7 @@ function buildVariantRowMarkup(
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
-    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</td>`
+    ? `<td class="checkbox-col"><span class="rec-select-cell"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</span></td>`
     : `<td class="checkbox-col"></td>`;
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
