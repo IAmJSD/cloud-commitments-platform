@@ -484,6 +484,74 @@ select.dirty {
     padding: 0.5rem 0;
 }
 
+/* Accounts page polish: registration filter label and status pills, and
+ * the override import row (file picker styled as a button, labels on the
+ * controls' line). */
+#accounts-registrations .controls-bar > label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.registration-status {
+    white-space: nowrap;
+}
+
+.override-transfer-controls label {
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+}
+
+.override-transfer-controls > input[type="file"] {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    cursor: pointer;
+}
+
+.override-transfer-controls > input[type="file"]::file-selector-button {
+    margin-right: var(--cudly-sp-3);
+    padding: var(--cudly-sp-1) var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-sm);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    font: inherit;
+    font-weight: var(--cudly-fw-medium);
+    cursor: pointer;
+    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
+}
+
+.override-transfer-controls > input[type="file"]:hover::file-selector-button {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-text-subtle);
+}
+
+.override-transfer-controls > input[type="file"]:hover {
+    border-color: transparent;
+}
+
+/* Empty import status / report slots must not pad the card's bottom. The
+ * status is a live region, so it stays rendered (only its margin goes). */
+#override-import-status:empty {
+    margin: 0;
+}
+
+#override-import-report:empty {
+    display: none;
+}
+
+/* "No accounts configured." reads as plain muted text, not italic. */
+.accounts-list > .accounts-empty {
+    font-style: normal;
+    font-size: var(--cudly-fs-sm);
+}
+
 /* Per-provider account block dimming when the provider is disabled in Global Config.
  * We dim each direct child except the banner so the warning stays fully readable
  * (CSS opacity is multiplicative down the tree — a child cannot exceed its parent's
@@ -781,72 +849,4 @@ tr.override-disabled {
 
 .override-transfer-account {
     white-space: nowrap;
-}
-
-/* Accounts page polish: registration filter label and status pills, and
- * the override import row (file picker styled as a button, labels on the
- * controls' line). */
-#accounts-registrations .controls-bar > label {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--cudly-sp-2);
-    margin: 0;
-    font-size: var(--cudly-fs-sm);
-}
-
-.registration-status {
-    white-space: nowrap;
-}
-
-.override-transfer-controls label {
-    margin: 0;
-    font-size: var(--cudly-fs-sm);
-}
-
-.override-transfer-controls > input[type="file"] {
-    padding: 0;
-    border: none;
-    border-radius: 0;
-    background: transparent;
-    font-size: var(--cudly-fs-sm);
-    color: var(--cudly-text-muted);
-    cursor: pointer;
-}
-
-.override-transfer-controls > input[type="file"]::file-selector-button {
-    margin-right: var(--cudly-sp-3);
-    padding: var(--cudly-sp-1) var(--cudly-sp-3);
-    border: 1px solid var(--cudly-border-strong);
-    border-radius: var(--cudly-r-sm);
-    background: var(--cudly-surface);
-    color: var(--cudly-text);
-    font: inherit;
-    font-weight: var(--cudly-fw-medium);
-    cursor: pointer;
-    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
-}
-
-.override-transfer-controls > input[type="file"]:hover::file-selector-button {
-    background: var(--cudly-surface-muted);
-    border-color: var(--cudly-text-subtle);
-}
-
-.override-transfer-controls > input[type="file"]:hover {
-    border-color: transparent;
-}
-
-/* Empty import status / report slots must not pad the card's bottom. The
- * status is a live region, so it stays rendered (only its margin goes). */
-#override-import-status:empty {
-    margin: 0;
-}
-
-#override-import-report:empty {
-    display: none;
-}
-
-/* "No accounts configured." reads as plain muted text, not italic. */
-.accounts-list > .accounts-empty {
-    font-style: normal;
-    font-size: var(--cudly-fs-sm);
 }
