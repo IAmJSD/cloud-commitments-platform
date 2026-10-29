@@ -3268,11 +3268,11 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'provider':
       return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
     case 'account':
-      return `<td><span class="cell-truncate" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
+      return `<td><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
     case 'service':
       return `<td><span class="service-badge" title="${escapeHtml(rec.service)}">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
-      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
+      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
     case 'capacity': {
       const cap = formatCapacity(rec.vcpu, rec.memory_gb);
       return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;
@@ -3832,14 +3832,29 @@ interface ColumnVisibilitySchema {
   hidden: string[];
 }
 
-/** Load hidden columns from localStorage. Returns empty set on any error. Exported for tests. */
+// Columns hidden until the user picks their own set in the Columns menu.
+// With all sixteen columns the table is ~1700px wide, so at a 1440px
+// window Monthly Savings and everything after it sat behind the sideways
+// scroll. These five are the least needed to choose a commitment: capacity
+// restates the resource type, monthly cost and on-demand monthly are the
+// inputs behind Monthly Savings, Effective % is savings over on-demand, and
+// the 7-day coverage sparkline is AWS-only. All stay one click away.
+export const DEFAULT_HIDDEN_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set<state.RecommendationsColumnId>([
+  'capacity', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct', 'usage_history',
+]);
+
+/**
+ * Load hidden columns from localStorage. A saved choice (even "show all")
+ * wins; with nothing saved, or an unreadable entry, the defaults above
+ * apply. Exported for tests.
+ */
 export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
   try {
     const raw = localStorage.getItem(COLUMN_VISIBILITY_LS_KEY);
-    if (!raw) return new Set();
+    if (!raw) return new Set(DEFAULT_HIDDEN_COLUMNS);
     const parsed = JSON.parse(raw) as Partial<ColumnVisibilitySchema>;
-    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set();
-    if (!Array.isArray(parsed.hidden)) return new Set();
+    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set(DEFAULT_HIDDEN_COLUMNS);
+    if (!Array.isArray(parsed.hidden)) return new Set(DEFAULT_HIDDEN_COLUMNS);
     // Whitelist: only accept known toggleable column keys so stale/unknown
     // values from future versions are silently dropped.
     const valid = parsed.hidden.filter(
@@ -3847,7 +3862,7 @@ export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
     );
     return new Set(valid);
   } catch {
-    return new Set();
+    return new Set(DEFAULT_HIDDEN_COLUMNS);
   }
 }
 

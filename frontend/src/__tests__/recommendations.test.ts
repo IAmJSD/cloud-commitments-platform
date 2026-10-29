@@ -6376,32 +6376,43 @@ describe('Column visibility (issue #318)', () => {
   // --- loadColumnVisibility ---
 
   describe('loadColumnVisibility', () => {
-    test('returns empty set when localStorage key is absent', () => {
+    // Nothing saved (or an unreadable entry): the default hidden set, which
+    // keeps Monthly Savings in view at a 1440px window.
+    const DEFAULTS = ['capacity', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'usage_history'];
+
+    test('returns the default hidden columns when localStorage key is absent', () => {
       // Default mock: getItem returns null
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set on JSON parse error', () => {
+    test('returns the default hidden columns on JSON parse error', () => {
       localStorageMock.getItem.mockReturnValue('{not valid json}');
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when schemaVersion is wrong', () => {
+    test('returns the default hidden columns when schemaVersion is wrong', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 99, hidden: ['count'] }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when hidden is not an array', () => {
+    test('returns the default hidden columns when hidden is not an array', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 1, hidden: 'count' }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
+    });
+
+    test('a saved "show every column" choice beats the defaults', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: [] }),
+      );
+      expect(loadColumnVisibility().size).toBe(0);
     });
 
     test('returns the correct hidden set for valid JSON', () => {
