@@ -12,6 +12,7 @@ import { deleteAccount } from './settings-account-delete';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { createIcon } from './icons';
+import { rowIconButton } from './lib/row-icon-button';
 import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
@@ -632,47 +633,39 @@ function renderAccountsList(
 
     const actionsTd = document.createElement('td');
     actionsTd.className = 'account-actions';
+    // Compact icon buttons in one non-wrapping row, like the Users rows.
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
 
-    const editBtn = document.createElement('button');
-    editBtn.type = 'button';
-    editBtn.className = 'btn btn-small';
-    editBtn.textContent = 'Edit';
-    editBtn.setAttribute('aria-label', `Edit ${accountLabel}`);
+    const editBtn = rowIconButton({
+      icon: 'edit', text: 'Edit', title: 'Edit account', ariaLabel: `Edit ${accountLabel}`,
+    });
     editBtn.addEventListener('click', () => openAccountModal(provider, account));
-    actionsTd.appendChild(editBtn);
+    actions.appendChild(editBtn);
 
-    const testBtn = document.createElement('button');
-    testBtn.type = 'button';
-    testBtn.className = 'btn btn-small';
-    testBtn.textContent = 'Test';
-    testBtn.setAttribute('aria-label', `Test credentials for ${accountLabel}`);
+    const testBtn = rowIconButton({
+      icon: 'zap', text: 'Test', title: 'Test credentials', ariaLabel: `Test credentials for ${accountLabel}`,
+    });
     testBtn.addEventListener('click', () => void testAccount(account.id, accountLabel, testBtn));
-    actionsTd.appendChild(testBtn);
+    actions.appendChild(testBtn);
 
-    const overridesBtn = document.createElement('button');
-    overridesBtn.type = 'button';
-    overridesBtn.className = 'btn btn-small';
-    overridesBtn.textContent = 'Overrides';
-    overridesBtn.setAttribute('aria-label', `Service overrides for ${accountLabel}`);
+    const overridesBtn = rowIconButton({
+      icon: 'sliders', text: 'Overrides', title: 'Service overrides', ariaLabel: `Service overrides for ${accountLabel}`,
+    });
     overridesBtn.addEventListener('click', () => openAccountOverridesModal(account));
-    actionsTd.appendChild(overridesBtn);
+    actions.appendChild(overridesBtn);
 
-    // Destructive Delete lives in its own subgroup to isolate it from the
-    // routine actions. A small spacer + btn-destructive class (from P2)
-    // signal "be careful".
-    const spacer = document.createElement('span');
-    spacer.className = 'account-actions-spacer';
-    spacer.setAttribute('aria-hidden', 'true');
-    actionsTd.appendChild(spacer);
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.type = 'button';
-    deleteBtn.className = 'btn btn-small btn-destructive';
-    deleteBtn.textContent = 'Delete';
-    deleteBtn.setAttribute('aria-label', `Delete ${accountLabel}`);
+    // Destructive Delete: the subtle danger icon variant, set slightly apart
+    // from the routine actions. .btn-destructive stays as the hook that
+    // identifies the row's delete action.
+    const deleteBtn = rowIconButton({
+      icon: 'trash-2', text: 'Delete', title: 'Delete account', ariaLabel: `Delete ${accountLabel}`,
+      className: 'btn-destructive btn-danger account-delete-btn',
+    });
     deleteBtn.addEventListener('click', () => void deleteAccount(account, provider, loadAccountsForProvider));
-    actionsTd.appendChild(deleteBtn);
+    actions.appendChild(deleteBtn);
 
+    actionsTd.appendChild(actions);
     tr.appendChild(actionsTd);
     tbody.appendChild(tr);
   });
@@ -1409,13 +1402,29 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
  * clicked — still gets feedback.
  */
 async function testAccount(accountId: string, accountLabel: string, btn: HTMLButtonElement): Promise<void> {
-  const original = btn.textContent;
+  // The row action is an icon button: progress and result go to its hidden
+  // text, its tooltip and a data-test-result tint; the toasts carry the
+  // message itself.
+  const labelEl = btn.querySelector<HTMLElement>('.sr-only') ?? btn;
+  const original = labelEl.textContent;
+  const originalTitle = btn.title;
+  const show = (text: string, result?: 'ok' | 'failed'): void => {
+    labelEl.textContent = text;
+    btn.title = text;
+    if (result) btn.dataset['testResult'] = result;
+  };
+  const restore = (): void => {
+    labelEl.textContent = original;
+    btn.title = originalTitle;
+    delete btn.dataset['testResult'];
+    btn.disabled = false;
+  };
   btn.disabled = true;
-  btn.textContent = 'Testing...';
+  show('Testing...');
   showToast({ message: `Testing credentials for ${accountLabel}…`, kind: 'info', timeout: 3_000 });
   try {
     const result = await api.testAccountCredentials(accountId);
-    btn.textContent = result.ok ? 'OK' : 'Failed';
+    show(result.ok ? 'OK' : 'Failed', result.ok ? 'ok' : 'failed');
     if (result.ok) {
       const detail = result.message ? `: ${result.message}` : '';
       showToast({ message: `Credentials OK for ${accountLabel}${detail}`, kind: 'success', timeout: 5_000 });
@@ -1426,18 +1435,12 @@ async function testAccount(accountId: string, accountLabel: string, btn: HTMLBut
         timeout: null,
       });
     }
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.disabled = false;
-    }, 3000);
+    setTimeout(restore, 3000);
   } catch (err: unknown) {
-    btn.textContent = 'Error';
+    show('Error', 'failed');
     const msg = err instanceof Error ? err.message : String(err);
     showToast({ message: `Failed to test credentials for ${accountLabel}: ${msg}`, kind: 'error', timeout: null });
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.disabled = false;
-    }, 3000);
+    setTimeout(restore, 3000);
   }
 }
 
