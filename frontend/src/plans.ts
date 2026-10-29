@@ -168,7 +168,7 @@ function renderPlannedPurchasesInternal(): void {
     : filtered.map(purchase => renderPlannedPurchaseRow(purchase)).join('');
 
   container.innerHTML = `
-    <table class="planned-purchases-table table-compact">
+    <table class="planned-purchases-table table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Plan</th>
@@ -466,13 +466,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="num">${upfrontShown}</td>
       <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
-      <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
-      </td>
+      <td class="actions"><span class="row-actions">
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small icon-btn" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger icon-btn" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
+      </span></td>
     </tr>
   `;
 }

@@ -416,7 +416,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
   };
 
   container.innerHTML = `
-    <table class="table-compact">
+    <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
           <th>RI ID</th>
@@ -498,8 +498,8 @@ function renderAzureRIsTable(
 
   container.textContent = '';
   const table = document.createElement('table');
-  table.className = 'table-compact';
   const canExchange = canPreviewAzureExchange();
+  table.className = canExchange ? 'table-compact table-sticky-start' : 'table-compact';
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
@@ -982,7 +982,7 @@ function renderRecommendations(container: HTMLElement): void {
   }));
 
   container.innerHTML = `
-    <table class="table-compact">
+    <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
           <th>Source RI${filterBtn('source_ri_id')}</th>
@@ -2093,7 +2093,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '</tr>';
   }).join('');
 
-  const tableHTML = '<table class="table-compact">'
+  const tableHTML = '<table class="table-compact table-sticky-end">'
     + '<thead><tr>'
     + '<th>Date</th><th>Source Type</th><th>Target Type</th><th class="num">Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'

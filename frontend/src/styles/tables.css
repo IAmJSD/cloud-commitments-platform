@@ -122,7 +122,9 @@ tr.history-row-highlight:hover {
     width: 100%;
     background: var(--cudly-surface);
     border-radius: var(--cudly-r-md);
-    overflow: hidden;
+    /* clip, not hidden: hidden made the table its own (non-scrolling)
+       scroll container, so the sticky actions column stuck to it. */
+    overflow: clip;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
@@ -320,14 +322,9 @@ tr.history-row-highlight:hover {
 }
 
 /* Header: one line, with the sort chevron and the filter funnel inline to
- * the right of the label. Only a sort button's label may wrap (inside the
- * button, so the chevron and funnel still sit beside it). */
+ * the right of the label. */
 .table-compact th {
     white-space: nowrap;
-}
-
-.table-compact th .sort-btn > span:first-child {
-    white-space: normal;
 }
 
 th.sortable .sort-btn {
@@ -425,4 +422,114 @@ th .history-column-filter-btn:focus-visible {
     align-items: center;
     gap: var(--cudly-sp-2);
     margin-top: var(--cudly-sp-3);
+}
+
+/* Sticky selection and action columns (ui/modernize-tables). A wide table
+ * scrolls sideways inside its card (#703); its leading checkbox column
+ * (.table-sticky-start) and trailing actions column (.table-sticky-end)
+ * stay put, so Approve / Cancel / Run now are never behind the scroll.
+ * The cells need an opaque background, which follows the row's own
+ * (hover, selected, summary, deep-link highlight). */
+.table-sticky-start tr > :first-child,
+.table-sticky-end tr > :last-child {
+    position: sticky;
+    z-index: 1;
+}
+
+.table-sticky-start tr > :first-child {
+    left: 0;
+}
+
+.table-sticky-end tr > :last-child {
+    right: 0;
+}
+
+.table-sticky-start tr > td:first-child,
+.table-sticky-end tr > td:last-child {
+    background-color: var(--cudly-surface);
+}
+
+.table-sticky-start tr:is(:hover, .selected, .rec-cell-summary-row, .history-row-highlight) > td:first-child,
+.table-sticky-end tr:is(:hover, .selected, .rec-cell-summary-row, .history-row-highlight) > td:last-child {
+    background-color: inherit;
+}
+
+/* A soft divider shadow on the inner edge, only while columns are hidden
+ * behind the sticky cell. lib/table-scroll.ts marks the scroller (the
+ * table itself, or its container) with .scroll-hint-left / -right. */
+.table-sticky-start tr > :first-child::after,
+.table-sticky-end tr > :last-child::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--cudly-dur-fast) var(--cudly-ease);
+}
+
+.table-sticky-start tr > :first-child::after {
+    right: -8px;
+    background: linear-gradient(to right, rgb(15 23 42 / 0.08), transparent);
+}
+
+.table-sticky-end tr > :last-child::before {
+    left: -8px;
+    background: linear-gradient(to left, rgb(15 23 42 / 0.08), transparent);
+}
+
+:is(.scroll-hint-left .table-sticky-start, .table-sticky-start.scroll-hint-left) tr > :first-child::after,
+:is(.scroll-hint-right .table-sticky-end, .table-sticky-end.scroll-hint-right) tr > :last-child::before {
+    opacity: 1;
+}
+
+/* The sticky column replaces the edge fade on its side: the fade would
+ * otherwise dim the very buttons that stay in view. */
+.scroll-hint-left:has(.table-sticky-start),
+.table-sticky-start.scroll-hint-left {
+    --scroll-hint-l: #000;
+}
+
+.scroll-hint-right:has(.table-sticky-end),
+.table-sticky-end.scroll-hint-right {
+    --scroll-hint-r: #000;
+}
+
+/* A row's action buttons stay on one line. */
+.table-sticky-end td:last-child {
+    white-space: nowrap;
+}
+
+/* Row actions inside the compact tables: 28px icon squares (and the one
+ * labelled "Run now" button at the same height), no trailing margins. */
+.table-compact .row-actions .btn-small {
+    margin: 0;
+}
+
+.table-compact .row-actions .row-action-run {
+    height: 1.75rem;
+    padding: 0 var(--cudly-sp-2);
+}
+
+.table-compact .history-approve-btn {
+    color: var(--cudly-success-fg);
+}
+
+.table-compact .history-approve-btn:hover {
+    background: var(--cudly-success-bg);
+    border-color: var(--cudly-success);
+}
+
+/* Long failure hints in the purchase history action column wrap at a
+ * readable width instead of widening the sticky column. */
+.table-compact .history-ops-hint {
+    display: inline-block;
+    max-width: 13rem;
+    vertical-align: middle;
+}
+
+.table-compact :is(.history-approver, .status-detail) {
+    max-width: 16rem;
+    overflow-wrap: break-word;
 }
