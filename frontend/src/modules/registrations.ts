@@ -11,6 +11,7 @@ import { badgeClass, statusLabel, statusTone } from '../lib/status-badge';
 import { showToast } from '../toast';
 import { confirmDialog } from '../confirmDialog';
 import { friendlyError } from '../api/errors';
+import { rowIconButton } from '../lib/row-icon-button';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -138,18 +139,26 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     row.appendChild(statusTd);
 
     const actionsTd = document.createElement('td');
+    // One non-wrapping row: Approve stays a small text button (the main
+    // call to action), Reject and Delete are compact icon buttons.
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const regLabel = reg.account_name || reg.external_id;
     if (reg.status === 'pending') {
       const approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
       approveBtn.className = 'btn btn-small btn-primary';
       approveBtn.textContent = 'Approve';
+      approveBtn.setAttribute('aria-label', `Approve registration ${regLabel}`);
       approveBtn.addEventListener('click', () => handleApprove(reg));
-      actionsTd.appendChild(approveBtn);
+      actions.appendChild(approveBtn);
 
-      const rejectBtn = document.createElement('button');
-      rejectBtn.className = 'btn btn-small btn-danger ml-xs';
-      rejectBtn.textContent = 'Reject';
+      const rejectBtn = rowIconButton({
+        icon: 'x-circle', text: 'Reject', title: 'Reject registration',
+        ariaLabel: `Reject registration ${regLabel}`, className: 'btn-warning',
+      });
       rejectBtn.addEventListener('click', () => void handleReject(reg));
-      actionsTd.appendChild(rejectBtn);
+      actions.appendChild(rejectBtn);
     } else if (reg.status === 'approved') {
       // After deleteAccount resets the linked registration back to pending, and
       // the 000021 migration healed historical drift, an approved row always has
@@ -157,20 +166,22 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
       const span = document.createElement('span');
       span.className = 'text-muted';
       span.textContent = 'Account created';
-      actionsTd.appendChild(span);
+      actions.appendChild(span);
     } else if (reg.rejection_reason) {
       const span = document.createElement('span');
       span.className = 'text-muted';
       span.textContent = 'Rejected';
       span.title = reg.rejection_reason;
-      actionsTd.appendChild(span);
+      actions.appendChild(span);
     }
     // Delete button (available for any status)
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn btn-small ml-xs';
-    deleteBtn.textContent = 'Delete';
+    const deleteBtn = rowIconButton({
+      icon: 'trash-2', text: 'Delete', title: 'Delete registration',
+      ariaLabel: `Delete registration ${regLabel}`, className: 'btn-danger',
+    });
     deleteBtn.addEventListener('click', () => void handleDelete(reg));
-    actionsTd.appendChild(deleteBtn);
+    actions.appendChild(deleteBtn);
+    actionsTd.appendChild(actions);
 
     row.appendChild(actionsTd);
     tbody.appendChild(row);

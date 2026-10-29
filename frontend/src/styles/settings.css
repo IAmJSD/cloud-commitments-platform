@@ -721,3 +721,50 @@ tr.override-disabled {
 .override-transfer-account {
     white-space: nowrap;
 }
+
+/* Admin > Accounts row actions: compact icon buttons in one row, as on the
+ * Users rows. The cell stays a table cell (components.css made it a flex
+ * box, which pulled its bottom border out of line with the row). */
+.accounts-table td.account-actions {
+    display: table-cell;
+    width: 1%;
+    white-space: nowrap;
+}
+
+/* Delete keeps .btn-destructive as its hook but uses the subtle danger look
+ * (tinted, red icon) instead of a solid red block next to neutral actions;
+ * it fills red only on hover. A little extra space sets it apart. */
+.row-actions button.icon-btn.btn-destructive {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
+.row-actions button.icon-btn.btn-destructive:hover {
+    background: var(--cudly-error);
+    border-color: var(--cudly-error);
+    color: var(--cudly-primary-fg);
+}
+
+.row-actions .account-delete-btn {
+    margin-left: var(--cudly-sp-2);
+}
+
+/* Test credentials result, shown for a few seconds after the check. */
+.row-actions button[data-test-result="ok"] {
+    border-color: var(--cudly-success);
+    color: var(--cudly-success);
+}
+
+.row-actions button[data-test-result="failed"] {
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
+/* Registrations: Approve is the one text button in the row; match the icon
+ * buttons' height so the row lines up. */
+.row-actions .btn-small.btn-primary {
+    height: 1.75rem;
+    margin: 0;
+    padding: 0 var(--cudly-sp-3);
+}
