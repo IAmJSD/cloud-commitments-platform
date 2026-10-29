@@ -41,6 +41,7 @@ func submitRegistrationRequest() *events.LambdaFunctionURLRequest {
 func TestSubmitRegistration_DuplicatePending_Returns409WithoutEmail(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("CreateAccountRegistration", ctx, mock.Anything).
 		Return(fmt.Errorf("%w: %w", config.ErrDuplicatePendingRegistration,
 			&pgconn.PgError{Code: "23505", ConstraintName: "idx_account_registrations_pending_unique"})).Once()
@@ -73,6 +74,7 @@ func TestSubmitRegistration_NonDuplicateErrors_Return500(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("CreateAccountRegistration", ctx, mock.Anything).Return(storeErr).Once()
 			notifier := &countingRegistrationNotifier{}
 			h := &Handler{config: store, emailNotifier: notifier}
@@ -96,6 +98,7 @@ func TestSubmitRegistration_NonDuplicateErrors_Return500(t *testing.T) {
 func TestSubmitRegistration_TokenCollision_RetriesWithNewToken(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	var tokens []string
 	collision := fmt.Errorf("%w: %w", config.ErrReferenceTokenCollision,
 		&pgconn.PgError{Code: "23505", ConstraintName: "account_registrations_reference_token_key"})
@@ -117,6 +120,7 @@ func TestSubmitRegistration_TokenCollision_RetriesWithNewToken(t *testing.T) {
 func TestSubmitRegistration_TokenCollision_GivesUpAs500(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	collision := fmt.Errorf("%w: %w", config.ErrReferenceTokenCollision,
 		&pgconn.PgError{Code: "23505", ConstraintName: "account_registrations_reference_token_key"})
 	store.On("CreateAccountRegistration", ctx, mock.Anything).Return(collision)
@@ -135,6 +139,7 @@ func TestSubmitRegistration_TokenCollision_GivesUpAs500(t *testing.T) {
 func TestSubmitRegistration_StoresBareContactEmail(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	var stored *config.AccountRegistration
 	store.On("CreateAccountRegistration", ctx, mock.Anything).Run(func(args mock.Arguments) {
 		stored = args.Get(1).(*config.AccountRegistration)

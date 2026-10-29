@@ -35,14 +35,15 @@ var pauseResumeOps = []pauseResumeOp{
 	}, "paused"},
 }
 
-func runPauseResume(op pauseResumeOp, creator *string, recs []config.RecommendationRecord, perms ...auth.Permission) (*StatusResponse, *MockConfigStore, error) {
+func runPauseResume(t *testing.T, op pauseResumeOp, creator *string, recs []config.RecommendationRecord, perms ...auth.Permission) (*StatusResponse, *MockConfigStore, error) {
+	t.Helper()
 	exec := cancelRouteExec(op.status)
 	exec.CreatedByUserID = creator
 	exec.ScheduledDate = time.Now().Add(24 * time.Hour)
 	if recs != nil {
 		exec.Recommendations = recs
 	}
-	h, store := cancelRouteHandler(exec, append(perms, revokePerm(auth.ActionUpdate, nil))...)
+	h, store := cancelRouteHandler(t, exec, append(perms, revokePerm(auth.ActionUpdate, nil))...)
 	resp, err := op.run(h)
 	return resp, store, err
 }
@@ -72,7 +73,7 @@ func TestPauseResumePlanned_UpdateAnyConstraintDimensions(t *testing.T) {
 		for dim, c := range denying {
 			t.Run(op.name+"/deny/"+dim, func(t *testing.T) {
 				t.Parallel()
-				_, store, err := runPauseResume(op, &other, nil, revokePerm(auth.ActionUpdateAny, c))
+				_, store, err := runPauseResume(t, op, &other, nil, revokePerm(auth.ActionUpdateAny, c))
 				requireRevokeForbidden(t, err, constraintDenied)
 				requireNotTransitioned(t, store)
 			})
@@ -80,7 +81,7 @@ func TestPauseResumePlanned_UpdateAnyConstraintDimensions(t *testing.T) {
 		for dim, c := range allowing {
 			t.Run(op.name+"/allow/"+dim, func(t *testing.T) {
 				t.Parallel()
-				resp, _, err := runPauseResume(op, &other, nil, revokePerm(auth.ActionUpdateAny, c))
+				resp, _, err := runPauseResume(t, op, &other, nil, revokePerm(auth.ActionUpdateAny, c))
 				require.NoError(t, err)
 				require.NotNil(t, resp)
 			})
@@ -96,19 +97,19 @@ func TestPauseResumePlanned_UpdateAnyStrictScope(t *testing.T) {
 		t.Run(op.name+"/every recommendation must be in scope", func(t *testing.T) {
 			t.Parallel()
 			recs := []config.RecommendationRecord{azureRec(), recFor("acct-uuid", "aws", "ec2", "us-east-1")}
-			_, store, err := runPauseResume(op, &other, recs, azureOnly)
+			_, store, err := runPauseResume(t, op, &other, recs, azureOnly)
 			requireRevokeForbidden(t, err, constraintDenied)
 			requireNotTransitioned(t, store)
 		})
 		t.Run(op.name+"/no recommendations is refused by a bounded grant", func(t *testing.T) {
 			t.Parallel()
-			_, store, err := runPauseResume(op, &other, []config.RecommendationRecord{}, azureOnly)
+			_, store, err := runPauseResume(t, op, &other, []config.RecommendationRecord{}, azureOnly)
 			requireRevokeForbidden(t, err, constraintDenied)
 			requireNotTransitioned(t, store)
 		})
 		t.Run(op.name+"/admin is unaffected", func(t *testing.T) {
 			t.Parallel()
-			resp, _, err := runPauseResume(op, &other, nil, auth.Permission{Action: auth.ActionAdmin, Resource: auth.ResourceAll})
+			resp, _, err := runPauseResume(t, op, &other, nil, auth.Permission{Action: auth.ActionAdmin, Resource: auth.ResourceAll})
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 		})
@@ -124,13 +125,13 @@ func TestPauseResumePlanned_UpdateAnyDenialFallsBackToCreatorOnly(t *testing.T) 
 	for _, op := range pauseResumeOps {
 		t.Run(op.name+"/creator allowed", func(t *testing.T) {
 			t.Parallel()
-			resp, _, err := runPauseResume(op, &creator, nil, updateOut)
+			resp, _, err := runPauseResume(t, op, &creator, nil, updateOut)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 		})
 		t.Run(op.name+"/non-creator denied", func(t *testing.T) {
 			t.Parallel()
-			_, store, err := runPauseResume(op, &other, nil, updateOut)
+			_, store, err := runPauseResume(t, op, &other, nil, updateOut)
 			requireRevokeForbidden(t, err, constraintDenied)
 			requireNotTransitioned(t, store)
 		})

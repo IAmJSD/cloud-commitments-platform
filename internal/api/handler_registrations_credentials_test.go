@@ -158,6 +158,7 @@ func approveWithCredential(t *testing.T, credType, payload, approvalBody string)
 	t.Helper()
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetAccountRegistration", mock.Anything, regCredRegID).Return(&config.AccountRegistration{
 		ID: regCredRegID, Status: "pending", Provider: "gcp", ExternalID: "test-project",
 		RegCredentialType: credType, RegCredentialPayload: payload,
@@ -165,8 +166,10 @@ func approveWithCredential(t *testing.T, credType, payload, approvalBody string)
 	store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("TransitionRegistrationStatus", mock.Anything, mock.Anything, "pending", mock.Anything).Return(nil).Maybe()
 	store.On("UpdateAccountRegistration", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// The router enforces the approve permission; called directly with no
+	// bearer token, approveRegistration resolves no session, so the auth mock
+	// carries no expectations (an unexpected auth call would panic).
 	mockAuth := new(MockAuthService)
-	setupAdminAuth(ctx, mockAuth)
 	creds := &recordingCredStore{}
 	h := &Handler{auth: mockAuth, config: store, credStore: creds}
 	result, err := h.approveRegistration(ctx, &events.LambdaFunctionURLRequest{Body: approvalBody}, regCredRegID)

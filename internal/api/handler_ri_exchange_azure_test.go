@@ -2338,6 +2338,7 @@ func TestExecuteAzureExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 
 	h := newAzureExecuteSourceGateHandler(t, opsClient)
 	store, ok := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	require.True(t, ok)
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 
@@ -2365,6 +2366,7 @@ func TestExecuteAzureExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T)
 
 	h := newAzureExecuteSourceGateHandler(t, opsClient)
 	store, ok := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	require.True(t, ok)
 	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
 

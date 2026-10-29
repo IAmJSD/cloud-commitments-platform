@@ -37,6 +37,7 @@ func TestCollectRecommendations_ListAccountsErrorFailsClosed(t *testing.T) {
 				t.Setenv(k, v)
 			}
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("ListCloudAccounts", mock.Anything, mock.Anything).Return(nil, listErr)
 			// No expectations: any provider creation means ambient credentials were used.
 			factory := new(MockProviderFactory)

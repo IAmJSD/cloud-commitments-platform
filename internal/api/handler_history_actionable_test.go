@@ -32,6 +32,7 @@ func actionableHistoryRequest(t *testing.T, store *MockConfigStore, scope []stri
 	t.Helper()
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil)
@@ -86,7 +87,11 @@ func TestHandleRequest_History_ScopedPendingNotCrowdedOutByOtherAccounts(t *test
 	mine := pendingForAccount("mine", actionableDevUUID, now.Add(-time.Hour))
 
 	store := new(MockConfigStore)
-	store.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).Return(others, nil)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+	// Maybe: the pre-fix unfiltered read, which the handler no longer issues.
+	// It stays registered so a regression to it is served the crowding rows
+	// and fails the assertion below instead of a mock panic.
+	store.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).Return(others, nil).Maybe()
 	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(func(q config.ExecutionsByStatusesQuery) bool {
 		return isActionableQuery(q) && q.Scope != nil && slices.Contains(q.Scope.AccountIDs, actionableDevUUID) &&
 			!slices.Contains(q.Scope.AccountIDs, actionableOtherUUID)
@@ -152,6 +157,7 @@ func TestHandleRequest_History_StaleSweepIgnoresFiltersAndScope(t *testing.T) {
 	})
 	t.Run("not narrowed", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 		actionableHistoryRequest(t, store, []string{"*"}, map[string]string{})
@@ -182,6 +188,7 @@ func TestHandleRequest_History_PlanPendingNotCrowdedOutByOtherPlans(t *testing.T
 	mine.PlanID = actionablePlanUUID
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isPlanQuery(""))).Return(others, nil).Maybe()
 	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isPlanQuery(actionablePlanUUID))).
 		Return([]config.PurchaseExecution{mine}, nil)

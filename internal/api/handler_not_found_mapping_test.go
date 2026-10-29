@@ -21,8 +21,10 @@ import (
 
 const notFoundTestID = "11111111-1111-1111-1111-111111111111"
 
-func notFoundAdminReq(ctx context.Context, path string) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+func notFoundAdminReq(t *testing.T, ctx context.Context, path string) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
@@ -54,7 +56,7 @@ func requireServerError(t *testing.T, err error) {
 
 func TestHandler_getUser_MissingUserIs404(t *testing.T) {
 	ctx := context.Background()
-	mockAuth, req := notFoundAdminReq(ctx, "/api/users/"+notFoundTestID)
+	mockAuth, req := notFoundAdminReq(t, ctx, "/api/users/"+notFoundTestID)
 	mockAuth.On("GetUser", ctx, notFoundTestID).
 		Return(nil, fmt.Errorf("%w: %w", auth.ErrUserNotFound, pgx.ErrNoRows))
 	h := &Handler{auth: mockAuth}
@@ -66,7 +68,7 @@ func TestHandler_getUser_MissingUserIs404(t *testing.T) {
 
 func TestHandler_getUser_StoreFailureStays500(t *testing.T) {
 	ctx := context.Background()
-	mockAuth, req := notFoundAdminReq(ctx, "/api/users/"+notFoundTestID)
+	mockAuth, req := notFoundAdminReq(t, ctx, "/api/users/"+notFoundTestID)
 	mockAuth.On("GetUser", ctx, notFoundTestID).Return(nil, errors.New("connection refused"))
 	h := &Handler{auth: mockAuth}
 
@@ -82,7 +84,7 @@ func TestHandler_getGroup_MissingGroupIs404(t *testing.T) {
 		"nil group": auth.ErrGroupNotFound,
 	} {
 		t.Run(name, func(t *testing.T) {
-			mockAuth, req := notFoundAdminReq(ctx, "/api/groups/"+notFoundTestID)
+			mockAuth, req := notFoundAdminReq(t, ctx, "/api/groups/"+notFoundTestID)
 			mockAuth.On("GetGroupAPI", ctx, notFoundTestID).Return(nil, storeErr)
 			h := &Handler{auth: mockAuth}
 
@@ -95,7 +97,7 @@ func TestHandler_getGroup_MissingGroupIs404(t *testing.T) {
 
 func TestHandler_getGroup_StoreFailureStays500(t *testing.T) {
 	ctx := context.Background()
-	mockAuth, req := notFoundAdminReq(ctx, "/api/groups/"+notFoundTestID)
+	mockAuth, req := notFoundAdminReq(t, ctx, "/api/groups/"+notFoundTestID)
 	mockAuth.On("GetGroupAPI", ctx, notFoundTestID).Return(nil, errors.New("connection refused"))
 	h := &Handler{auth: mockAuth}
 
@@ -116,7 +118,7 @@ func TestHandler_APIKeyDeleteRevoke_MissingOrNotOwnedIs404(t *testing.T) {
 	}
 	for name, serviceErr := range serviceErrs {
 		t.Run("delete "+name, func(t *testing.T) {
-			mockAuth, req := notFoundAdminReq(ctx, "/api/api-keys/"+notFoundTestID)
+			mockAuth, req := notFoundAdminReq(t, ctx, "/api/api-keys/"+notFoundTestID)
 			mockAuth.On("DeleteAPIKeyAPI", ctx, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", notFoundTestID).Return(serviceErr("delete"))
 			h := &Handler{auth: mockAuth}
 
@@ -125,7 +127,7 @@ func TestHandler_APIKeyDeleteRevoke_MissingOrNotOwnedIs404(t *testing.T) {
 			requireNotFound(t, err, "API key not found")
 		})
 		t.Run("revoke "+name, func(t *testing.T) {
-			mockAuth, req := notFoundAdminReq(ctx, "/api/api-keys/"+notFoundTestID+"/revoke")
+			mockAuth, req := notFoundAdminReq(t, ctx, "/api/api-keys/"+notFoundTestID+"/revoke")
 			mockAuth.On("RevokeAPIKeyAPI", ctx, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", notFoundTestID).Return(serviceErr("revoke"))
 			h := &Handler{auth: mockAuth}
 
@@ -140,12 +142,12 @@ func TestHandler_APIKeyDeleteRevoke_StoreFailureStays500(t *testing.T) {
 	ctx := context.Background()
 	storeErr := errors.New("failed to get API key: connection refused")
 
-	mockAuth, req := notFoundAdminReq(ctx, "/api/api-keys/"+notFoundTestID)
+	mockAuth, req := notFoundAdminReq(t, ctx, "/api/api-keys/"+notFoundTestID)
 	mockAuth.On("DeleteAPIKeyAPI", ctx, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", notFoundTestID).Return(storeErr)
 	_, err := (&Handler{auth: mockAuth}).deleteAPIKey(ctx, req)
 	requireServerError(t, err)
 
-	mockAuth, req = notFoundAdminReq(ctx, "/api/api-keys/"+notFoundTestID+"/revoke")
+	mockAuth, req = notFoundAdminReq(t, ctx, "/api/api-keys/"+notFoundTestID+"/revoke")
 	mockAuth.On("RevokeAPIKeyAPI", ctx, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", notFoundTestID).Return(storeErr)
 	_, err = (&Handler{auth: mockAuth}).revokeAPIKey(ctx, req)
 	requireServerError(t, err)

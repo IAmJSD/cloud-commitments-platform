@@ -221,6 +221,7 @@ func TestHandler_extractBearerToken(t *testing.T) {
 func TestHandler_authenticatePrincipal_BearerToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
@@ -256,6 +257,7 @@ func TestHandler_authenticatePrincipal_BearerToken(t *testing.T) {
 func TestHandler_authenticatePrincipal_BearerTokenWithAPIKey(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{
 		UserID: "11111111-1111-1111-1111-111111111111",
@@ -345,6 +347,7 @@ func TestApproveViaSession_RequiresCSRF(t *testing.T) {
 	adminEmail := "admin@example.com"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "email-tok",
@@ -355,7 +358,10 @@ func TestApproveViaSession_RequiresCSRF(t *testing.T) {
 			{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 100},
 		},
 	}
-	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// Maybe: CSRF is validated before the execution lookup (issue #597).
+	// Registered so a lookup-first regression is caught by the
+	// AssertNotCalled below rather than by a mock panic.
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Maybe()
 
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{Email: adminEmail}
@@ -381,6 +387,7 @@ func TestApproveViaSession_RequiresCSRF(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "CSRF validation failed")
+	mockConfig.AssertNotCalled(t, "GetExecutionByID", ctx, execID)
 }
 
 // TestApproveViaSession_PassesCSRF asserts that a session-authenticated POST
@@ -392,6 +399,7 @@ func TestApproveViaSession_PassesCSRF(t *testing.T) {
 	adminEmail := "admin@example.com"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID:   execID,
 		ApprovalToken: "email-tok",
@@ -419,6 +427,7 @@ func TestApproveViaSession_PassesCSRF(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveAndExecute", ctx, execID, adminEmail, (*string)(nil)).Return(nil, "", nil)
 
 	handler := &Handler{config: mockConfig, auth: mockAuth, purchase: mockPurchase}
@@ -443,11 +452,15 @@ func TestCancelViaSession_RequiresCSRF(t *testing.T) {
 	execID := "55555555-5555-5555-5555-555555555555"
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := &config.PurchaseExecution{
 		ExecutionID: execID,
 		Status:      "pending",
 	}
-	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
+	// Maybe: CSRF is validated before the execution lookup (issue #597).
+	// Registered so a lookup-first regression is caught by the
+	// AssertNotCalled below rather than by a mock panic.
+	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Maybe()
 
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{Email: "admin@example.com"}
@@ -471,6 +484,7 @@ func TestCancelViaSession_RequiresCSRF(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "CSRF validation failed")
+	mockConfig.AssertNotCalled(t, "GetExecutionByID", ctx, execID)
 }
 
 // TestApproveRIExchangeViaSession_RequiresCSRF is the RI-exchange analog of
@@ -629,6 +643,7 @@ func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
 	creatorID := "creator-uuid"
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	adminSession := &Session{UserID: "admin-uuid", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(adminSession, nil)
@@ -650,7 +665,8 @@ func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
 	}, nil).Once()
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-123"}, PaymentDue: "100.00"}, nil)
-	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
+	// The record carries no region, so execution fails closed at the region
+	// guard before ReserveApprovedRIExchange: the approval ends in FailRIExchange.
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
@@ -682,7 +698,7 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 	execID := "12345678-1234-1234-1234-123456789abc"
 	contactEmail := "contact@example.com"
 
-	newHandler := func(mockConfig *MockConfigStore, mockPurchase *MockPurchaseManager) *Handler {
+	newHandler := func(t *testing.T, mockConfig *MockConfigStore, mockPurchase *MockPurchaseManager) *Handler {
 		accountID := "acct-1"
 		exec := &config.PurchaseExecution{
 			ExecutionID:   execID,
@@ -701,6 +717,7 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 		}, nil).Maybe()
 
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 		mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
 		mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(errors.New("missing CSRF token")).Maybe()
@@ -713,7 +730,7 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 
 	t.Run("no CSRF header", func(t *testing.T) {
 		mockConfig, mockPurchase := new(MockConfigStore), new(MockPurchaseManager)
-		handler := newHandler(mockConfig, mockPurchase)
+		handler := newHandler(t, mockConfig, mockPurchase)
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"authorization": "Bearer sess-tok"},
 		}
@@ -725,7 +742,7 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 
 	t.Run("valid CSRF header", func(t *testing.T) {
 		mockPurchase := new(MockPurchaseManager)
-		handler := newHandler(new(MockConfigStore), mockPurchase)
+		handler := newHandler(t, new(MockConfigStore), mockPurchase)
 		mockPurchase.On("ApproveExecution", ctx, execID, "email-token", contactEmail).Return(nil, "", nil)
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"authorization": "Bearer sess-tok", "x-csrf-token": "csrf-ok"},

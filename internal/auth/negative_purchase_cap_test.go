@@ -248,6 +248,7 @@ func TestCreateAPIKey_NegativeMaxPurchaseAmount(t *testing.T) {
 
 	t.Run("negative refused before the key is stored", func(t *testing.T) {
 		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		err := run(mockStore, -1)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidPermission)
@@ -257,6 +258,7 @@ func TestCreateAPIKey_NegativeMaxPurchaseAmount(t *testing.T) {
 
 	for _, amount := range []float64{0, 100} {
 		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		require.NoError(t, run(mockStore, amount), "amount %v", amount)
 		mockStore.AssertCalled(t, "CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey"))
 	}

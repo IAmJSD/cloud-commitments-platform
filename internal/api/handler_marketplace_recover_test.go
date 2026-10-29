@@ -257,7 +257,7 @@ func TestMarketplaceList_RollbackReleaseUsesDetachedContext(t *testing.T) {
 	defer cancel()
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
 		Return(&config.MarketplaceListingClaim{ClientToken: "tok"}, nil)
@@ -286,7 +286,7 @@ func TestMarketplaceCancel_RecordsOnDetachedContext(t *testing.T) {
 	defer cancel()
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	row.ListingID, row.ListingState = "ril-cancel", config.ListingStateActive
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
@@ -313,7 +313,7 @@ func TestMarketplaceCancel_RecordsOnDetachedContext(t *testing.T) {
 func TestMarketplaceCancel_EmptyStatusRecordedAsCanceled(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	row.ListingID, row.ListingState = "ril-cancel", config.ListingStateActive
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
@@ -333,8 +333,9 @@ func TestMarketplaceCancel_EmptyStatusRecordedAsCanceled(t *testing.T) {
 // still-active listing is not recorded as canceled.
 func TestMarketplaceCancel_FailureOnLiveListingIsNotRecorded(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	row.ListingID, row.ListingState = "ril-cancel", config.ListingStateActive
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
@@ -355,8 +356,9 @@ func TestMarketplaceCancel_FailureOnLiveListingIsNotRecorded(t *testing.T) {
 // is not touched.
 func TestMarketplaceCancel_PendingRowThatChangedIs409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	row.ListingState = config.ListingStatePending
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
@@ -377,7 +379,7 @@ func TestMarketplaceCancel_PendingRowThatChangedIs409(t *testing.T) {
 func TestMarketplaceCancel_FencedRecoveryWriteLosesIs409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	row.ListingState = config.ListingStatePending
 	seen := config.MarketplaceListingAttempt{State: config.ListingStatePending}
@@ -399,7 +401,7 @@ func TestMarketplaceCancel_FencedRecoveryWriteLosesIs409(t *testing.T) {
 func TestMarketplaceList_UncanceledRecordAfterConcurrentCancelIs409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
 		Return(&config.MarketplaceListingClaim{ClientToken: "tok"}, nil)

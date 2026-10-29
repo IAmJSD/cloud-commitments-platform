@@ -28,8 +28,10 @@ func adminAuditActor() config.AuditActor {
 func TestSaveAccountServiceOverride_WritesThroughAuditedTx(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	var gotAudit config.AuditContext
 	store.On("SaveAccountServiceOverrideAuditedTx", ctx, mock.Anything, mock.AnythingOfType("*config.AccountServiceOverride"), mock.Anything).
 		Run(func(args mock.Arguments) { gotAudit = args.Get(3).(config.AuditContext) }).Return(nil)
@@ -47,8 +49,10 @@ func TestSaveAccountServiceOverride_WritesThroughAuditedTx(t *testing.T) {
 func TestSaveAccountServiceOverride_AuditFailureFailsTheSave(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("SaveAccountServiceOverrideAuditedTx", ctx, mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.New("failed to record config audit event"))
 	h := &Handler{auth: mockAuth, config: store}
@@ -60,6 +64,7 @@ func TestSaveAccountServiceOverride_AuditFailureFailsTheSave(t *testing.T) {
 func TestDeleteAccountServiceOverride_WritesThroughAuditedTx(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := new(MockConfigStore)
 	store.On("DeleteAccountServiceOverrideAuditedTx", ctx, mock.Anything,

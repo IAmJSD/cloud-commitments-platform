@@ -119,6 +119,7 @@ func TestDeletePlan_PermissionGate(t *testing.T) {
 		// requirePlanAccess calls GetAllowedAccountsAPI; stub it to allow all.
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		// After the permission gate the handler calls GetPurchasePlan then
 		// DeletePurchasePlan. Seed both so we don't crash on unexpected calls.
 		mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
@@ -143,6 +144,7 @@ func TestDeletePlan_PermissionGate(t *testing.T) {
 		// nil without calling GetAllowedAccountsAPI), so do NOT register that expectation.
 		mockAuth := authForAdmin(ctx, t)
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
 			return &config.PurchasePlan{ID: id}, nil
 		}
@@ -165,6 +167,7 @@ func TestUpdatePlan_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "update", "plans", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.GetPurchasePlanFn = func(_ context.Context, id string) (*config.PurchasePlan, error) {
 			return &config.PurchasePlan{ID: id, Name: "Old"}, nil
 		}
@@ -257,6 +260,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
 		creator := userID
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		// requireExecutionAccess + authorizeExecutionManagement both call
 		// GetExecutionByID; stub a row created by this user.
 		mockStore.On("GetExecutionByID", ctx, execID).
@@ -279,6 +283,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
 		otherCreator := "99999999-9999-9999-9999-999999999999"
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
 
@@ -297,6 +302,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(true, nil)
 		mockAuth.allowConstraintChecks()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		// update-any skips the ownership check but its Constraints are
 		// evaluated against the stored row (issue #1098).
 		mockStore.On("GetExecutionByID", ctx, execID).
@@ -322,6 +328,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		// immediately without calling GetAllowedAccountsAPI or GetExecutionByID).
 		mockAuth := authForAdmin(ctx, t)
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "paused", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
@@ -352,6 +359,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
 		creator := userID
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).
@@ -371,6 +379,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
 		otherCreator := "99999999-9999-9999-9999-999999999999"
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
 
@@ -406,6 +415,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 
 		creator := userID
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).
@@ -428,6 +438,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 
 		otherCreator := "99999999-9999-9999-9999-999999999999"
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &otherCreator}, nil)
 
@@ -508,13 +519,20 @@ func TestUpdateRIExchangeConfig_PermissionGate(t *testing.T) {
 
 	t.Run("user with update:config clears 403 gate", func(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "update", "config", true)
+		// The write path also checks the caller's account scope, the
+		// constraints on update:config, and (for the auto-mode gate) any
+		// other grant; this caller holds update:config alone, unrestricted.
+		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return(nil, nil)
+		mockAuth.allowConstraintChecks()
+		mockAuth.On("HasPermissionAPI", ctx, userID, mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
-		mockStore.On("SaveGlobalConfig", ctx, &config.GlobalConfig{}).Return(nil).Maybe()
+		mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
 		h := &Handler{auth: mockAuth, config: mockStore}
-		body := `{"auto_exchange_enabled":false,"mode":"recommend","utilization_threshold":80,"max_payment_per_exchange_usd":"0","max_payment_daily_usd":"0"}`
+		body := `{"auto_exchange_enabled":false,"mode":"manual","utilization_threshold":80,"max_payment_per_exchange_usd":0,"max_payment_daily_usd":0,"lookback_days":30}`
 		_, err := h.updateRIExchangeConfig(ctx, reqWithBearerAndBody("user-token", body))
-		assertNotForbidden(t, err)
+		require.NoError(t, err, "a caller holding update:config must be able to save the RI exchange config")
 	})
 }
 

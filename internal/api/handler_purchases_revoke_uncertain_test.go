@@ -351,6 +351,7 @@ func TestCallAzureReturn_EnoughTimeOrNotLambda_Proceeds(t *testing.T) {
 				defer cancel()
 			}
 			mockStore := new(MockConfigStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			r := armReservationRecord()
 			mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"),
 				"direct-api", "", mock.Anything, mock.Anything).Return(nil).Once()

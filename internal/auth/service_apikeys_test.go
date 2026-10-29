@@ -1033,6 +1033,7 @@ func TestService_RecordUsageAsync_CountsConcurrentRequests(t *testing.T) {
 // book its count, and that flusher must still write it.
 func TestService_RecordUsageAsync_OneFlusherPerKey(t *testing.T) {
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := &Service{store: mockStore}
 
 	const requests = 200
@@ -1102,6 +1103,7 @@ func TestAPIKeyUsageEntry_ReleaseFlusher(t *testing.T) {
 // usage would never be written again.
 func TestService_RecordUsageAsync_PanicReleasesFlusher(t *testing.T) {
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := &Service{store: mockStore}
 
 	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(1)).

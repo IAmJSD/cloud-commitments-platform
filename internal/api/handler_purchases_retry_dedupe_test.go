@@ -14,17 +14,21 @@ import (
 )
 
 // retryDedupeFixture is a failed execution owned by the retrying caller plus
-// a handler whose store accepts the successor insert and the link CAS.
-func retryDedupeFixture(t *testing.T) (*config.PurchaseExecution, *Handler, *MockConfigStore) {
+// a handler whose store expects the successor insert and the link CAS when
+// persists is true. A retry that must fail before any write passes false, so
+// an attempted write hits an unregistered method and fails the test.
+func retryDedupeFixture(t *testing.T, persists bool) (*config.PurchaseExecution, *Handler, *MockConfigStore) {
 	t.Helper()
 	creator := retryCallerID
 	failed := &config.PurchaseExecution{
 		ExecutionID: retryExecID, Status: "failed", CreatedByUserID: &creator, CapacityPercent: 100,
 		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "rds", Term: 1, Count: 1, UpfrontCost: 100}},
 	}
-	handler, mockConfig, _ := buildSessionRetryHandler(failed, &Session{UserID: retryCallerID}, false, true)
-	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockConfig.On("LinkRetryExecutionAtomic", mock.Anything, mock.Anything, failed.ExecutionID, mock.AnythingOfType("string")).Return(true, nil)
+	handler, mockConfig, _ := buildSessionRetryHandler(t, failed, &Session{UserID: retryCallerID}, false, true)
+	if persists {
+		mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+		mockConfig.On("LinkRetryExecutionAtomic", mock.Anything, mock.Anything, failed.ExecutionID, mock.AnythingOfType("string")).Return(true, nil)
+	}
 	return failed, handler, mockConfig
 }
 
@@ -45,7 +49,7 @@ func liveSubmit(id string, recs []config.RecommendationRecord) config.PurchaseEx
 // fingerprint, writing no suppressions and sending no approval email. The
 // real lock and race are covered by TestRetrySuccessorRacesFreshSubmit.
 func TestHandler_retryPurchase_RefusesIdenticalLiveSubmit(t *testing.T) {
-	failed, handler, mockConfig := retryDedupeFixture(t)
+	failed, handler, mockConfig := retryDedupeFixture(t, true)
 	notifier := &recordingEmailNotifier{}
 	handler.emailNotifier = notifier
 	mockConfig.On("ListRecentSubmitsTx", mock.Anything, mock.Anything, retryCallerID, mock.AnythingOfType("time.Time")).
@@ -66,7 +70,7 @@ func TestHandler_retryPurchase_RefusesIdenticalLiveSubmit(t *testing.T) {
 
 // A recent submit with a different fingerprint does not block the retry.
 func TestHandler_retryPurchase_AllowsDifferentLiveSubmit(t *testing.T) {
-	failed, handler, mockConfig := retryDedupeFixture(t)
+	failed, handler, mockConfig := retryDedupeFixture(t, true)
 	other := append([]config.RecommendationRecord(nil), failed.Recommendations...)
 	other[0].Count = 7
 	mockConfig.On("ListRecentSubmitsTx", mock.Anything, mock.Anything, retryCallerID, mock.AnythingOfType("time.Time")).
@@ -78,7 +82,7 @@ func TestHandler_retryPurchase_AllowsDifferentLiveSubmit(t *testing.T) {
 
 // A failure to read the recent submits fails the retry before any write.
 func TestHandler_retryPurchase_RecentSubmitsErrorFailsRetry(t *testing.T) {
-	_, handler, mockConfig := retryDedupeFixture(t)
+	_, handler, mockConfig := retryDedupeFixture(t, false)
 	mockConfig.On("ListRecentSubmitsTx", mock.Anything, mock.Anything, retryCallerID, mock.AnythingOfType("time.Time")).
 		Return(nil, errors.New("db down"))
 
@@ -96,6 +100,7 @@ func TestHandler_retryPurchase_RecentSubmitsErrorFailsRetry(t *testing.T) {
 // submit, not fall through to an unchecked insert.
 func TestPersistExecution_RecentSubmitsErrorIsSurfaced(t *testing.T) {
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.On("ListRecentSubmitsTx", mock.Anything, mock.Anything, "", mock.AnythingOfType("time.Time")).
 		Return(nil, errors.New("db down"))
 	h := &Handler{config: mockConfig}

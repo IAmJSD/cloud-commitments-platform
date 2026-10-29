@@ -85,6 +85,7 @@ func TestAPIAdapters_CreateUser_AllFieldsReachStore(t *testing.T) {
 	requireFieldsCovered(t, req, checks)
 
 	store := new(MockStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	svc := createTestService(store, new(MockEmailSender))
 	var got *User
 	store.On("GetUserByEmail", ctx, req.Email).Return(nil, nil).Once()
@@ -109,6 +110,7 @@ func TestAPIAdapters_UpdateUser_AllFieldsReachStore(t *testing.T) {
 	}
 	run := func(t *testing.T, req APIUpdateUserRequest) *User {
 		store := new(MockStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		svc := createTestService(store, new(MockEmailSender))
 		var got *User
 		store.On("GetUserByID", ctx, "user-123").Return(existing(), nil).Once()
@@ -163,6 +165,7 @@ func TestAPIAdapters_CreateGroup_AllFieldsReachStore(t *testing.T) {
 	requireFieldsCovered(t, req, checks)
 
 	store := new(MockStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	svc := createTestService(store, new(MockEmailSender))
 	var got *Group
 	store.On("CreateGroup", ctx, mock.AnythingOfType("*auth.Group")).
@@ -186,6 +189,7 @@ func TestAPIAdapters_UpdateGroup_AllFieldsReachStore(t *testing.T) {
 	}
 	run := func(t *testing.T, req APIUpdateGroupRequest) *Group {
 		store := new(MockStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		svc := createTestService(store, new(MockEmailSender))
 		var got *Group
 		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
@@ -248,6 +252,7 @@ func TestAPIAdapters_CreateAPIKey_AllFieldsReachStore(t *testing.T) {
 	requireFieldsCovered(t, req, checks)
 
 	store := new(MockStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	svc := &Service{store: store}
 	store.On("GetUserByID", ctx, "user-1").Return(&User{
 		ID: "user-1", Email: "test@example.com", Active: true,

@@ -58,7 +58,8 @@ const reshapeCatalogRegion = "eu-west-3"
 // 1x m5.4xlarge RI (32 normalized units) at 50% utilization (16 used). On
 // the legacy ladder that reshapes to 1x m5.2xlarge; with a catalog lacking
 // m5.2xlarge it must become 2x m5.xlarge.
-func newCatalogReshapeHandler(ec2 *fakeReshapeEC2Stub) *Handler {
+func newCatalogReshapeHandler(t *testing.T, ec2 *fakeReshapeEC2Stub) *Handler {
+	t.Helper()
 	ec2.instances = []ec2svc.ConvertibleRI{
 		{
 			ReservedInstanceID: "ri-1", InstanceType: "m5.4xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000,
@@ -66,6 +67,7 @@ func newCatalogReshapeHandler(ec2 *fakeReshapeEC2Stub) *Handler {
 		},
 	}
 	mockStore := &MockConfigStore{}
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord(nil), nil)
 	h := &Handler{
@@ -99,7 +101,7 @@ func reshapeOnce(t *testing.T, h *Handler) *ReshapeRecommendationsResponse {
 
 func TestGetReshapeRecommendations_CatalogLimitsTargetToOfferedSizes(t *testing.T) {
 	ec2 := &fakeReshapeEC2Stub{offered: []string{"m5.4xlarge", "m5.xlarge", "c5.large"}}
-	rec := reshapeOnce(t, newCatalogReshapeHandler(ec2)).Recommendations[0]
+	rec := reshapeOnce(t, newCatalogReshapeHandler(t, ec2)).Recommendations[0]
 
 	assert.Equal(t, 1, ec2.offeredCalls, "the reshape handler must query the region's instance type catalog")
 	assert.Equal(t, "m5.xlarge", rec.TargetInstanceType,
@@ -109,7 +111,7 @@ func TestGetReshapeRecommendations_CatalogLimitsTargetToOfferedSizes(t *testing.
 
 func TestGetReshapeRecommendations_CatalogMissingFamilySurfacesReason(t *testing.T) {
 	ec2 := &fakeReshapeEC2Stub{offered: []string{"c5.large", "c5.xlarge"}}
-	rec := reshapeOnce(t, newCatalogReshapeHandler(ec2)).Recommendations[0]
+	rec := reshapeOnce(t, newCatalogReshapeHandler(t, ec2)).Recommendations[0]
 
 	assert.Empty(t, rec.TargetInstanceType, "an unoffered family must not get a target")
 	assert.Zero(t, rec.TargetCount)
@@ -139,7 +141,7 @@ func TestGetReshapeRecommendations_CatalogUnavailableFallsBackWithWarning(t *tes
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureWarnings(t)
-			h := newCatalogReshapeHandler(tc.ec2)
+			h := newCatalogReshapeHandler(t, tc.ec2)
 
 			for i := 1; i <= 2; i++ {
 				rec := reshapeOnce(t, h).Recommendations[0]

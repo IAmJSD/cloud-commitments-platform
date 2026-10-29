@@ -244,6 +244,7 @@ func TestLoginWithMFAToken_WrongCodeRecordsFailure(t *testing.T) {
 func TestLoginWithMFAToken_LostConsumeRefused(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	svc := createTestService(store, new(MockEmailSender))
 	user := mfaTokenUnitUser(t)
 	store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).

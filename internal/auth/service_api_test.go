@@ -443,6 +443,7 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 	// (possibly admin:*) while UpdateGroup still returned success.
 	t.Run("explicit empty permissions list is refused, not silently kept", func(t *testing.T) {
 		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 

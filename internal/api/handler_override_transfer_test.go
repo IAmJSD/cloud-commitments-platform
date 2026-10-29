@@ -140,6 +140,7 @@ func newOverrideTransferStore() *overrideTransferStore {
 func transferHandler(t *testing.T, store *overrideTransferStore, scope []string) *Handler {
 	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", context.Background(), "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantPermissionsScoped([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}}, scope)
 	return &Handler{auth: mockAuth, config: store}

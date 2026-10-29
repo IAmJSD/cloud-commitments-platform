@@ -47,6 +47,7 @@ func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) 
 
 func TestAuthServiceAdapter_Login(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(&auth.User{
@@ -66,6 +67,7 @@ func TestAuthServiceAdapter_Login(t *testing.T) {
 
 func TestAuthServiceAdapter_Logout(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// Token gets hashed internally, so use mock.Anything
@@ -77,6 +79,7 @@ func TestAuthServiceAdapter_Logout(t *testing.T) {
 
 func TestAuthServiceAdapter_ValidateSession(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// Token gets hashed; the stored Token must match hashSessionToken("valid-token")
@@ -99,6 +102,7 @@ func TestAuthServiceAdapter_ValidateSession(t *testing.T) {
 
 func TestAuthServiceAdapter_ValidateSession_Error(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetSession", ctx, mock.AnythingOfType("string")).Return(nil, nil)
@@ -109,6 +113,7 @@ func TestAuthServiceAdapter_ValidateSession_Error(t *testing.T) {
 
 func TestAuthServiceAdapter_CheckAdminExists(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("AdminExists", ctx).Return(true, nil)
@@ -120,6 +125,7 @@ func TestAuthServiceAdapter_CheckAdminExists(t *testing.T) {
 
 func TestAuthServiceAdapter_RequestPasswordReset(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// User not found - exercises the adapter code path without needing email sender
@@ -132,6 +138,7 @@ func TestAuthServiceAdapter_RequestPasswordReset(t *testing.T) {
 
 func TestAuthServiceAdapter_ConfirmPasswordReset(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByResetToken", ctx, mock.AnythingOfType("string")).Return(nil, assert.AnError)
@@ -145,6 +152,7 @@ func TestAuthServiceAdapter_ConfirmPasswordReset(t *testing.T) {
 
 func TestAuthServiceAdapter_GetUser(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
@@ -163,6 +171,7 @@ func TestAuthServiceAdapter_GetUser(t *testing.T) {
 
 func TestAuthServiceAdapter_GetUser_Error(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "nonexistent").Return(nil, assert.AnError)
@@ -173,6 +182,7 @@ func TestAuthServiceAdapter_GetUser_Error(t *testing.T) {
 
 func TestAuthServiceAdapter_DeleteUser(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// Non-admin user: the last-admin guard is skipped after the GetUserByID
@@ -188,6 +198,7 @@ func TestAuthServiceAdapter_DeleteUser(t *testing.T) {
 
 func TestAuthServiceAdapter_ListUsersAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("ListUsers", ctx).Return([]auth.User{
@@ -202,6 +213,7 @@ func TestAuthServiceAdapter_ListUsersAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_ChangePasswordAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
@@ -217,6 +229,7 @@ func TestAuthServiceAdapter_ChangePasswordAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_DeleteGroup(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// DeleteGroup loads the group first to refuse system-managed ones (#1629).
@@ -229,6 +242,7 @@ func TestAuthServiceAdapter_DeleteGroup(t *testing.T) {
 
 func TestAuthServiceAdapter_GetGroupAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetGroup", ctx, "group-1").Return(&auth.Group{
@@ -243,6 +257,7 @@ func TestAuthServiceAdapter_GetGroupAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_ListGroupsAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("ListGroups", ctx).Return([]auth.Group{
@@ -256,6 +271,7 @@ func TestAuthServiceAdapter_ListGroupsAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_ValidateCSRFToken(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// Token gets hashed; the stored Token must match hashSessionToken("session-token")
@@ -280,6 +296,7 @@ func TestAuthServiceAdapter_ValidateCSRFToken(t *testing.T) {
 
 func TestAuthServiceAdapter_HasPermissionAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// Administrators-group member: the group's {admin, *} permission grants
@@ -302,6 +319,7 @@ func TestAuthServiceAdapter_HasPermissionAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_UpdateUserProfile(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	// User not found - exercises the adapter code path
@@ -499,6 +517,7 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testin
 
 func TestAuthServiceAdapter_ListUserAPIKeysAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
@@ -513,6 +532,7 @@ func TestAuthServiceAdapter_ListUserAPIKeysAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_DeleteAPIKeyAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
@@ -530,6 +550,7 @@ func TestAuthServiceAdapter_DeleteAPIKeyAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_RevokeAPIKeyAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetUserByID", ctx, "user-1").Return(&auth.User{
@@ -547,6 +568,7 @@ func TestAuthServiceAdapter_RevokeAPIKeyAPI(t *testing.T) {
 
 func TestAuthServiceAdapter_ValidateUserAPIKeyAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("GetAPIKeyByHash", ctx, mock.AnythingOfType("string")).Return(nil, assert.AnError)
@@ -564,6 +586,7 @@ func TestNewAuthServiceAdapter_NotNil(t *testing.T) {
 
 func TestAuthServiceAdapter_SetupAdmin(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	ctx := context.Background()
 
 	mockStore.On("AdminExists", ctx).Return(false, nil)

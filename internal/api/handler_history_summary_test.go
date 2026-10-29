@@ -20,6 +20,7 @@ import (
 func TestGetHistory_SummaryComesFromScopedAggregate(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -51,7 +52,7 @@ func TestGetHistory_SummaryComesFromScopedAggregate(t *testing.T) {
 		Run(func(args mock.Arguments) { gotFilter = args.Get(1).(config.HistorySummaryFilter) }).
 		Return(groups, nil).Once()
 
-	handler := &Handler{auth: scopedAuthMock(ctx), config: mockStore}
+	handler := &Handler{auth: scopedAuthMock(t, ctx), config: mockStore}
 	result, err := handler.getHistory(ctx, scopedReq(), map[string]string{})
 	require.NoError(t, err)
 	resp := result.(HistoryResponse)
@@ -76,6 +77,7 @@ func TestGetHistory_SummaryComesFromScopedAggregate(t *testing.T) {
 func TestGetHistory_SummaryFilterMatchesRowFetchFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	var rowFilter config.PurchaseHistoryFilter
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { rowFilter = args.Get(1).(config.PurchaseHistoryFilter) }).
@@ -86,7 +88,7 @@ func TestGetHistory_SummaryFilterMatchesRowFetchFilter(t *testing.T) {
 		Run(func(args mock.Arguments) { aggFilter = args.Get(1).(config.HistorySummaryFilter) }).
 		Return(&config.HistorySummaryGroups{}, nil)
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	_, err := handler.getHistory(ctx, req, map[string]string{
 		"provider": "aws", "start": "2026-01-01", "end": "2026-01-31", "limit": "7",
@@ -107,6 +109,7 @@ func TestGetHistory_SummaryFilterMatchesRowFetchFilter(t *testing.T) {
 func TestGetHistory_SummaryFallsBackToPageWhenAggregateFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	up := 40.0
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{
 		{PurchaseID: "p1", AccountID: "acct", UpfrontCost: &up, EstimatedSavings: 4},
@@ -114,7 +117,7 @@ func TestGetHistory_SummaryFallsBackToPageWhenAggregateFails(t *testing.T) {
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("HistorySummaryAggregate", ctx, mock.Anything).Return(nil, errors.New("db down"))
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	result, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)
@@ -141,13 +144,14 @@ func TestGetHistory_LambdaSweepRunsAfterSummaryAggregate(t *testing.T) {
 		return func(mock.Arguments) { mu.Lock(); order = append(order, s); mu.Unlock() }
 	}
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{stale}, nil)
 	mockStore.On("HistorySummaryAggregate", ctx, mock.Anything).Run(note("aggregate")).
 		Return(&config.HistorySummaryGroups{Executions: []config.ExecutionSummaryGroup{{Status: "pending", Count: 1}}}, nil)
 	mockStore.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, staleID).Run(note("expire")).Return(true, nil).Once()
 
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, isLambda: true}
 	result, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)

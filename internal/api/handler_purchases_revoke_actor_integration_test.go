@@ -32,7 +32,9 @@ func TestRevokePurchase_RecordsActorUUIDOnRealPostgres(t *testing.T) {
 	}))
 
 	// The session-authed revoke path enforces CSRF; this request carries no CSRF header.
-	f.handler.auth.(*MockAuthService).On("ValidateCSRFToken", mock.Anything, "admin-token", "").Return(nil)
+	fixtureAuth := f.handler.auth.(*MockAuthService)
+	t.Cleanup(func() { fixtureAuth.AssertExpectations(t) })
+	fixtureAuth.On("ValidateCSRFToken", mock.Anything, "admin-token", "").Return(nil)
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}}
 	_, err := f.handler.revokeViaEmailToken(ctx, req, execID, "")
 	require.NoError(t, err, "revoke must not fail on the transitioned_by UUID column")

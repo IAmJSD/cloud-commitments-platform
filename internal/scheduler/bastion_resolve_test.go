@@ -94,6 +94,7 @@ func TestScheduler_CollectAWSForAccount_BastionUsesBastionCredentials(t *testing
 
 	var gotCfg *provider.Config
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).
 		Run(func(args mock.Arguments) { gotCfg = args.Get(2).(*provider.Config) }).
 		Return(nil, errors.New("stop after credential resolution"))
@@ -155,6 +156,7 @@ func TestScheduler_CollectAWSForAccount_HostAccountBastionUsesAmbient(t *testing
 		return &config.CloudAccount{ID: id, Provider: "aws", Enabled: true, AWSAuthMode: "role_arn", ExternalID: "111111111111"}, nil
 	}
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
 	mockFactory.On("CreateAndValidateProvider", ctx, "aws", mock.Anything).Return(nil, errors.New("stop after credential resolution"))
 	var factoryKey string
 	s := NewScheduler(SchedulerConfig{

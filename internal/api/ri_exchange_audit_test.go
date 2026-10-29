@@ -336,6 +336,7 @@ func TestExecuteExchange_OutcomeRecordedAfterRequestCancel(t *testing.T) {
 // the submit stage are recorded; a request refused by a gate executed nothing.
 func TestExecuteExchange_GateRefusalWritesNoAuditRow(t *testing.T) {
 	store := newDirectExchangeAuditStore()
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 	h := awsAuditHandler(t, store, func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
 		t.Fatal("a 4-eyes refusal must not reach AWS")
