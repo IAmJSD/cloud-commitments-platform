@@ -879,3 +879,18 @@ tr.override-disabled {
     margin: 0;
     padding: 0 var(--cudly-sp-3);
 }
+
+/* Quiet destructive action for page-level buttons such as "Reset to
+ * Defaults": red text on the neutral outline, tinted on hover. Solid red
+ * stays reserved for the final confirm in the confirm dialog. */
+.btn.btn-quiet-danger {
+    background: var(--cudly-surface);
+    border-color: var(--cudly-border-strong);
+    color: var(--cudly-error-fg);
+}
+
+.btn.btn-quiet-danger:hover {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
