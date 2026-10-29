@@ -340,6 +340,26 @@ tr.history-row-highlight:hover {
     white-space: normal;
 }
 
+/* Sort button + funnel as one flex row that never overflows its cell. */
+.th-inner {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+th.num .th-inner {
+    justify-content: flex-end;
+}
+
+.th-inner > .sort-btn {
+    min-width: 0;
+}
+
+.th-inner > .column-filter-btn {
+    flex-shrink: 0;
+}
+
 th.sortable .sort-btn {
     display: inline-flex;
     align-items: center;
