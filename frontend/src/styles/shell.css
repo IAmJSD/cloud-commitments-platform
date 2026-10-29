@@ -1,7 +1,7 @@
 /* App shell and page chrome (UI modernization): page headers, top bar,
  * stat tiles, signed-out screens, error callouts and the mobile shell.
- * Imported after the component files so these rules win ties without
- * raising specificity; everything here uses the base.css tokens. */
+ * Imported after the component and page files (before responsive.css) so
+ * these rules win ties without raising specificity. Uses base.css tokens. */
 
 /* ---------------------------------------------------------------------------
  * Page header: one pattern for every top-level page and sub-tab.
