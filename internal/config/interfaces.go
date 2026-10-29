@@ -677,6 +677,11 @@ type StoreInterface interface {
 	// SuccessfulCollect for the per-row semantics. There is deliberately no
 	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
+	// PruneStaleRecommendations deletes the rows of every (provider,
+	// account) pair with no row collected in the last retentionDays days,
+	// leaving every pair that collected inside the window untouched, and
+	// returns the number of rows deleted (issue #120).
+	PruneStaleRecommendations(ctx context.Context, retentionDays int) (int64, error)
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	// ListStoredRecommendationsChunk is ListStoredRecommendations for a
 	// keyset walk: at most limit rows after the position after, in

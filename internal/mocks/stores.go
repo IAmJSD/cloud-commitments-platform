@@ -1830,6 +1830,19 @@ func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) PruneStaleRecommendations(ctx context.Context, retentionDays int) (int64, error) {
+	m.record("PruneStaleRecommendations", ctx, retentionDays)
+	if !isExpected(&m.Mock, "PruneStaleRecommendations") {
+		return 0, nil
+	}
+	args := m.Called(ctx, retentionDays)
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		m.reporter.wrongReturnType("PruneStaleRecommendations", "int64", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	m.record("ListStoredRecommendations", ctx, filter)
 	if !isExpected(&m.Mock, "ListStoredRecommendations") {
