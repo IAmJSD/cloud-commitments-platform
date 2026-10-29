@@ -127,19 +127,22 @@ function renderNoAccess(tabId: string): void {
   p.className = 'empty-state';
   p.textContent =
     'You do not have access to this page. Contact your administrator if you need access.';
-  // Keep the page heading: it names the page and is the route-change focus
-  // target (focusPageHeading).
-  const heading = container.querySelector(':scope > .page-heading');
+  // Keep the page header: its heading names the page and is the route-change
+  // focus target (focusPageHeading).
+  const heading = container.querySelector(':scope > .page-header, :scope > .page-heading');
   container.replaceChildren(...(heading ? [heading] : []), p);
 }
 
 /**
- * Focus the shown tab's page heading (a visually hidden <h2 tabindex="-1">
- * at the top of each .tab-content), so a screen reader announces the new
- * page and the next Tab press continues from the top of its content.
+ * Focus the shown tab's page heading (the <h2 tabindex="-1"> in the
+ * .page-header at the top of each .tab-content), so a screen reader
+ * announces the new page and the next Tab press continues from the top of
+ * its content.
  */
 function focusPageHeading(tabName: string): void {
-  document.querySelector<HTMLElement>(`#${tabName}-tab > .page-heading`)?.focus();
+  document.querySelector<HTMLElement>(
+    `#${tabName}-tab > .page-heading, #${tabName}-tab > .page-header .page-heading`,
+  )?.focus();
 }
 
 /**

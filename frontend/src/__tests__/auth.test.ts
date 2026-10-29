@@ -1,7 +1,7 @@
 /**
  * Auth module tests
  */
-import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from '../auth';
+import { showLoginModal, showResetPasswordModal, updateUserUI, logout, emailInitials } from '../auth';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import { reloadPage } from '../utils';
 
@@ -460,6 +460,16 @@ describe('Auth Module', () => {
 
       const userEmail = document.getElementById('user-email-display');
       expect(userEmail?.textContent).toBe('test@example.com');
+      // The avatar initials ride on a data attribute (drawn by CSS), so the
+      // button's text stays exactly the address.
+      expect(userEmail?.dataset['initials']).toBe('TE');
+    });
+
+    test('emailInitials takes one letter from each of the first two name parts', () => {
+      expect(emailInitials('dana.okafor@example.com')).toBe('DO');
+      expect(emailInitials('priya_raman@example.com')).toBe('PR');
+      expect(emailInitials('admin@example.com')).toBe('AD');
+      expect(emailInitials('x@example.com')).toBe('X');
     });
 
     test('shows user info when logged in', () => {

@@ -16,7 +16,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.azurecontainerapps.io https://*.run.app; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="description" content="CUDly — Cloud Commitment Optimizer. Discover savings opportunities, plan and automate Reserved Instance / Savings Plan purchases, and manage commitment inventory across AWS, Azure, and GCP.">
-    <meta name="theme-color" content="#2563eb">
+    <meta name="theme-color" content="#ffffff">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title>CUDly - Cloud Commitment Optimizer</title>
 </head>
@@ -40,12 +40,16 @@
                 <h1>CUDly</h1>
             </div>
             <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
+            <!-- Account cluster: help links, then who is signed in (the email
+                 opens the profile dialog; auth.ts adds the initials avatar),
+                 then Log out. -->
             <div id="user-info">
-                <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
-                <span id="user-role-display" class="role-badge"></span>
                 <a href="/docs/" target="_blank" rel="noopener noreferrer" class="header-link">API Docs</a>
                 <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-                <button id="logout-btn">Log out</button>
+                <span class="user-info-divider" aria-hidden="true"></span>
+                <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
+                <span id="user-role-display" class="role-badge"></span>
+                <button id="logout-btn"><svg class="logout-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Log out</span></button>
             </div>
         </header>
         <!-- Overlay: covers content when sidebar drawer is open on mobile.
@@ -99,7 +103,15 @@
             <!-- Home Tab. Provider/Account filters live in the topbar
                  (#topbar-filters); they're global across all sections. -->
             <div id="home-tab" class="tab-content active">
-                <h2 class="sr-only page-heading" id="home-page-heading" tabindex="-1">Home</h2>
+                <!-- Page header (title, one-line description, actions): the same
+                     .page-header block opens every top-level page. The h2 is the
+                     route-change focus target (navigation.ts:focusPageHeading). -->
+                <div class="page-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="home-page-heading" tabindex="-1">Home</h2>
+                        <p class="page-header-description">Savings, coverage and upcoming purchases across your connected accounts.</p>
+                    </div>
+                </div>
                 <!-- Issue #756: first-run onboarding card, filled by
                      dashboard.ts:renderHomeOnboarding when nothing is loaded. -->
                 <section id="home-onboarding" class="hidden"></section>
@@ -132,14 +144,21 @@
 
             <!-- Opportunities Tab (renamed from Recommendations in #340) -->
             <div id="opportunities-tab" class="tab-content">
-                <h2 class="sr-only page-heading" id="opportunities-page-heading" tabindex="-1">Opportunities</h2>
+                <div class="page-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="opportunities-page-heading" tabindex="-1">Opportunities</h2>
+                        <p class="page-header-description">Reserved Instance, Savings Plan and committed use discount recommendations for your connected accounts.</p>
+                    </div>
+                    <div class="page-header-actions">
+                        <!-- Issue #909: AWS lookback selector + scope tooltip.
+                             Populated by recommendations.ts:renderLookbackToolbar on
+                             load (prefilled from /api/config; disabled for non-admin
+                             sessions). Changing it persists recommendations_lookback_days
+                             and triggers a recommendations re-collect for the new window. -->
+                        <section id="recommendations-toolbar" class="recommendations-toolbar"></section>
+                    </div>
+                </div>
                 <section id="recommendations-summary"></section>
-                <!-- Issue #909: AWS lookback selector + scope tooltip.
-                     Populated by recommendations.ts:renderLookbackToolbar on
-                     load (prefilled from /api/config; disabled for non-admin
-                     sessions). Changing it persists recommendations_lookback_days
-                     and triggers a recommendations re-collect for the new window. -->
-                <section id="recommendations-toolbar" class="recommendations-toolbar"></section>
                 <!-- Per-column header filters replace the old top filter bar.
                      The Clear-filters badge + aria-live count are injected
                      by recommendations.ts:renderFilterStatusBar above the
@@ -151,25 +170,34 @@
 
             <!-- Purchase Plans Tab -->
             <div id="plans-tab" class="tab-content">
-                <h2 class="sr-only page-heading" id="plans-page-heading" tabindex="-1">Plans</h2>
-                <section id="plans-header" class="card page-hero">
-                    <h2>Purchase Plans</h2>
-                    <!-- Provider/Account filters now live in the topbar
-                         (#topbar-filters), globally shared across sections. -->
-                    <button id="new-plan-btn" class="primary">New Plan</button>
-                </section>
+                <!-- Provider/Account filters live in the topbar (#topbar-filters),
+                     globally shared across sections. -->
+                <div class="page-header" id="plans-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="plans-page-heading" tabindex="-1">Plans</h2>
+                        <p class="page-header-description">Purchase plans buy commitments on a schedule, ramping coverage up step by step.</p>
+                    </div>
+                    <div class="page-header-actions">
+                        <button id="new-plan-btn" class="primary">New Plan</button>
+                    </div>
+                </div>
                 <section id="plans-list"></section>
 
-                <section id="planned-purchases-header" class="card page-hero">
+                <div id="planned-purchases-header" class="page-hero section-intro">
                     <h2>Planned Purchases</h2>
                     <p class="help-text page-hero-description">Individual purchases scheduled from your plans. You can run, pause, edit, or delete each purchase.</p>
-                </section>
+                </div>
                 <section id="planned-purchases-list"></section>
             </div>
 
             <!-- History Tab -->
             <div id="purchases-tab" class="tab-content">
-                <h2 class="sr-only page-heading" id="purchases-page-heading" tabindex="-1">Purchases</h2>
+                <div class="page-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="purchases-page-heading" tabindex="-1">Purchases</h2>
+                        <p class="page-header-description">Approve pending purchases and review what has been bought and saved.</p>
+                    </div>
+                </div>
                 <!-- 4-eyes approval mode banner (issue #1005): shown when
                      require_different_approver is enabled in global config.
                      Hidden by default; history.ts toggles the 'hidden'
@@ -278,7 +306,12 @@
 
             <!-- Inventory & Coverage Tab (umbrella section folding in RI Exchange, issue #340 T4) -->
             <div id="inventory-tab" class="tab-content">
-                <h2 class="sr-only page-heading" id="inventory-page-heading" tabindex="-1">Inventory &amp; Coverage</h2>
+                <div class="page-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="inventory-page-heading" tabindex="-1">Inventory &amp; Coverage</h2>
+                        <p class="page-header-description">Commitments you own, how much of your spend they cover, and how savings trend over time.</p>
+                    </div>
+                </div>
                 <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
                     <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" tabindex="0" aria-controls="inventory-active-commitments">Active commitments</button>
                     <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" tabindex="-1" aria-controls="inventory-coverage">Coverage</button>
@@ -291,15 +324,15 @@
                      The table is rendered into #active-commitments-list by
                      loadActiveCommitments in inventory.ts. -->
                 <section id="inventory-active-commitments" role="tabpanel" aria-labelledby="inv-subtab-active-commitments">
-                    <section class="card page-hero">
-                        <div class="section-header">
-                            <h2>Active commitments</h2>
-                            <div class="section-header-actions">
-                                <button id="active-commitments-refresh-btn" class="btn btn-small">Refresh</button>
-                            </div>
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Active commitments</h3>
+                            <p class="page-header-description">All non-expired Reserved Instances, Savings Plans, and Compute Units committed across your registered accounts. Soonest-expiring first.</p>
                         </div>
-                        <p class="settings-description">All non-expired Reserved Instances, Savings Plans, and Compute Units committed across your registered accounts. Soonest-expiring first.</p>
-                    </section>
+                        <div class="page-header-actions section-header-actions">
+                            <button id="active-commitments-refresh-btn" class="btn btn-small">Refresh</button>
+                        </div>
+                    </div>
 
                     <section class="card">
                         <div id="active-commitments-list"></div>
@@ -308,52 +341,52 @@
 
                 <!-- Coverage — per-provider breakdowns (issue #754). -->
                 <section id="inventory-coverage" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-coverage">
-                    <section class="card page-hero">
-                        <div class="section-header">
-                            <h2>Coverage</h2>
-                            <div class="section-header-actions">
-                                <button id="coverage-refresh-btn" class="btn btn-small">Refresh</button>
-                            </div>
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Coverage</h3>
+                            <p class="page-header-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
                         </div>
-                        <p class="settings-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
-                    </section>
+                        <div class="page-header-actions section-header-actions">
+                            <button id="coverage-refresh-btn" class="btn btn-small">Refresh</button>
+                        </div>
+                    </div>
                     <div id="coverage-providers"></div>
                 </section>
 
                 <!-- Trends — savings-snapshot history from /api/analytics/trends
                      (issue #30). trends.ts renders into #trends-content. -->
                 <section id="inventory-trends" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-trends">
-                    <section class="card page-hero">
-                        <div class="section-header">
-                            <h2>Savings trends</h2>
-                            <div class="section-header-actions">
-                                <label>Period:
-                                    <select id="trends-period">
-                                        <option value="3">Last 3 months</option>
-                                        <option value="6" selected>Last 6 months</option>
-                                        <option value="12">Last 12 months</option>
-                                    </select>
-                                </label>
-                                <button id="trends-refresh-btn" class="btn btn-small">Refresh</button>
-                            </div>
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Savings trends</h3>
+                            <p class="page-header-description">Monthly savings run-rate and coverage from the snapshots CUDly collects of your active commitments, broken down by provider and by service.</p>
                         </div>
-                        <p class="settings-description">Monthly savings run-rate and coverage from the snapshots CUDly collects of your active commitments, broken down by provider and by service.</p>
-                    </section>
+                        <div class="page-header-actions section-header-actions">
+                            <label>Period:
+                                <select id="trends-period">
+                                    <option value="3">Last 3 months</option>
+                                    <option value="6" selected>Last 6 months</option>
+                                    <option value="12">Last 12 months</option>
+                                </select>
+                            </label>
+                            <button id="trends-refresh-btn" class="btn btn-small">Refresh</button>
+                        </div>
+                    </div>
                     <div id="trends-content"></div>
                 </section>
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
                 <section id="inventory-ri-exchange" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
-                    <section class="card page-hero">
-                        <div class="section-header">
-                            <h2>Convertible RI Exchange</h2>
-                            <div class="section-header-actions">
-                                <button id="ri-exchange-settings-btn" class="btn btn-small icon-label" title="Jump to Exchange Automation settings in Admin → Purchasing policies"><svg class="icon icon-settings" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Exchange settings</span></button>
-                                <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
-                            </div>
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Convertible RI Exchange</h3>
+                            <p class="page-header-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
                         </div>
-                        <p class="settings-description">View active convertible Reserved Instances, get automated reshape recommendations, and execute exchanges.</p>
-                    </section>
+                        <div class="page-header-actions section-header-actions">
+                            <button id="ri-exchange-settings-btn" class="btn btn-small icon-label" title="Jump to Exchange Automation settings in Admin → Purchasing policies"><svg class="icon icon-settings" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Exchange settings</span></button>
+                            <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
+                        </div>
+                    </div>
 
                     <section class="card">
                         <h3>Active Convertible RIs</h3>
@@ -376,16 +409,25 @@
 
             <!-- Admin Tab (renamed from Settings in #340) -->
             <div id="admin-tab" class="tab-content">
-                <h2 class="sr-only page-heading" id="admin-page-heading" tabindex="-1">Admin</h2>
+                <div class="page-header">
+                    <div class="page-header-text">
+                        <h2 class="page-heading" id="admin-page-heading" tabindex="-1">Admin</h2>
+                        <p class="page-header-description">Settings, purchasing policies, cloud accounts and access for this CUDly install.</p>
+                    </div>
+                </div>
                 <div class="settings-tabs" role="tablist" aria-label="Admin navigation">
                     <button class="sub-tab-btn active" id="admin-subtab-general" data-settings-tab="general" role="tab" aria-selected="true" tabindex="0" aria-controls="settings-section">General</button>
                     <button class="sub-tab-btn" id="admin-subtab-purchasing" data-settings-tab="purchasing" role="tab" aria-selected="false" tabindex="-1" aria-controls="purchasing-panel">Purchasing policies</button>
                     <button class="sub-tab-btn admin-only" id="admin-subtab-accounts" data-settings-tab="accounts" role="tab" aria-selected="false" tabindex="-1" aria-controls="accounts-section">Accounts &amp; onboarding</button>
                     <button class="sub-tab-btn admin-only" id="admin-subtab-users" data-settings-tab="users" role="tab" aria-selected="false" tabindex="-1" aria-controls="users-section">Users, roles &amp; API keys</button>
                 </div>
-                <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
-                    <h2>Global Configuration</h2>
-                    <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                <section id="settings-section" class="page-hero admin-panel" role="tabpanel" aria-labelledby="admin-subtab-general">
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Global Configuration</h3>
+                            <p class="page-header-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
+                        </div>
+                    </div>
                     <!-- Issue #186: the same skeleton loadGlobalSettings shows, so the
                          panel never flashes plain "Loading" text before the script runs. -->
                     <div id="settings-loading" class="loading" aria-busy="true">
@@ -484,9 +526,13 @@
                 </section>
 
                 <!-- Purchasing Section -->
-                <section id="purchasing-panel" class="card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
-                    <h2>Purchasing policies</h2>
-                    <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
+                <section id="purchasing-panel" class="page-hero hidden admin-panel" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Purchasing policies</h3>
+                            <p class="page-header-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
+                        </div>
+                    </div>
 
                     <!-- In-page section links (issue #190). Plain anchors so they
                          work without JS; purchasing-nav.ts adds the scrolling,
@@ -769,9 +815,13 @@
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->
-                <section id="accounts-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-accounts">
-                    <h2>Accounts</h2>
-                    <p class="settings-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
+                <section id="accounts-section" class="admin-only page-hero hidden admin-panel" role="tabpanel" aria-labelledby="admin-subtab-accounts">
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>Accounts</h3>
+                            <p class="page-header-description">Onboard new cloud accounts via federation IaC, review account registrations, and manage per-provider accounts.</p>
+                        </div>
+                    </div>
 
                     <!-- Accounts overview summary (known_issues #29 partial). Counts each
                          status across providers + registrations; clicking a chip jumps to
@@ -861,9 +911,13 @@
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
-                <section id="users-section" class="admin-only card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
-                    <h2>User Management</h2>
-                    <p class="settings-description">Manage users and their permissions.</p>
+                <section id="users-section" class="admin-only page-hero hidden admin-panel" role="tabpanel" aria-labelledby="admin-subtab-users">
+                    <div class="page-header page-header--sub">
+                        <div class="page-header-text">
+                            <h3>User Management</h3>
+                            <p class="page-header-description">Manage users and their permissions.</p>
+                        </div>
+                    </div>
 
                     <fieldset class="settings-category" id="users-fieldset">
                         <legend>Users</legend>
@@ -895,7 +949,7 @@
                 </section>
 
                 <!-- API Keys Section (Admin Only) -->
-                <section id="apikeys-section" class="admin-only card hidden" role="tabpanel" aria-labelledby="admin-subtab-users">
+                <section id="apikeys-section" class="admin-only hidden admin-panel" role="tabpanel" aria-labelledby="admin-subtab-users">
                     <fieldset class="settings-category">
                         <legend>API Keys</legend>
                         <p class="settings-description">Manage API keys for programmatic access to CUDly.</p>

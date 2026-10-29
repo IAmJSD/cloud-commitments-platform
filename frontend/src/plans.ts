@@ -15,6 +15,7 @@ import type { PlannedPurchase } from './api';
 import { populateTermSelect, populatePaymentSelect, isValidCombination, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderErrorCallout } from './lib/error-callout';
 import { canAccess } from './permissions';
 import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import {
@@ -95,7 +96,10 @@ export async function loadPlans(): Promise<void> {
     if (list) {
       teardownSkeleton(list);
       const err = error as Error;
-      list.innerHTML = `<p class="error">Failed to load plans: ${escapeHtml(err.message)}</p>`;
+      renderErrorCallout(list, {
+        message: `Failed to load plans: ${err.message}`,
+        onRetry: () => void loadPlans(),
+      });
     }
   }
 
@@ -123,7 +127,10 @@ async function loadPlannedPurchases(): Promise<void> {
     console.error('Failed to load planned purchases:', error);
     teardownSkeleton(container);
     const err = error as Error;
-    container.innerHTML = `<p class="error">Failed to load planned purchases: ${escapeHtml(err.message)}</p>`;
+    renderErrorCallout(container, {
+      message: `Failed to load planned purchases: ${err.message}`,
+      onRetry: () => void loadPlannedPurchases(),
+    });
   }
 }
 

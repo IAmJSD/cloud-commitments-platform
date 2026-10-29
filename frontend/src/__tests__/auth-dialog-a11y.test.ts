@@ -63,6 +63,17 @@ describe('auth gate dialogs (#731)', () => {
     expect(document.getElementById('login-error')?.getAttribute('role')).toBe('alert');
   });
 
+  test('signed-out gates render as a standalone screen with a decorative brand', async () => {
+    await showLoginModal();
+    const modal = document.getElementById('login-modal')!;
+    expect(modal.classList.contains('auth-screen')).toBe(true);
+    const brands = modal.querySelectorAll('.modal-overlay > .auth-brand');
+    expect(brands.length).toBe(1);
+    expect(brands[0]!.getAttribute('aria-hidden')).toBe('true');
+    // Outside the dialog, so it does not change the dialog's name or content.
+    expect(modal.querySelector('[role="dialog"] .auth-brand')).toBeNull();
+  });
+
   test('Tab wraps inside the login modal and Escape does not dismiss it', async () => {
     await showLoginModal();
     const modal = document.getElementById('login-modal')!;

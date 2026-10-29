@@ -226,8 +226,7 @@ body.sidebar-open {
         border-top: 1px solid var(--cudly-border);
     }
 
-    .app-sidebar-extras #topbar-filters,
-    .app-sidebar-extras #user-info {
+    .app-sidebar-extras #topbar-filters {
         flex-direction: column;
         align-items: stretch;
         gap: var(--cudly-sp-2);
@@ -255,30 +254,84 @@ body.sidebar-open {
         width: 100%;
     }
 
+    /* Drawer account section: who is signed in first (avatar + email, the
+     * role under it), then the two help links side by side, then Log out. */
+    .app-sidebar-extras #user-info {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: center;
+        gap: var(--cudly-sp-1) var(--cudly-sp-2);
+        padding-top: var(--cudly-sp-3);
+        border-top: 1px solid var(--cudly-border);
+    }
+
+    .app-sidebar-extras #user-email-display {
+        order: 1;
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: var(--cudly-sp-2);
+        min-height: 44px;
+        min-width: 0;
+        color: var(--cudly-text);
+        font-size: var(--cudly-fs-sm);
+        font-weight: var(--cudly-fw-medium);
+        text-align: left;
+    }
+
+    .app-sidebar-extras #user-email-display[data-initials]::before {
+        flex-shrink: 0;
+        width: 2rem;
+        height: 2rem;
+        font-size: var(--cudly-fs-xs);
+    }
+
+    .app-sidebar-extras #user-role-display {
+        order: 2;
+        grid-column: 1 / -1;
+        justify-self: start;
+        margin: calc(-1 * var(--cudly-sp-2)) 0 var(--cudly-sp-1) calc(2rem + var(--cudly-sp-2));
+    }
+
+    .app-sidebar-extras #user-info .header-link {
+        order: 3;
+        justify-content: center;
+        padding: 0 var(--cudly-sp-2);
+        border-radius: var(--cudly-r-md);
+        background: var(--cudly-surface-muted);
+        font-size: var(--cudly-fs-sm);
+        font-weight: var(--cudly-fw-medium);
+        color: var(--cudly-text-muted);
+        text-decoration: none;
+    }
+
+    .app-sidebar-extras #logout-btn {
+        order: 4;
+        grid-column: 1 / -1;
+        gap: var(--cudly-sp-2);
+        margin-top: var(--cudly-sp-2);
+        border-radius: var(--cudly-r-md);
+        color: var(--cudly-text);
+        font-size: var(--cudly-fs-sm);
+        font-weight: var(--cudly-fw-medium);
+    }
+
     /* A long address has only the rail's width to sit in. */
     .app-sidebar-extras #user-email-display {
         overflow-wrap: anywhere;
     }
 
-    /* The rules below re-colour #user-info, which is authored for the blue
-     * topbar gradient and so invisible on the drawer's light surface. */
     .app-sidebar-extras .role-badge {
-        align-self: flex-start;
         margin-left: 0;
         background: var(--cudly-info-bg);
         color: var(--cudly-primary);
     }
 
-    /* Zero the topbar's horizontal padding so the links start on the same
-     * left edge as the chips and the email above them. */
     .app-sidebar-extras .header-link,
     .app-sidebar-extras #logout-btn {
         display: flex;
         align-items: center;
         min-height: 44px;
-        padding-left: 0;
-        padding-right: 0;
-        color: var(--cudly-text);
     }
 
     .app-sidebar-extras #logout-btn,
@@ -287,9 +340,14 @@ body.sidebar-open {
         border-color: var(--cudly-border-strong);
     }
 
-    .app-sidebar-extras .header-link:hover,
+    .app-sidebar-extras #user-info .header-link:hover {
+        background: var(--cudly-border);
+        color: var(--cudly-text);
+    }
+
     .app-sidebar-extras #logout-btn:hover {
         background: var(--cudly-surface-muted);
+        color: var(--cudly-text);
     }
 }
 
@@ -326,11 +384,33 @@ body.sidebar-open {
     }
 }
 
+/* Phones keep two tiles per row (2x2): one tile per row made Home a long
+ * scroll of four mostly-empty cards. The tiles tighten to fit. */
 @media (max-width: 480px) {
     #summary,
     #recommendations-summary,
     #history-summary {
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--cudly-sp-3);
+    }
+
+    :is(#summary, #recommendations-summary, #history-summary) > .card {
+        padding: var(--cudly-sp-3);
+    }
+
+    :is(#summary, #recommendations-summary, #history-summary) :is(.kpi-tile-value, .value) {
+        font-size: var(--cudly-fs-xl);
+    }
+
+    /* Two-line labels ("Potential Monthly Savings") must not push one
+     * tile's value below its neighbour's. */
+    :is(#summary, #recommendations-summary, #history-summary) > .card h3 {
+        min-height: 2.8em;
+    }
+
+    /* No room beside the value for the decorative sparkline. */
+    .kpi-tile-spark {
+        display: none;
     }
 }
 
