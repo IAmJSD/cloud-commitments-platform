@@ -1,7 +1,7 @@
 /* App shell and page chrome (UI modernization): page headers, top bar,
  * stat tiles, signed-out screens, error callouts and the mobile shell.
- * Imported after the component files so these rules win ties without
- * raising specificity; everything here uses the base.css tokens. */
+ * Imported after the component and page files (before responsive.css) so
+ * these rules win ties without raising specificity. Uses base.css tokens. */
 
 /* ---------------------------------------------------------------------------
  * Page header: one pattern for every top-level page and sub-tab.
@@ -344,4 +344,128 @@
 
 .app-sidebar-extras .user-info-divider {
     display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Stat tiles: one look for every figure tile. Home and Opportunities KPI
+ * tiles (.kpi-tile), the Purchase History summary cards, the Savings
+ * History / Trends / Users stat cards (.stat-card) and the API key usage
+ * tiles all read label, value, sub-label, top-aligned, so the baselines
+ * line up across a row whether or not a tile has a sparkline or a detail.
+ * ------------------------------------------------------------------------- */
+.kpi-tile,
+#history-summary > .card,
+.stat-card,
+.apikeys-usage-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--cudly-sp-4);
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
+    text-align: left;
+}
+
+/* Label */
+.card.kpi-tile h3,
+#history-summary > .card h3,
+.stat-card h4,
+.stat-card .stat-label,
+.apikeys-usage-tile-label {
+    order: -1;
+    margin: 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    line-height: 1.4;
+    letter-spacing: 0;
+}
+
+/* Value */
+.kpi-tile-value,
+#history-summary > .card .value,
+.stat-card .stat-value,
+.apikeys-usage-tile-value {
+    margin: var(--cudly-sp-2) 0 0;
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-2xl);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+
+.kpi-tile-value.savings,
+#history-summary > .card .value.savings,
+#savings-stats .stat-value {
+    color: var(--cudly-success);
+}
+
+/* Sub-label */
+.kpi-tile-detail,
+#history-summary > .card .detail,
+.stat-card .stat-unit-context {
+    margin: var(--cudly-sp-1) 0 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    line-height: 1.4;
+}
+
+/* KPI tiles: the sparkline shares the value's row on the right, so a tile
+ * with one keeps the same label and value lines as its neighbours. */
+.kpi-tile {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+        "title title"
+        "value spark"
+        "detail detail";
+    align-content: start;
+    align-items: center;
+}
+
+.card.kpi-tile h3 {
+    grid-area: title;
+}
+
+.kpi-tile-value {
+    grid-area: value;
+}
+
+.kpi-tile-detail {
+    grid-area: detail;
+}
+
+.kpi-tile-spark {
+    grid-area: spark;
+    align-self: end;
+    margin-top: var(--cudly-sp-2);
+}
+
+/* The tiles are figures, not controls: no hover lift. */
+.kpi-tile:hover {
+    transform: none;
+    box-shadow: var(--cudly-shadow-sm);
+}
+
+/* Tiles inside a card (Savings History, Trends, Users, API keys) sit on a
+ * muted inner surface instead of stacking shadows. */
+.card .stat-card,
+.card .apikeys-usage-tile,
+.settings-category .stat-card,
+.settings-category .apikeys-usage-tile {
+    background: var(--cudly-surface-muted);
+    box-shadow: none;
+}
+
+.stats-grid,
+.apikeys-usage-tiles {
+    gap: var(--cudly-sp-3);
+}
+
+.stat-card.stat-card-highlight {
+    border-color: var(--cudly-primary);
 }
