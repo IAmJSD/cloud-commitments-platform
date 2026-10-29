@@ -25,8 +25,10 @@ function staircase(points: readonly SchedulePlotPoint[], frame: SchedulePlotFram
 export function renderSchedulePlot(points: readonly SchedulePlotPoint[], frame: SchedulePlotFrame, selected: number, interactive: boolean): string {
   const { width } = frame, count = points.length, x = (index: number): number => schedulePlotX(points[index]!.date, frame);
   const path = staircase(points, frame);
-  return `<svg viewBox="0 0 ${width} 370" width="${width}" role="${interactive ? "group" : "img"}" aria-label="Hypothetical purchase dates">
-                ${[0, 20, 40, 60, 80, 100].map(value => `<path class="preview-grid" d="M 48 ${y(value)} H ${width - 24}"/><text x="8" y="${y(value) + 4}">${value}</text>`).join('')}
+  // The read-only plot has no Start/End handle row, so it ends below the date labels.
+  const height = interactive ? 370 : 310;
+  return `<svg viewBox="0 0 ${width} ${height}" width="${width}" role="${interactive ? "group" : "img"}" aria-label="Hypothetical purchase dates">
+                ${[0, 20, 40, 60, 80, 100].map(value => `<path class="preview-grid" d="M 48 ${y(value)} H ${width - 24}"/><text x="40" y="${y(value) + 4}" text-anchor="end">${value}%</text>`).join('')}
                 <path class="preview-staircase" d="${path}"/>
                 ${points.map((point, index) => `<g ${interactive ? `role="button" tabindex="${point.step - 1 === selected ? 0 : -1}"` : ""} data-preview-step="${point.step - 1}" ${point.step - 1 === selected ? 'data-selected' : ''} ${interactive ? `aria-pressed="${point.step - 1 === selected}"` : ""} aria-label="Step ${point.step}, ${escapeHtml(point.date)}, target ${point.target}%">
 ${interactive ? `                  <foreignObject class="preview-hit" x="${x(index) - 22}" y="${y(point.target) - 22}" width="44" height="44"><div xmlns="http://www.w3.org/1999/xhtml" class="preview-touch-target"></div></foreignObject>` : ""}
