@@ -265,6 +265,21 @@
     border-top: 1px solid var(--cudly-border);
 }
 
+/* Quiet destructive action for page-level buttons such as "Reset to
+ * Defaults": red text on the neutral outline, tinted on hover. Solid red
+ * stays reserved for the final confirm in the confirm dialog. */
+.btn.btn-quiet-danger {
+    background: var(--cudly-surface);
+    border-color: var(--cudly-border-strong);
+    color: var(--cudly-error-fg);
+}
+
+.btn.btn-quiet-danger:hover {
+    background: var(--cudly-error-bg);
+    border-color: var(--cudly-error);
+    color: var(--cudly-error-fg);
+}
+
 /* Dirty (changed but unsaved) field highlight */
 input.dirty,
 select.dirty {
@@ -720,19 +735,4 @@ tr.override-disabled {
 
 .override-transfer-account {
     white-space: nowrap;
-}
-
-/* Quiet destructive action for page-level buttons such as "Reset to
- * Defaults": red text on the neutral outline, tinted on hover. Solid red
- * stays reserved for the final confirm in the confirm dialog. */
-.btn.btn-quiet-danger {
-    background: var(--cudly-surface);
-    border-color: var(--cudly-border-strong);
-    color: var(--cudly-error-fg);
-}
-
-.btn.btn-quiet-danger:hover {
-    background: var(--cudly-error-bg);
-    border-color: var(--cudly-error);
-    color: var(--cudly-error-fg);
 }
