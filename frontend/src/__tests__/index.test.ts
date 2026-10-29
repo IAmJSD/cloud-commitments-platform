@@ -117,11 +117,8 @@ describe('Index Module', () => {
     const event = new Event('DOMContentLoaded');
     document.dispatchEvent(event);
 
-    // Wait for async init
-    return new Promise(resolve => setTimeout(() => {
-      expect(app.init).toHaveBeenCalled();
-      resolve(undefined);
-    }, 10));
+    // The listener calls init synchronously; no wait is needed (issue #36).
+    expect(app.init).toHaveBeenCalled();
   });
 
   test('wires the wide-table scroll affordances on DOMContentLoaded (#185)', () => {

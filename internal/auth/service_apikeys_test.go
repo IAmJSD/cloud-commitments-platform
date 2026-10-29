@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -659,66 +660,74 @@ func TestService_DeleteAPIKey(t *testing.T) {
 	})
 }
 
+// validateBooksNoUsage is the "successfully validate API key" case. It must
+// run inside a synctest bubble.
+func validateBooksNoUsage(ctx context.Context, t *testing.T) {
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	apiKey := "test-api-key-123456"
+	hash := sha256.Sum256([]byte(apiKey))
+	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	user := &User{
+		ID:     "user-123",
+		Email:  "test@example.com",
+		Active: true,
+	}
+
+	apiKeyRecord := &UserAPIKey{
+		ID:          "key-1",
+		UserID:      "user-123",
+		Name:        "Test Key",
+		KeyHash:     keyHash,
+		IsActive:    true,
+		ExpiresAt:   nil,
+		Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+	}
+
+	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
+	mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+	// Validation must book NO usage: one HTTP request validates the same
+	// credential several times, so counting here would multiply every
+	// reported figure. The API layer books once per request instead --
+	// see Handler.validateSecurityContext and the exactly-once tests in
+	// internal/server/apikey_usage_booking_test.go.
+	//
+	// Registered with .Maybe() rather than left unregistered because an
+	// unexpected call would panic inside the flush goroutine, where
+	// RecordUsageAsync's recover() would swallow it and the test would
+	// pass regardless.
+	usageRecorded := make(chan struct{}, 1)
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
+		Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
+		Return(nil).Maybe()
+
+	resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
+
+	require.NoError(t, err)
+	assert.Equal(t, user, resultUser)
+	assert.Equal(t, apiKeyRecord, resultKey)
+	// A booking would be flushed by a goroutine started before
+	// ValidateUserAPIKey returned. synctest.Wait returns only once that
+	// goroutine has finished or is durably blocked, so by then any flush
+	// has already reached the store and the non-blocking receive is exact.
+	// A fixed quiet window could pass a flusher a loaded runner had not
+	// scheduled yet.
+	synctest.Wait()
+	select {
+	case <-usageRecorded:
+		t.Fatal("ValidateUserAPIKey must not record usage: booking on the validation path counts validations, not requests")
+	default:
+	}
+	mockStore.AssertExpectations(t)
+}
+
 func TestService_ValidateUserAPIKey(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("successfully validate API key", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		apiKey := "test-api-key-123456"
-		hash := sha256.Sum256([]byte(apiKey))
-		keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
-
-		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-		}
-
-		apiKeyRecord := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Name:        "Test Key",
-			KeyHash:     keyHash,
-			IsActive:    true,
-			ExpiresAt:   nil,
-			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
-		}
-
-		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
-		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		// Validation must book NO usage: one HTTP request validates the same
-		// credential several times, so counting here would multiply every
-		// reported figure. The API layer books once per request instead --
-		// see Handler.validateSecurityContext and the exactly-once tests in
-		// internal/server/apikey_usage_booking_test.go.
-		//
-		// Registered with .Maybe() rather than left unregistered because an
-		// unexpected call would panic inside the flush goroutine, where
-		// RecordUsageAsync's recover() would swallow it and the test would
-		// pass regardless.
-		usageRecorded := make(chan struct{}, 1)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
-			Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
-			Return(nil).Maybe()
-
-		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
-
-		require.NoError(t, err)
-		assert.Equal(t, user, resultUser)
-		assert.Equal(t, apiKeyRecord, resultKey)
-		// A booking would be flushed by a goroutine started before
-		// ValidateUserAPIKey returned, so a bounded quiet window is the only
-		// way to establish its absence. Unlike the positive waits elsewhere
-		// in this suite (where too short a deadline flakes), too short a
-		// window here can only miss a regression, never fail spuriously.
-		select {
-		case <-usageRecorded:
-			t.Fatal("ValidateUserAPIKey must not record usage: booking on the validation path counts validations, not requests")
-		case <-time.After(2 * time.Second):
-		}
-		mockStore.AssertExpectations(t)
+		synctest.Test(t, func(t *testing.T) { validateBooksNoUsage(ctx, t) })
 	})
 
 	t.Run("fail when owner's password changed after minting", func(t *testing.T) {

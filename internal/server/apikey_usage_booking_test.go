@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
@@ -142,42 +143,34 @@ func (h *usageBookingHarness) request(method, path string) *events.LambdaFunctio
 }
 
 // requireExactlyOneBooking asserts the request booked exactly one request
-// against the key.
+// against the key. It must run inside the synctest bubble that ran the
+// request.
 //
 // The bookings themselves are synchronous -- RecordUsageAsync increments an
 // in-memory counter before returning -- so by the time HandleRequest returns,
 // every booking the request will ever make has already been made; only the
-// flush to the store runs on a goroutine. With the bug present the surplus
-// bookings therefore surface either as a first flush carrying a delta above 1
-// or as a second flush arriving microseconds later, and both are caught here.
-// The second half needs a bounded quiet window rather than a channel receive
-// because it is proving the ABSENCE of a further write. Note the two waits are
-// not symmetric: the first is a positive wait, where too short a deadline
-// causes a flaky FAILURE, so it is generous. The second is a negative wait,
-// where too short a window can only cause a missed detection (a false PASS),
-// never a flake -- and the surplus flush it is looking for comes from a
-// goroutine already running before HandleRequest returned, so it lands within
-// microseconds and the window is orders of magnitude wider than needed.
+// flush to the store runs on a goroutine. synctest.Wait returns once that
+// goroutine has finished (or is durably blocked), so every flush has reached
+// the store and the drain below sees all of them. With the bug present the
+// surplus bookings surface as a flush carrying a delta above 1 or as a second
+// flush, and both are caught. A fixed quiet window could instead pass a
+// second flush that a loaded runner had not scheduled yet.
 func (h *usageBookingHarness) requireExactlyOneBooking(t *testing.T) {
 	t.Helper()
 
-	select {
-	case delta := <-h.flushes:
-		require.EqualValues(t, 1, delta,
-			"one HTTP request must book exactly 1 usage; the first flush wrote %d", delta)
-	case <-time.After(10 * time.Second):
-		t.Fatal("no API key usage reached the store")
+	synctest.Wait()
+	var deltas []int64
+	for drained := false; !drained; {
+		select {
+		case delta := <-h.flushes:
+			deltas = append(deltas, delta)
+		default:
+			drained = true
+		}
 	}
-
-	select {
-	case delta := <-h.flushes:
-		t.Fatalf("a second flush booked %d more usage(s) (total %d): usage is being counted per credential validation, not per request",
-			delta, h.totalDelta.Load())
-	case <-time.After(2 * time.Second):
-	}
-
-	require.EqualValues(t, 1, h.totalDelta.Load(),
-		"total usage booked for one HTTP request")
+	require.Equal(t, []int64{1}, deltas,
+		"one HTTP request must book exactly 1 usage in one flush; flushes wrote %v (total %d): "+
+			"usage is being counted per credential validation, not per request", deltas, h.totalDelta.Load())
 }
 
 // TestHandleRequest_UserAPIKey_BooksOneUsagePerRequest pins the single-verb
@@ -185,18 +178,20 @@ func (h *usageBookingHarness) requireExactlyOneBooking(t *testing.T) {
 // re-validates it inside the view:api-keys permission check, so booking on
 // the validation path reported one request as two.
 func TestHandleRequest_UserAPIKey_BooksOneUsagePerRequest(t *testing.T) {
-	h := newUsageBookingHarness(t, []auth.Permission{
-		{Action: auth.ActionView, Resource: auth.ResourceAPIKeys},
+	synctest.Test(t, func(t *testing.T) {
+		h := newUsageBookingHarness(t, []auth.Permission{
+			{Action: auth.ActionView, Resource: auth.ResourceAPIKeys},
+		})
+
+		resp, err := h.handler.HandleRequest(context.Background(),
+			h.request("GET", "/api/api-keys/usage-stats"))
+
+		require.NoError(t, err)
+		require.Equal(t, 200, resp.StatusCode, "body: %s", resp.Body)
+		require.Greater(t, h.validations.Load(), int64(1),
+			"harness precondition: this endpoint must re-validate the credential, otherwise it cannot detect per-validation booking")
+		h.requireExactlyOneBooking(t)
 	})
-
-	resp, err := h.handler.HandleRequest(context.Background(),
-		h.request("GET", "/api/api-keys/usage-stats"))
-
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode, "body: %s", resp.Body)
-	require.Greater(t, h.validations.Load(), int64(1),
-		"harness precondition: this endpoint must re-validate the credential, otherwise it cannot detect per-validation booking")
-	h.requireExactlyOneBooking(t)
 }
 
 // TestHandleRequest_UserAPIKeyMultiVerbGate_BooksOneUsagePerRequest pins the
@@ -208,18 +203,20 @@ func TestHandleRequest_UserAPIKey_BooksOneUsagePerRequest(t *testing.T) {
 // The resulting 403 is incidental -- what is pinned is that an authenticated
 // request books one usage no matter how many permission checks it triggers.
 func TestHandleRequest_UserAPIKeyMultiVerbGate_BooksOneUsagePerRequest(t *testing.T) {
-	h := newUsageBookingHarness(t, []auth.Permission{
-		{Action: auth.ActionView, Resource: auth.ResourceRecommendations},
+	synctest.Test(t, func(t *testing.T) {
+		h := newUsageBookingHarness(t, []auth.Permission{
+			{Action: auth.ActionView, Resource: auth.ResourceRecommendations},
+		})
+
+		resp, err := h.handler.HandleRequest(context.Background(),
+			h.request("DELETE", "/api/purchases/planned/11111111-1111-1111-1111-111111111111"))
+
+		require.NoError(t, err)
+		require.Equal(t, 403, resp.StatusCode, "body: %s", resp.Body)
+		require.GreaterOrEqual(t, h.validations.Load(), int64(5),
+			"harness precondition: the four-verb gate must re-validate the credential once per verb")
+		h.requireExactlyOneBooking(t)
 	})
-
-	resp, err := h.handler.HandleRequest(context.Background(),
-		h.request("DELETE", "/api/purchases/planned/11111111-1111-1111-1111-111111111111"))
-
-	require.NoError(t, err)
-	require.Equal(t, 403, resp.StatusCode, "body: %s", resp.Body)
-	require.GreaterOrEqual(t, h.validations.Load(), int64(5),
-		"harness precondition: the four-verb gate must re-validate the credential once per verb")
-	h.requireExactlyOneBooking(t)
 }
 
 // TestHandleRequest_UserAPIKeyDeploymentInfo_BooksOneUsage pins issue #156:
@@ -227,14 +224,16 @@ func TestHandleRequest_UserAPIKeyMultiVerbGate_BooksOneUsagePerRequest(t *testin
 // "/api/info" skipped the middleware's booking block for it.
 func TestHandleRequest_UserAPIKeyDeploymentInfo_BooksOneUsage(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp") // skip the best-effort STS lookup
-	h := newUsageBookingHarness(t, []auth.Permission{
-		{Action: auth.ActionView, Resource: auth.ResourceAPIKeys},
+	synctest.Test(t, func(t *testing.T) {
+		h := newUsageBookingHarness(t, []auth.Permission{
+			{Action: auth.ActionView, Resource: auth.ResourceAPIKeys},
+		})
+
+		resp, err := h.handler.HandleRequest(context.Background(),
+			h.request("GET", "/api/info/deployment"))
+
+		require.NoError(t, err)
+		require.Equal(t, 200, resp.StatusCode, "body: %s", resp.Body)
+		h.requireExactlyOneBooking(t)
 	})
-
-	resp, err := h.handler.HandleRequest(context.Background(),
-		h.request("GET", "/api/info/deployment"))
-
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode, "body: %s", resp.Body)
-	h.requireExactlyOneBooking(t)
 }

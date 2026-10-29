@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -100,40 +101,54 @@ func TestClient_CancelledCallerWinningTheSlotNeverResolves(t *testing.T) {
 	}
 }
 
-// slowResolver counts calls and sleeps so racing callers overlap the build.
-type slowResolver struct {
+// gatedResolver counts calls and parks each one until release is closed, so a
+// test decides when the in-flight build may finish.
+type gatedResolver struct {
 	flakyResolver
-	n atomic.Int32
+	n       atomic.Int32
+	release chan struct{}
 }
 
-func (s *slowResolver) GetSecret(context.Context, string) (string, error) {
-	s.n.Add(1)
-	time.Sleep(100 * time.Millisecond)
+func (g *gatedResolver) GetSecret(context.Context, string) (string, error) {
+	g.n.Add(1)
+	<-g.release
 	return testKey, nil
 }
 
+// The synctest bubble makes the overlap explicit instead of hoping a sleep is
+// long enough: synctest.Wait returns only once every caller is durably
+// blocked, i.e. one is parked inside the resolver and the rest on the build
+// slot. A second resolver call at that point means the build is not
+// serialized; one after release means waiters rebuild instead of reusing the
+// cached client.
 func TestClient_ConcurrentCallersShareOneBuild(t *testing.T) {
-	r := &slowResolver{}
-	p := NewProvider(fullSettings(), r, nil)
-	const n = 20
-	got := make([]any, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			c, err := p.Client(context.Background())
-			if err == nil {
-				got[i] = c
-			}
-		}()
-	}
-	wg.Wait()
-	require.EqualValues(t, 1, r.n.Load(), "resolver called exactly once")
-	require.NotNil(t, got[0])
-	for i := range got {
-		require.Same(t, got[0], got[i])
-	}
+	synctest.Test(t, func(t *testing.T) {
+		r := &gatedResolver{release: make(chan struct{})}
+		p := NewProvider(fullSettings(), r, nil)
+		const n = 20
+		got := make([]any, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		openGate := sync.OnceFunc(func() { close(r.release) })
+		// A failed assertion exits this goroutine; drain the callers so the
+		// bubble reports the failure rather than a deadlock.
+		defer func() { openGate(); wg.Wait() }()
+		for i := 0; i < n; i++ {
+			wg.Go(func() { got[i], errs[i] = p.Client(context.Background()) })
+		}
+		synctest.Wait()
+		require.EqualValues(t, 1, r.n.Load(), "only one caller may build while the others wait")
+		require.Nil(t, p.client.Load(), "nothing cached before the build completes")
+
+		openGate()
+		wg.Wait()
+		require.EqualValues(t, 1, r.n.Load(), "waiters reuse the built client instead of rebuilding")
+		for i := range got {
+			require.NoError(t, errs[i])
+			require.NotNil(t, got[i])
+			require.Same(t, got[0], got[i])
+		}
+	})
 }
 
 // ctxBlockedResolver parks until the caller's ctx ends, then returns the

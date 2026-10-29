@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -180,17 +181,20 @@ func TestAttachIntegration_PlansOnOneAccountNeverOverAttach(t *testing.T) {
 
 	var mu sync.Mutex
 	resolved := 0
-	allIn := make(chan struct{})
+	arrived := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return resolved
+	}
+	// Opens once every tick has resolved or is observed parked on the
+	// per-provider lock (with the lock the others cannot resolve until this
+	// tick commits), never on a guessed timeout.
 	barrier := func() {
 		mu.Lock()
 		resolved++
-		if resolved == ticks {
-			close(allIn)
-		}
 		mu.Unlock()
-		select {
-		case <-allIn:
-		case <-time.After(500 * time.Millisecond): // with the lock the others never arrive
+		if err := testhelpers.AwaitArrivalsOrLockWaits(ctx, pool, ticks, arrived, planProviderLockWait); err != nil {
+			t.Error(err)
 		}
 	}
 	sender := newCountingSender(ctx)

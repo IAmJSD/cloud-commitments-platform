@@ -89,25 +89,32 @@ func newReinitTestApp(t *testing.T) *Application {
 }
 
 // TestReinitializeAfterConnect_CleanupWorkerOutlivesRequestCtx pins the call
-// site (#1137): the worker reinitializeAfterConnect starts must not stop when
-// the request context that triggered the lazy DB connect ends (#269), and must
-// stop on Close. Starting it with dbRL.StartCleanupWorker(ctx) fails this.
+// site (#1137): the worker reinitializeAfterConnect starts must run on the app
+// lifetime ctx, not on the request context that triggered the lazy DB connect
+// (#269), so Close must stop it while that request ctx is still live. Starting
+// it with dbRL.StartCleanupWorker(ctx) leaves it running after Close and fails
+// this.
+//
+// This checks the positive half (Close stops it) instead of a quiet window
+// after canceling the request ctx: such a window passes a request-bound worker
+// that a loaded runner had not yet scheduled to exit. The other half is
+// structural: startRateLimiterCleanup takes no ctx, and
+// TestStartRateLimiterCleanup_SurvivesRequestCtxAndStopsOnClose pins the ctx
+// it hands the worker.
 func TestReinitializeAfterConnect_CleanupWorkerOutlivesRequestCtx(t *testing.T) {
 	app := newReinitTestApp(t)
 	before := liveDBRLWorkers()
 
 	reqCtx, cancelReq := context.WithCancel(testutil.TestContext(t))
+	defer cancelReq() // only after the assertions: the ctx stays live throughout
 	require.NoError(t, app.reinitializeAfterConnect(reqCtx, &database.Connection{}))
 	require.Equal(t, before+1, liveDBRLWorkers(), "reinitializeAfterConnect must start one cleanup worker")
 
-	cancelReq()
-	assert.Never(t, func() bool { return liveDBRLWorkers() <= before },
-		300*time.Millisecond, 10*time.Millisecond,
-		"cleanup worker stopped with the request ctx; it must run on the app lifetime ctx")
-
 	require.NoError(t, app.Close())
 	assert.Eventually(t, func() bool { return liveDBRLWorkers() == before },
-		2*time.Second, 10*time.Millisecond, "cleanup worker must stop on Close")
+		2*time.Second, 10*time.Millisecond,
+		"cleanup worker must stop on Close while the request ctx is still live; it must run on the app lifetime ctx")
+	require.NoError(t, reqCtx.Err(), "the request ctx must still be live when Close stops the worker")
 }
 
 // TestReinitializeAfterConnect_NoCleanupWorkerWhenLaterStepFails: ensureDB

@@ -17,6 +17,9 @@ const testsDir = __dirname;
 // `new Promise(r => setTimeout(r, N))` and `new Promise(r => setTimeout(() => r(), N))`,
 // with or without a type argument or parentheses around the parameter.
 const SLEEP = /new Promise\s*(?:<[^>]*>)?\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*\{?\s*setTimeout\(\s*(?:\1|\(\)\s*=>\s*\1\(\))\s*,\s*([^)]+?)\s*\)/g;
+// `new Promise(r => setTimeout(() => { expect(...); r(); }, N))`: the
+// assertions run inside the timer body, after the same guessed wait.
+const SLEEP_BLOCK = /new Promise\s*(?:<[^>]*>)?\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*\{?\s*setTimeout\(\s*\(\)\s*=>\s*\{(?:(?!setTimeout\()[\s\S])*?\b\1\([^)]*\);?\s*\}\s*,\s*([^)]+?)\s*\)/g;
 
 function testSources(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -28,7 +31,7 @@ function testSources(dir: string): string[] {
 
 function findSleeps(source: string): { line: number; delay: string }[] {
   const found: { line: number; delay: string }[] = [];
-  for (const match of source.matchAll(SLEEP)) {
+  for (const match of [...source.matchAll(SLEEP), ...source.matchAll(SLEEP_BLOCK)]) {
     const delay = match[2] ?? '';
     if (/^0+$/.test(delay)) continue;
     found.push({ line: source.slice(0, match.index).split('\n').length, delay });
@@ -46,6 +49,9 @@ describe('no wall-clock sleeps in unit tests (issue #36)', () => {
     expect(findSleeps('\nawait new Promise(r => { setTimeout(r, 5); });')).toEqual([{ line: 2, delay: '5' }]);
     expect(findSleeps('await new Promise((resolve) => setTimeout(resolve, 0));')).toEqual([]);
     expect(findSleeps('setTimeout(() => closeModal(modal), 2000);')).toEqual([]);
+    expect(findSleeps('return new Promise(resolve => setTimeout(() => {\n  expect(x).toBe(1);\n  resolve(undefined);\n}, 10));'))
+      .toEqual([{ line: 1, delay: '10' }]);
+    expect(findSleeps('await new Promise<void>((done) => setTimeout(() => { check(); done(); }, 0));')).toEqual([]);
   });
 
   test('no test file sleeps for a fixed time to wait for async work', () => {

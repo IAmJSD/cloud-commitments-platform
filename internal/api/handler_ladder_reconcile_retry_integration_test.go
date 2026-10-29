@@ -12,9 +12,11 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,10 +34,14 @@ type pausedChainStore struct {
 	*config.PostgresStore
 	locked  chan struct{}
 	release chan struct{}
+	pid     int // backend holding the chain locks; set before locked closes
 }
 
 func (s *pausedChainStore) LockLadderTrancheChainTx(ctx context.Context, tx pgx.Tx, id string) ([]config.LadderChainNode, error) {
 	chain, err := s.PostgresStore.LockLadderTrancheChainTx(ctx, tx, id)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&s.pid)
+	}
 	close(s.locked)
 	<-s.release
 	return chain, err
@@ -43,6 +49,7 @@ func (s *pausedChainStore) LockLadderTrancheChainTx(ctx context.Context, tx pgx.
 
 type ladderRetryRig struct {
 	store      *config.PostgresStore
+	pool       *pgxpool.Pool
 	cfgID      string
 	trancheID  string
 	failedExec *config.PurchaseExecution
@@ -60,7 +67,7 @@ func newLadderRetryRig(t *testing.T) *ladderRetryRig {
 		Mode: "email_approval", Cadence: "daily", TargetCoverage: 80, BufferFraction: 0.1, BaselinePercentile: 5, LookbackDays: 30,
 		BufferUtilizationThreshold: 50, MaxActionsPerRun: 5, RampSchedule: []byte(`{"steps":[{"after_days":0,"fraction":1.0}]}`)})
 	require.NoError(t, err)
-	r := &ladderRetryRig{store: store, cfgID: cfg.ID}
+	r := &ladderRetryRig{store: store, pool: pool, cfgID: cfg.ID}
 	r.addFiredTranche(t)
 	return r
 }
@@ -133,10 +140,12 @@ func TestLadderReconcile_TailLockBlocksRealRetryLink(t *testing.T) {
 	retried := make(chan error, 1)
 	go func() { retried <- h.persistRetrySuccessorTx(ctx, r.failedExec, r.successor(), nil) }()
 
-	select {
-	case err := <-retried:
+	// The retry must queue behind the reconciler's chain locks; observing it
+	// blocked proves it cannot link before the reconciler decides.
+	if err, finished := testhelpers.AwaitBlockedBy(ctx, t, r.pool, paused.pid, retried); finished {
+		close(paused.release)
+		<-reconciled
 		t.Fatalf("retry linked while the reconciler held the tail row (err=%v)", err)
-	case <-time.After(1500 * time.Millisecond):
 	}
 
 	close(paused.release)

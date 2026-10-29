@@ -15,6 +15,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -102,10 +103,14 @@ type retryLockPausedStore struct {
 	*config.PostgresStore
 	locked  chan struct{}
 	release chan struct{}
+	pid     int // backend holding the tranche row; set before locked closes
 }
 
 func (s *retryLockPausedStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, key string) (ladder.TrancheStatus, bool, error) {
 	st, found, err := s.PostgresStore.LockLadderTrancheForRetryTx(ctx, tx, key)
+	if err == nil {
+		err = tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&s.pid)
+	}
 	close(s.locked)
 	<-s.release
 	return st, found, err
@@ -129,12 +134,12 @@ func TestRetry_TrancheLockBlocksReconciler(t *testing.T) {
 		_, err := purchase.ReconcileLadderTranches(ctx, r.store, visibleNever{}, time.Now())
 		reconciled <- err
 	}()
-	select {
-	case err := <-reconciled:
+	// The reconciler must queue behind Retry's tranche row lock; observing it
+	// blocked proves it cannot fail the tranche before Retry links.
+	if err, finished := testhelpers.AwaitBlockedBy(ctx, t, r.pool, paused.pid, reconciled); finished {
 		close(paused.release) // let the Retry goroutine finish so cleanup cannot hang
 		<-retried
 		t.Fatalf("reconciler finished while Retry held the tranche row (err=%v)", err)
-	case <-time.After(1500 * time.Millisecond):
 	}
 
 	close(paused.release)
