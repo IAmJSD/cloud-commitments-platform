@@ -274,7 +274,7 @@ tr.history-row-highlight:hover {
 
 .table-compact td.cell-wrap {
     white-space: normal;
-    min-width: 12rem;
+    min-width: 10rem;
 }
 
 /* Sublines under a badge (approver, failure reason) wrap inside the cell. */
@@ -294,6 +294,10 @@ tr.history-row-highlight:hover {
 
 .cell-truncate--sm {
     max-width: 9rem;
+}
+
+.cell-truncate--xs {
+    max-width: 7rem;
 }
 
 .table-compact td.cell-wrap-narrow {

@@ -1032,7 +1032,7 @@ function renderRecommendations(container: HTMLElement): void {
           const altCell = renderAlternativesCell(rec.alternative_targets);
           return `
           <tr>
-            <td class="monospace"><span class="cell-truncate" title="${escapeHtml(rec.source_ri_id)}">${escapeHtml(rec.source_ri_id)}</span></td>
+            <td class="monospace"><span class="cell-truncate cell-truncate--xs" title="${escapeHtml(rec.source_ri_id)}">${escapeHtml(rec.source_ri_id)}</span></td>
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
             <td>${renderSuggestedCell(rec)}</td>
             <td class="cell-wrap">${altCell}</td>
