@@ -40,6 +40,8 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
   const save = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   const cancel = modal.querySelector<HTMLButtonElement>('[data-cancel]')!;
   const reload = modal.querySelector<HTMLButtonElement>('[data-reload]')!;
+  // The header close-X stands in for Cancel, so it is locked with it while a save is pending.
+  const closeX = modal.querySelector<HTMLButtonElement>('.modal-header .modal-close');
   let pending = false;
   const initialDate = new Date(event.scheduled_date).toISOString().slice(0, 19);
   const originalTotal = ladderAmountUnits(ladderTotal(siblings));
@@ -84,6 +86,7 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
     pending = true;
     form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach(input => { input.disabled = true; });
     cancel.disabled = false;
+    if (closeX) closeX.disabled = true;
     cancel.setAttribute('aria-disabled', 'true');
     cancel.textContent = 'Save in progress';
     cancel.focus();
@@ -100,6 +103,7 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
       pending = false;
       form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach(input => { input.disabled = false; });
       cancel.removeAttribute('aria-disabled');
+      if (closeX) closeX.disabled = false;
       cancel.textContent = 'Cancel';
       updatePreview();
     }
