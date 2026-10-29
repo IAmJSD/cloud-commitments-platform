@@ -17,6 +17,7 @@ import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
 import { loadTrends } from './trends';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderErrorCallout } from './lib/error-callout';
 import {
   buildCoverageBar, coverageTargetFor, coverageTargetsFromConfig, type CoverageTargets,
 } from './lib/coverage-bar';
@@ -138,7 +139,10 @@ export async function loadActiveCommitments(): Promise<void> {
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
-    renderErrorParagraph(container, `Failed to load active commitments: ${err.message}`);
+    renderErrorCallout(container, {
+      message: `Failed to load active commitments: ${err.message}`,
+      onRetry: () => void loadActiveCommitments(),
+    });
   }
 }
 
@@ -159,14 +163,6 @@ function wireRefreshButton(): void {
 
 function clearChildren(el: HTMLElement): void {
   while (el.firstChild) el.removeChild(el.firstChild);
-}
-
-function renderErrorParagraph(container: HTMLElement, message: string): void {
-  clearChildren(container);
-  const p = document.createElement('p');
-  p.className = 'error';
-  p.textContent = message;
-  container.appendChild(p);
 }
 
 function renderEmptyParagraph(container: HTMLElement, message: string): void {
@@ -402,7 +398,10 @@ export async function loadCoverageBreakdown(): Promise<void> {
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
-    renderErrorParagraph(container, `Failed to load coverage data: ${err.message}`);
+    renderErrorCallout(container, {
+      message: `Failed to load coverage data: ${err.message}`,
+      onRetry: () => void loadCoverageBreakdown(),
+    });
   }
 }
 

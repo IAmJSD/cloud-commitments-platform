@@ -26,6 +26,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderErrorCallout } from './lib/error-callout';
 import { renderKpiTiles } from './lib/kpi-tile';
 import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
@@ -714,7 +715,10 @@ export async function loadRecommendations(): Promise<void> {
     if (list) {
       teardownSkeleton(list);
       const err = error as Error;
-      list.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
+      renderErrorCallout(list, {
+        message: `Failed to load recommendations: ${err.message}`,
+        onRetry: () => void loadRecommendations(),
+      });
     }
   }
 }
