@@ -539,3 +539,103 @@ th .history-column-filter-btn:focus-visible {
     max-width: 16rem;
     overflow-wrap: break-word;
 }
+
+/* Notices above a table (RI exchange reshape staleness and excluded RIs):
+ * an alert icon and a muted body, with a gap before the next notice and
+ * before the table. */
+.table-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cudly-sp-2);
+    margin: var(--cudly-sp-3) 0;
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    border: 1px solid color-mix(in srgb, var(--cudly-warn) 45%, transparent);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+}
+
+.table-callout > .icon {
+    margin-top: 0.2em;
+    color: var(--cudly-warn-fg);
+}
+
+.table-callout.error {
+    border-color: color-mix(in srgb, var(--cudly-error) 35%, transparent);
+    background: var(--cudly-error-bg);
+}
+
+.table-callout.error > .icon {
+    color: var(--cudly-error-fg);
+}
+
+.table-callout-body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.table-callout-body p {
+    margin: 0;
+}
+
+.table-callout-body p + p {
+    margin-top: var(--cudly-sp-1);
+}
+
+/* Opportunities: the row's checkbox and its compact "create plan" icon
+ * button sit side by side in the sticky first column. */
+.rec-select-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+}
+
+.rec-select-cell .rec-plan-btn {
+    width: 1.5rem;
+    height: 1.5rem;
+    margin: 0;
+    border-color: transparent;
+    background: transparent;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-sm);
+}
+
+.rec-select-cell .rec-plan-btn:hover,
+.rec-select-cell .rec-plan-btn:focus-visible {
+    border-color: var(--cudly-border-strong);
+    background: var(--cudly-surface);
+    color: var(--cudly-primary);
+}
+
+/* Legend for the savings stripe on the left edge of Opportunities rows. */
+.savings-stripe-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-3);
+    margin-left: auto;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-xs);
+}
+
+.savings-stripe-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+}
+
+.savings-stripe-swatch {
+    display: inline-block;
+    width: 3px;
+    height: 0.875rem;
+    border-radius: 1px;
+}
+
+.savings-stripe-swatch--high {
+    background: var(--cudly-success);
+}
+
+.savings-stripe-swatch--medium {
+    background: var(--cudly-warn);
+}

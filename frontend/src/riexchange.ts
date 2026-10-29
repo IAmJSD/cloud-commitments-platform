@@ -599,6 +599,7 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
   if (!excluded || excluded.length === 0) {
     notice.textContent = '';
     notice.className = '';
+    notice.removeAttribute('role');
     return;
   }
   const byReason = new Map<string, string[]>();
@@ -608,11 +609,40 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
     if (ids) ids.push(e.ri_id);
     else byReason.set(reason, [e.ri_id]);
   }
-  notice.className = 'freshness-banner warning';
-  // textContent keeps server-provided reasons and ids inert.
-  notice.textContent = [...byReason]
-    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${reason}: ${ids.join(', ')}`)
-    .join('; ');
+  // textContent keeps server-provided reasons and ids inert. The server
+  // writes reasons as sentences ("Expires in 35 days; ... the term."), so
+  // the trailing full stop and a leading capital are dropped to read
+  // inside "... left out because <reason>: <ids>" (it used to end ".:").
+  const lines = [...byReason]
+    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${inlineReason(reason)}: ${ids.join(', ')}`);
+  renderTableCallout(notice, 'warning', lines);
+}
+
+/** "Expires in 35 days; extend the term." -> "expires in 35 days; extend the term". */
+function inlineReason(reason: string): string {
+  const trimmed = reason.trim().replace(/[.\s]+$/, '');
+  // Lower-case a capitalised first word, but leave acronyms ("AWS") alone.
+  return /^[A-Z][a-z]/.test(trimmed) ? trimmed[0]!.toLowerCase() + trimmed.slice(1) : trimmed;
+}
+
+/**
+ * Fill `el` as a table callout: an alert icon and a muted body, one line
+ * per entry. Used for the reshape staleness and excluded-RI notices, which
+ * used to be bold run-on paragraphs with a "!" prefix.
+ */
+function renderTableCallout(el: HTMLElement, tone: 'warning' | 'error', lines: string[]): void {
+  el.className = `freshness-banner ${tone} table-callout`;
+  el.setAttribute('role', 'note');
+  el.textContent = '';
+  el.appendChild(createIcon('alert-triangle'));
+  const body = document.createElement('div');
+  body.className = 'table-callout-body';
+  for (const line of lines) {
+    const p = document.createElement('p');
+    p.textContent = line;
+    body.appendChild(p);
+  }
+  el.appendChild(body);
 }
 
 /**
@@ -643,6 +673,7 @@ export function renderReshapeStalenessBanner(
   if (!staleness) {
     banner.textContent = '';
     banner.className = '';
+    banner.removeAttribute('role');
     return;
   }
 
@@ -656,18 +687,10 @@ export function renderReshapeStalenessBanner(
   }
 
   const isSoft = staleness === 'soft';
-  banner.className = isSoft ? 'freshness-banner warning' : 'freshness-banner error';
-
-  const icon = isSoft ? '!' : '!!';
   const copy = isSoft
     ? `Cross-family alternatives are based on Cost Explorer recommendations that may be up to 24h old${ageLabel}. Some prices may be stale.`
     : `Cross-family alternatives are based on Cost Explorer recommendations older than 24h${ageLabel}. Prices may be significantly out of date.`;
-
-  banner.textContent = '';
-  const strong = document.createElement('strong');
-  strong.textContent = icon + ' ';
-  banner.appendChild(strong);
-  banner.appendChild(document.createTextNode(copy));
+  renderTableCallout(banner, isSoft ? 'warning' : 'error', [copy]);
 }
 
 // ──────────────────────────────────────────────
