@@ -7625,6 +7625,20 @@ describe('Issue #483: popover stays open while user scrolls its contents', () =>
     expect(document.querySelector('.column-filter-popover')).toBeNull();
   });
 
+  test('a commit that re-renders the table keeps the new trigger expanded', async () => {
+    await loadRecommendations();
+    const oldTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    oldTrigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover')!;
+    const box = popover.querySelector<HTMLInputElement>('input[data-value="t3.medium"]')!;
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const newTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    expect(newTrigger).not.toBe(oldTrigger);
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(newTrigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
   test('a scroll while the trigger stays on screen keeps the popover open and re-anchors it', async () => {
     // Clicking a funnel at the table scroller's clipped edge scrolls the
     // table (and the mirrored strip a frame later); those scroll events
