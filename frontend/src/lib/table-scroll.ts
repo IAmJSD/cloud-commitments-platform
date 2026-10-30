@@ -97,6 +97,34 @@ export function syncScrollStrip(table: HTMLElement): HTMLElement {
   return strip;
 }
 
+/** True while at least a sliver of `anchor` is on screen: inside the
+ * viewport and inside every ancestor that clips its overflow (a table
+ * scroller, a card). Header filter popovers use it to follow their button
+ * through a scroll instead of closing: clicking a funnel at a scroller's
+ * clipped edge scrolls the table (and its mirrored strip one frame later),
+ * and those scroll events used to close the popover the click had just
+ * opened. A zero-size rect (not rendered) counts as out of view. */
+const CLIPPING = new Set(['hidden', 'clip', 'auto', 'scroll']);
+
+export function anchorInView(anchor: HTMLElement): boolean {
+  const rect = anchor.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  let left = Math.max(rect.left, 0);
+  let right = Math.min(rect.right, window.innerWidth);
+  let top = Math.max(rect.top, 0);
+  let bottom = Math.min(rect.bottom, window.innerHeight);
+  for (let el = anchor.parentElement; el && el !== document.body; el = el.parentElement) {
+    const cs = getComputedStyle(el);
+    if (!CLIPPING.has(cs.overflowX) && !CLIPPING.has(cs.overflowY)) continue;
+    const box = el.getBoundingClientRect();
+    left = Math.max(left, box.left);
+    right = Math.min(right, box.right);
+    top = Math.max(top, box.top);
+    bottom = Math.min(bottom, box.bottom);
+  }
+  return right - left >= 1 && bottom - top >= 1;
+}
+
 /** Re-measures every table scroller, the Opportunities strip and the action
  * box offset. Cheap enough to run once per animation frame after a change. */
 export function refreshTableScroll(root: ParentNode = document): void {

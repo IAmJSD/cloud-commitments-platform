@@ -22,6 +22,7 @@ import {
 } from './column-filters';
 import { escapeHtmlAttr } from '../utils';
 import { iconSvg } from '../icons';
+import { anchorInView } from './table-scroll';
 
 export interface PopoverConfig<TColumnId extends string> {
   // Namespace of the owning table (e.g. 'history' / 'queue'). Both tables
@@ -141,6 +142,13 @@ function attachGlobalListeners(popover: HTMLElement): void {
     if (!openPopover) return;
     const target = e.target as Node | null;
     if (target && popover.contains(target)) return;
+    // Follow the header button while it is on screen (see anchorInView);
+    // close once it scrolls out of view.
+    const anchor = lastAnchorSelector?.();
+    if (anchor && anchorInView(anchor)) {
+      positionPopover(popover, anchor);
+      return;
+    }
     closeOpenHistoryPopover();
   };
   resizeHandler = (): void => {
