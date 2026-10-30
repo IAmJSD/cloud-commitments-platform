@@ -7624,6 +7624,26 @@ describe('Issue #483: popover stays open while user scrolls its contents', () =>
     document.body.dispatchEvent(scrollEvt);
     expect(document.querySelector('.column-filter-popover')).toBeNull();
   });
+
+  test('a scroll while the trigger stays on screen keeps the popover open and re-anchors it', async () => {
+    // Clicking a funnel at the table scroller's clipped edge scrolls the
+    // table (and the mirrored strip a frame later); those scroll events
+    // must not close the popover the click just opened.
+    await loadRecommendations();
+    const trigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    let left = 400;
+    trigger.getBoundingClientRect = () => ({
+      left, top: 300, width: 24, height: 24, right: left + 24, bottom: 324, x: left, y: 300, toJSON: () => ({}),
+    }) as DOMRect;
+    trigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover');
+    expect(popover).not.toBeNull();
+    expect(popover!.style.left).toBe('400px');
+    left = 250;
+    document.body.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(popover!.style.left).toBe('250px');
+  });
 });
 
 //
