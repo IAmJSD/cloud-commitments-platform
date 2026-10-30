@@ -77,6 +77,46 @@ describe('history filter popover scoping (issue #281)', () => {
     expect(queueBtn.getAttribute('aria-expanded')).toBe('false');
   });
 
+  test('a commit that re-renders the table keeps the new button expanded and re-anchors to it', () => {
+    mountTables();
+    const historyBox = document.getElementById('history')!;
+    const onCommit = jest.fn(() => {
+      // The caller re-renders its table, replacing the trigger button.
+      historyBox.innerHTML = renderHistoryFilterButton('provider', 'Provider', true, 'history');
+    });
+    const oldBtn = historyBox.querySelector<HTMLElement>('.history-column-filter-btn')!;
+    openHistoryColumnPopover({
+      scope: 'history',
+      column: 'provider',
+      anchor: oldBtn,
+      currentFilter: undefined,
+      headerLabel: 'Provider',
+      kind: 'categorical',
+      distinctValues: ['aws', 'azure'],
+      onCommit,
+    });
+    const box = popovers()[0]!.querySelector<HTMLInputElement>('input[data-value="aws"]')!;
+    box.checked = false;
+    box.dispatchEvent(new Event('change'));
+
+    expect(onCommit).toHaveBeenCalledWith({ kind: 'set', values: ['azure'] });
+    const newBtn = historyBox.querySelector<HTMLElement>('.history-column-filter-btn')!;
+    expect(newBtn).not.toBe(oldBtn);
+    expect(popovers()).toHaveLength(1);
+    expect(newBtn.getAttribute('aria-expanded')).toBe('true');
+    // Closing still clears the new button's state.
+    closeOpenHistoryPopover();
+    expect(newBtn.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  test('a button rendered while its popover is open starts expanded; others do not', () => {
+    const { historyBtn } = mountTables();
+    open('history', historyBtn);
+    expect(renderHistoryFilterButton('provider', 'Provider', false, 'history')).toContain('aria-expanded="true"');
+    expect(renderHistoryFilterButton('provider', 'Provider', false, 'queue')).toContain('aria-expanded="false"');
+    expect(renderHistoryFilterButton('service', 'Service', false, 'history')).toContain('aria-expanded="false"');
+  });
+
   test('popover element ids are unique per table', () => {
     const { queueBtn } = mountTables();
     open('queue', queueBtn);

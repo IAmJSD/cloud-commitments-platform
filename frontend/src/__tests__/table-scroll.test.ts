@@ -285,6 +285,14 @@ describe('anchorInView', () => {
     expect(anchorInView(button)).toBe(false);
   });
 
+  test('a button inside the viewport but below a vertically clipping scroller is out of view', () => {
+    const { button } = mount();
+    // The scroller spans y 280..680; the button sits at y 700, still inside
+    // the 768px jsdom viewport, so only the scroller's vertical clip hides it.
+    rect(button, 300, 700, 24, 24);
+    expect(anchorInView(button)).toBe(false);
+  });
+
   test('an unrendered button (zero-size rect) is out of view', () => {
     const { button } = mount();
     expect(anchorInView(button)).toBe(false);
