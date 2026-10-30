@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   HINT_LEFT,
+  anchorInView,
   HINT_RIGHT,
   STRIP_CLASS,
   handleScroll,
@@ -246,6 +247,47 @@ describe('keepFocusClear', () => {
     document.body.appendChild(outside);
     keepFocusClear(outside);
     expect(scrollBy).not.toHaveBeenCalled();
+  });
+});
+
+describe('anchorInView', () => {
+  afterEach(() => { document.body.innerHTML = ''; });
+
+  function rect(el: Element, left: number, top: number, width: number, height: number): void {
+    el.getBoundingClientRect = () => ({
+      left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}),
+    }) as DOMRect;
+  }
+
+  function mount(): { button: HTMLElement; scroller: HTMLElement } {
+    document.body.innerHTML = '<div id="s" style="overflow-x: auto"><table><thead><tr><th><button>f</button></th></tr></thead></table></div>';
+    const scroller = document.getElementById('s')!;
+    rect(scroller, 100, 280, 800, 400);
+    return { button: document.querySelector('button')!, scroller };
+  }
+
+  test('a button partly inside the scroller and the viewport is in view', () => {
+    const { button } = mount();
+    rect(button, 884, 300, 24, 24); // 16px visible before the scroller's right edge
+    expect(anchorInView(button)).toBe(true);
+  });
+
+  test('a button scrolled past the scroller edge is out of view', () => {
+    const { button } = mount();
+    rect(button, 905, 300, 24, 24);
+    expect(anchorInView(button)).toBe(false);
+  });
+
+  test('a button above the viewport is out of view', () => {
+    const { button, scroller } = mount();
+    rect(scroller, 100, -400, 800, 300);
+    rect(button, 300, -200, 24, 24);
+    expect(anchorInView(button)).toBe(false);
+  });
+
+  test('an unrendered button (zero-size rect) is out of view', () => {
+    const { button } = mount();
+    expect(anchorInView(button)).toBe(false);
   });
 });
 

@@ -42,6 +42,7 @@ import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import { fetchOverridesForAccounts } from './lib/overrides';
 import { ownValue } from './lib/own-property';
 import { HOURS_PER_MONTH } from './lib/hours-per-month';
+import { anchorInView } from './lib/table-scroll';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -2644,6 +2645,14 @@ function attachPopoverGlobalListeners(): void {
     // contents dismisses it before the user can reach values below the fold.
     const target = e.target as Node | null;
     if (target && openPopover.el.contains(target)) return;
+    // While its header button is still on screen the popover follows it
+    // (a sideways table scroll, the mirrored strip catching up a frame
+    // later, a page scroll); it closes once the button scrolls out of view.
+    const trigger = getColumnTriggerButton(openPopover.column);
+    if (trigger && anchorInView(trigger)) {
+      positionPopover(openPopover.el, trigger);
+      return;
+    }
     closePopover();
   };
   resizeHandler = (): void => {
