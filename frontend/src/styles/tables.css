@@ -839,6 +839,12 @@ th .history-column-filter-btn:focus-visible {
         content: none;
     }
 
+    /* The desktop plan-column cap would clip the plan name inside the
+     * full-width card cell. */
+    .table-cards-mobile.table-compact tbody td.history-plan-cell {
+        max-width: none;
+    }
+
     .table-cards-mobile .cell-truncate {
         max-width: 100%;
     }
