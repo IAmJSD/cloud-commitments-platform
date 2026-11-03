@@ -1357,7 +1357,7 @@ jobs:
         # it). If gosec ran and the file is still missing, fail loud instead
         # of masking it as a skip.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/gosec-results.sarif
 
@@ -1413,7 +1413,7 @@ jobs:
       - name: Upload Trivy results to GitHub Security
         # Tolerate a missing SARIF only when the Trivy fs step never ran.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.trivy_fs.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: '${{ runner.temp }}/trivy-results.sarif'
 
@@ -1448,7 +1448,7 @@ jobs:
       - name: Upload Trivy IaC results to GitHub Security
         # Tolerate a missing SARIF only when the Trivy IaC step never ran.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.trivy_iac.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: '${{ runner.temp }}/trivy-config-results.sarif'
           # Distinct category so this IaC analysis does not overwrite the
