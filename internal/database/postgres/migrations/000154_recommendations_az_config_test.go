@@ -21,6 +21,13 @@ const insertRecForMigration152 = `
 	VALUES (NOW(), 'aws', 'rds', 'us-east-1', $1, 'mysql', $2::jsonb, 0, 0, 1, 'all-upfront')
 `
 
+const insertRecForMigration154Scoped = `
+	INSERT INTO recommendations
+	    (collected_at, provider, service, region, resource_type, engine, payload,
+	     upfront_cost, monthly_savings, term, payment_option)
+	VALUES (NOW(), $3, $4, 'us-east-1', $1, 'mysql', $2::jsonb, 0, 0, 1, 'all-upfront')
+`
+
 // TestMigration_RecommendationsAZConfig locks down migration 000154 (issue
 // #408, expand step): the generated az_config column is read verbatim from
 // payload->'details', the 11-column index is kept so the previous upsert still
@@ -38,23 +45,32 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 154)))
 
-	type vector struct{ payload, azConfig string }
+	// provider and service default to aws/rds; the column is scoped to AWS RDS
+	// like IdentityAZConfig, so other providers and services read "".
+	type vector struct{ payload, azConfig, provider, service string }
 	vectors := map[string]vector{
-		"details-absent":       {`{"service":"rds"}`, ""},
-		"details-null":         {`{"details":null}`, ""},
-		"details-empty":        {`{"details":{}}`, ""},
-		"az-config-null":       {`{"details":{"az_config":null}}`, ""},
-		"empty-string":         {`{"details":{"az_config":""}}`, ""},
-		"rds-single-az":        {`{"details":{"az_config":"single-az"}}`, "single-az"},
-		"rds-multi-az":         {`{"details":{"az_config":"multi-az"}}`, "multi-az"},
-		"azure-zone-redundant": {`{"details":{"az_config":"zoneRedundant"}}`, "zoneRedundant"},
-		"verbatim-spaces":      {`{"details":{"az_config":" Multi-AZ "}}`, " Multi-AZ "},
-		"compute-details":      {`{"details":{"platform":"Linux/UNIX","tenancy":"default"}}`, ""},
+		"details-absent":           {`{"service":"rds"}`, "", "", ""},
+		"details-null":             {`{"details":null}`, "", "", ""},
+		"details-empty":            {`{"details":{}}`, "", "", ""},
+		"az-config-null":           {`{"details":{"az_config":null}}`, "", "", ""},
+		"empty-string":             {`{"details":{"az_config":""}}`, "", "", ""},
+		"rds-single-az":            {`{"details":{"az_config":"single-az"}}`, "single-az", "", ""},
+		"rds-multi-az":             {`{"details":{"az_config":"multi-az"}}`, "multi-az", "", ""},
+		"rds-canonical-slug":       {`{"details":{"az_config":"multi-az"}}`, "multi-az", "aws", "relational-db"},
+		"azure-sql-zone-redundant": {`{"details":{"az_config":"zoneRedundant"}}`, "", "azure", "relational-db"},
+		"azure-sql-none":           {`{"details":{"az_config":"none"}}`, "", "azure", "relational-db"},
+		"aws-ec2-with-key":         {`{"details":{"az_config":"multi-az"}}`, "", "aws", "ec2"},
+		"gcp-sql":                  {`{"details":{"az_config":"multi-az"}}`, "", "gcp", "relational-db"},
+		"verbatim-spaces":          {`{"details":{"az_config":" Multi-AZ "}}`, " Multi-AZ ", "", ""},
+		"compute-details":          {`{"details":{"platform":"Linux/UNIX","tenancy":"default"}}`, "", "", ""},
 		// A top-level key is NOT consulted: only Details carries the field.
-		"top-level-ignored": {`{"az_config":"multi-az"}`, ""},
+		"top-level-ignored": {`{"az_config":"multi-az"}`, "", "", ""},
 	}
 	for name, v := range vectors {
-		_, err = pool.Exec(ctx, insertRecForMigration152, name, v.payload)
+		if v.provider == "" {
+			v.provider, v.service = "aws", "rds"
+		}
+		_, err = pool.Exec(ctx, insertRecForMigration154Scoped, name, v.payload, v.provider, v.service)
 		require.NoError(t, err)
 	}
 

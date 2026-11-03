@@ -12,7 +12,12 @@
 -- RecommendationRecord) at payload->'details' (the DatabaseDetails blob), so
 -- existing rows are backfilled by the table rewrite with no data migration.
 -- No trimming or case-folding. Absent Details, JSON null, a missing key and a
--- null value all become ''. Every non-database row is ''.
+-- null value all become ''. Every row outside AWS RDS is '' too: it mirrors
+-- RecommendationRecord.IdentityAZConfig (provider 'aws' and service 'rds' or
+-- its canonical slug 'relational-db'). Azure SQL's az_config is a
+-- subscription-wide value that flips between collections and is not part of
+-- the rec ID, so keying the upsert on it would store the same rec twice when
+-- a cron collect and a refresh overlap.
 --
 -- Two indexes are added:
 -- - recommendations_natural_key_az_tp_azc_idx: the 11 columns plus az_config,
@@ -35,7 +40,12 @@
 -- not possible: the migration runner wraps every migration in a transaction.
 ALTER TABLE recommendations
     ADD COLUMN IF NOT EXISTS az_config TEXT
-    GENERATED ALWAYS AS (COALESCE(payload->'details'->>'az_config', '')) STORED;
+    GENERATED ALWAYS AS (
+        CASE WHEN lower(provider) = 'aws' AND service IN ('rds', 'relational-db')
+             THEN COALESCE(payload->'details'->>'az_config', '')
+             ELSE ''
+        END
+    ) STORED;
 
 CREATE UNIQUE INDEX IF NOT EXISTS recommendations_natural_key_az_tp_azc_idx
     ON recommendations (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy, az_config);

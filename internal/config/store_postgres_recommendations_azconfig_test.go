@@ -157,3 +157,45 @@ func TestPostgresStore_UpsertRecommendations_AZConfigConcurrent(t *testing.T) {
 	assert.Equal(t, 2, n)
 	assert.Equal(t, 2, distinct)
 }
+
+func azureSQLStoreRec(azConfig string) config.RecommendationRecord {
+	rec := config.RecommendationRecord{
+		ID: "azsql", Provider: "azure", Service: "relational-db", Region: "eastus",
+		ResourceType: "GP_Gen5_2", Savings: 10, UpfrontCost: 100, Count: 1, Term: 12, Payment: "no-upfront",
+	}
+	rec.Details = json.RawMessage(`{"az_config":"` + azConfig + `"}`)
+	return rec
+}
+
+// Azure SQL's az_config is outside the rec identity (IdentityAZConfig is
+// AWS-RDS only), so the 12-column arbiter must not see it either. A cron
+// collect and a refresh overlap and can commit the same Azure SQL rec with
+// "none" and "" (an incomplete server lookup); the arbiter used to key on the
+// generated column for every provider, insert a second row, and the eviction
+// (collected_at < t) spared it, listing the rec twice.
+func TestPostgresStore_UpsertRecommendations_AzureSQLAZConfigIsNotAKey(t *testing.T) {
+	ctx := context.Background()
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
+	pool := container.DB.Pool()
+	store := config.NewPostgresStore(container.DB)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	collect := []config.SuccessfulCollect{{Provider: "azure"}}
+
+	for _, tc := range []struct{ name, first, second string }{
+		{"refresh none then earlier cron empty", "none", ""},
+		{"refresh empty then earlier cron none", "", "none"},
+		{"zoneRedundant then earlier cron none", "zoneRedundant", "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pool.Exec(ctx, `DELETE FROM recommendations`)
+			require.NoError(t, err)
+			// The refresh started later but commits first; the cron it
+			// overlapped (older collectedAt) commits second.
+			require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Minute), []config.RecommendationRecord{azureSQLStoreRec(tc.first)}, collect))
+			require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{azureSQLStoreRec(tc.second)}, collect))
+			var n int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM recommendations`).Scan(&n))
+			assert.Equal(t, 1, n, "one Azure SQL rec must be stored once whatever its az_config")
+		})
+	}
+}
