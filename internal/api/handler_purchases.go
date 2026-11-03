@@ -4501,11 +4501,8 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 		// can proceed.
 		return "", NewClientError(403, "no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
-	actorLower := strings.ToLower(strings.TrimSpace(actor))
-	for _, addr := range approvers {
-		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
-			return actor, nil
-		}
+	if email.ContainsAddress(approvers, actor) {
+		return actor, nil
 	}
 	return "", NewClientError(403, "your session email is not the authorized approver for this purchase")
 }

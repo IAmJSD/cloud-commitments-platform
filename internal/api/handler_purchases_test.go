@@ -7026,3 +7026,31 @@ func TestNewPendingExecution_NotSystemCreated(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exec.CreatedBySystem)
 }
+
+func TestHandler_authorizeApprovalAction_NonASCIILettersNotFolded(t *testing.T) {
+	cases := []struct{ name, approver, session string }{
+		{"long_s", "mus@example.com", "mu\u017f@example.com"},
+		{"dotted_capital_i", "admin@example.com", "adm\u0130n@example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			execID := "12345678-1234-1234-1234-123456789abc"
+			approver := tc.approver
+
+			mockConfig := new(MockConfigStore)
+			exec := approvalTestExec(execID, approver, mockConfig)
+			mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+
+			mockAuth := new(MockAuthService)
+			mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: tc.session}, nil)
+
+			handler := &Handler{config: mockConfig, auth: mockAuth}
+			req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}
+
+			_, err := handler.authorizeApprovalAction(ctx, req, exec)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not the authorized approver")
+		})
+	}
+}
