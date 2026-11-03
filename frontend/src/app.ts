@@ -71,6 +71,16 @@ function describePublicInfoFailure(err: unknown): string {
  * Initialize app
  */
 export async function init(): Promise<void> {
+  try {
+    await initApp();
+  } finally {
+    // index.html hides the shell until auth state is known; clear it on every
+    // exit path (signed in, signed out, init error) so it is never left blank.
+    document.body.classList.remove('auth-pending');
+  }
+}
+
+async function initApp(): Promise<void> {
   api.initAuth();
 
   // Check if this is a password reset link. Must be scoped to the
