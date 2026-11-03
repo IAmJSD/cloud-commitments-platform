@@ -332,7 +332,7 @@ tr.history-row-highlight:hover {
 }
 
 .table-compact .service-badge {
-    max-width: 9rem;
+    max-width: 8rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
