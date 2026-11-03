@@ -560,3 +560,155 @@
     border-left: 3px solid var(--cudly-error);
     padding-left: 0.75rem;
 }
+
+/* ---- Review Purchase, bulk mode (ui/modernize-modals) --------------------
+ * The summary is a grid of small key/value tiles with total savings
+ * emphasised; each bucket is a card: title and recommendation count, terms,
+ * the Payment select with its source, and the bucket totals. */
+.fanout-summary.form-section {
+    margin-bottom: var(--cudly-sp-4);
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.fanout-summary h3 {
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-md);
+    color: var(--cudly-text);
+}
+
+.fanout-email-note {
+    margin: 0 0 var(--cudly-sp-4);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: var(--cudly-sp-2);
+}
+
+.fanout-total {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-1);
+    margin: 0;
+    padding: var(--cudly-sp-3);
+    background: var(--cudly-surface-muted);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.fanout-total-label {
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
+
+/* The text reads "Label: value"; the tile layout makes the colon redundant. */
+.fanout-total-sep {
+    display: none;
+}
+
+.fanout-total strong {
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+    font-variant-numeric: tabular-nums;
+}
+
+.fanout-total.fanout-total-savings {
+    background: var(--cudly-success-bg);
+    border-color: transparent;
+}
+
+.fanout-total.fanout-total-savings strong {
+    font-size: var(--cudly-fs-lg);
+    color: var(--cudly-success);
+}
+
+.modal-content .fanout-bucket {
+    margin: 0 0 var(--cudly-sp-3);
+    padding: var(--cudly-sp-4);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.modal-content .fanout-bucket.fanout-bucket-failed {
+    border-left: 3px solid var(--cudly-error);
+}
+
+.fanout-bucket .fanout-bucket-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--cudly-sp-1) var(--cudly-sp-3);
+    margin: 0 0 var(--cudly-sp-1);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+.fanout-bucket-rec-count {
+    flex: none;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-regular);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-bucket-ok,
+.fanout-bucket-error {
+    margin: 0 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.fanout-bucket-error {
+    color: var(--cudly-error-fg);
+}
+
+.fanout-bucket-payment-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+}
+
+.modal-content .fanout-bucket-payment-label {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+}
+
+.modal-content select.fanout-bucket-payment {
+    width: auto;
+    min-width: 12rem;
+    margin: 0;
+}
+
+.fanout-bucket-payment-source {
+    padding: 0.125rem var(--cudly-sp-2);
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+    background: var(--cudly-surface-muted);
+    border-radius: var(--cudly-r-full);
+}
+
+.fanout-bucket-totals {
+    margin: var(--cudly-sp-3) 0 0;
+    padding-top: var(--cudly-sp-3);
+    border-top: 1px solid var(--cudly-border);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.fanout-sp-plan-types {
+    margin-top: var(--cudly-sp-2);
+    font-size: var(--cudly-fs-sm);
+}
+/* ---- end Review Purchase ------------------------------------------------- */
