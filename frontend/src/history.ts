@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
+import { formatCurrency, formatDate, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
 import { historyConfirmBody } from './history-confirm-body';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import type { RevokeQuote } from './api';
@@ -13,6 +13,7 @@ import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
 import { iconSvg } from './icons';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import {
   historyTruncationMessage,
   mergeHistoryPages,
@@ -665,7 +666,7 @@ const NO_RECS_HTML = `<span class="no-recommendations" title="${NO_RECOMMENDATIO
 // Years", $0) and a "0 commitment(s)" type; render dashes and say why
 // instead. A 0 term on a real row (a mixed-term basket) is also a dash.
 function termCell(p: HistoryPurchase): string {
-  return isRealTerm(p.term) ? escapeHtml(formatTerm(p.term)) : MUTED_DASH;
+  return isRealTerm(p.term) ? escapeHtml(formatTermShort(p.term)) : MUTED_DASH;
 }
 
 function providerCell(p: HistoryPurchase): string {
@@ -1036,7 +1037,7 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
   const buttons: string[] = [];
   const user = getCurrentUser();
   if (canApprovePendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}">Approve</button>`);
+    buttons.push(`<button type="button" class="btn-small icon-btn history-approve-btn" data-approve-id="${escapeHtmlAttr(p.purchase_id)}" aria-label="Approve" title="Approve purchase">${iconSvg('check')}</button>`);
   } else if (user && rbacAllowsApprove(p, user) && !canApproveUnder4Eyes(p, user.id)) {
     // RBAC would allow Approve, but 4-eyes dual-control (issue #1005) blocks
     // this session from approving its own row. Surface the reason inline
@@ -1048,9 +1049,10 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
     buttons.push(`<span class="badge badge-muted">${reason}</span>`);
   }
   if (canCancelPendingRow(p)) {
-    buttons.push(`<button type="button" class="btn-link history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}">Cancel</button>`);
+    buttons.push(`<button type="button" class="btn-small btn-danger icon-btn history-cancel-btn" data-cancel-id="${escapeHtmlAttr(p.purchase_id)}" aria-label="Cancel" title="Cancel purchase">${iconSvg('x')}</button>`);
   }
-  return buttons.join(' ');
+  // Compact icon buttons side by side (aria-label + title carry the verb).
+  return buttons.length ? `<span class="row-actions">${buttons.join('')}</span>` : '';
 }
 
 // renderActionCell returns the HTML for the Plan / action column on a
@@ -1264,7 +1266,7 @@ function purchaseHistoryDisplayLabel(
   if (column === 'term') {
     // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
+    return isRealTerm(n) ? formatTermShort(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   return value;
 }
@@ -1428,7 +1430,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
-    <table>
+    <table class="table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Status</th>
@@ -1873,7 +1875,7 @@ const APPROVAL_QUEUE_LABELS: Record<ApprovalQueueColumnId, string> = {
   service: 'Service',
   term: 'Term',
   payment: 'Payment',
-  created_by: 'Created by',
+  created_by: 'Created By',
   count: 'Count',
   monthly_cost: 'Monthly Cost',
   upfront_cost: 'Upfront Cost',
@@ -1955,12 +1957,13 @@ function approvalQueueDisplayLabel(
   if (column === 'term') {
     // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
+    return isRealTerm(n) ? formatTermShort(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   if (column === 'account') {
     // Account cells render via getAccountName() — mirror the same display.
     return getAccountName(value);
   }
+  if (column === 'payment') return formatPaymentOption(value);
   return value;
 }
 
@@ -2028,11 +2031,11 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         ? escapeHtml(p.created_by_user_id)
         : `<span class="muted">${NO_VALUE}</span>`;
     const accountCell = p.account_id
-      ? escapeHtml(getAccountName(p.account_id))
+      ? `<span class="cell-truncate" title="${escapeHtmlAttr(getAccountName(p.account_id))}">${escapeHtml(getAccountName(p.account_id))}</span>`
       : `<span class="muted">${NO_VALUE}</span>`;
     const empty = hasNoCommitments(p);
     const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
-    const paymentCell = p.payment ? escapeHtml(p.payment) : `<span class="muted">${NO_VALUE}</span>`;
+    const paymentCell = p.payment ? escapeHtml(formatPaymentOption(p.payment)) : `<span class="muted">${NO_VALUE}</span>`;
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
@@ -2066,7 +2069,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
-    <table class="approval-queue-table">
+    <table class="approval-queue-table table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Date</th>
@@ -2079,7 +2082,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
           <th class="num"><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
           <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
           <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
-          <th><span>Created by</span>${fbtn('created_by')}</th>
+          <th><span>Created By</span>${fbtn('created_by')}</th>
           <th>Actions</th>
         </tr>
       </thead>

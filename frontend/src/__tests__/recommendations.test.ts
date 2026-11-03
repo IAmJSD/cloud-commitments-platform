@@ -2900,16 +2900,74 @@ describe('Bundle B: column header filter triggers', () => {
       document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
     );
     const labels = items.map((l) => l.querySelector('span')?.textContent);
-    expect(labels.sort()).toEqual(['1 Year', '3 Years']);
+    expect(labels.sort()).toEqual(['1 yr', '3 yr']);
     // Both boxes start checked (no active filter → all included). Untick
     // "1 Year"; remaining checked = ["3"] → filter narrows to that.
-    const oneYearLabel = items.find((l) => l.textContent === '1 Year');
+    const oneYearLabel = items.find((l) => l.textContent === '1 yr');
     const cb = oneYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(cb?.dataset['value']).toBe('1');
     expect(cb?.checked).toBe(true);
     cb!.checked = false;
     cb!.dispatchEvent(new Event('change'));
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
+  });
+
+  test('a recommendation with term 0 shows a dash, not "0 yr", in the Term cell', async () => {
+    const zeroTermRecs = [
+      {
+        id: 'rec-zero-term',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'ec2',
+        resource_type: 'zero.term.type',
+        region: 'us-east-1',
+        count: 1,
+        term: 0,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: zeroTermRecs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+
+    await loadRecommendations();
+    const html = document.body.innerHTML;
+    expect(html).toContain('zero.term.type');
+    expect(html).not.toMatch(/0 yr/);
+    const termIdx = Array.from(document.querySelectorAll('thead th')).findIndex(
+      (th) => th.querySelector('.column-filter-btn[data-column="term"]'),
+    );
+    expect(termIdx).toBeGreaterThanOrEqual(0);
+    const row = Array.from(document.querySelectorAll('tbody tr')).find((r) => r.textContent?.includes('zero.term.type'));
+    expect(row?.children[termIdx]?.textContent).toBe('\u2014');
+  });
+
+  test.each([
+    ['mixed 0 and 3', [0, 3], /term: 3 yr(?!\s*\u2013)/],
+    ['all zero', [0, 0], /term: \u2014(?!\s*\u2013)/],
+  ])('group row term range with a missing term (%s) has no empty endpoint', async (_label, terms, expected) => {
+    const recs = terms.map((term, i) => ({
+      id: `rec-range-${i}`,
+      provider: 'aws',
+      cloud_account_id: 'a3',
+      service: 'ec2',
+      resource_type: 'range.term.type',
+      region: 'us-east-1',
+      count: 1,
+      term,
+      payment: i === 0 ? 'all-upfront' : 'no-upfront',
+      savings: 300,
+      upfront_cost: 1200,
+    }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+    await loadRecommendations();
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(expected);
+    expect(text).not.toMatch(/term:\s*(\u2013|$)/m);
   });
 
   test('numeric popover input validates expression on blur', async () => {
@@ -7623,6 +7681,40 @@ describe('Issue #483: popover stays open while user scrolls its contents', () =>
     const scrollEvt = new Event('scroll', { bubbles: true });
     document.body.dispatchEvent(scrollEvt);
     expect(document.querySelector('.column-filter-popover')).toBeNull();
+  });
+
+  test('a commit that re-renders the table keeps the new trigger expanded', async () => {
+    await loadRecommendations();
+    const oldTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    oldTrigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover')!;
+    const box = popover.querySelector<HTMLInputElement>('input[data-value="t3.medium"]')!;
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const newTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    expect(newTrigger).not.toBe(oldTrigger);
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(newTrigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  test('a scroll while the trigger stays on screen keeps the popover open and re-anchors it', async () => {
+    // Clicking a funnel at the table scroller's clipped edge scrolls the
+    // table (and the mirrored strip a frame later); those scroll events
+    // must not close the popover the click just opened.
+    await loadRecommendations();
+    const trigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    let left = 400;
+    trigger.getBoundingClientRect = () => ({
+      left, top: 300, width: 24, height: 24, right: left + 24, bottom: 324, x: left, y: 300, toJSON: () => ({}),
+    }) as DOMRect;
+    trigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover');
+    expect(popover).not.toBeNull();
+    expect(popover!.style.left).toBe('400px');
+    left = 250;
+    document.body.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(popover!.style.left).toBe('250px');
   });
 });
 

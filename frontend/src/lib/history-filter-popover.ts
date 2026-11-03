@@ -22,6 +22,7 @@ import {
 } from './column-filters';
 import { escapeHtmlAttr } from '../utils';
 import { iconSvg } from '../icons';
+import { anchorInView } from './table-scroll';
 
 export interface PopoverConfig<TColumnId extends string> {
   // Namespace of the owning table (e.g. 'history' / 'queue'). Both tables
@@ -141,6 +142,13 @@ function attachGlobalListeners(popover: HTMLElement): void {
     if (!openPopover) return;
     const target = e.target as Node | null;
     if (target && popover.contains(target)) return;
+    // Follow the header button while it is on screen (see anchorInView);
+    // close once it scrolls out of view.
+    const anchor = lastAnchorSelector?.();
+    if (anchor && anchorInView(anchor)) {
+      positionPopover(popover, anchor);
+      return;
+    }
     closeOpenHistoryPopover();
   };
   resizeHandler = (): void => {
@@ -190,6 +198,20 @@ export function openHistoryColumnPopover<TColumnId extends string>(
   heading.textContent = `Filter ${config.headerLabel}`;
   popover.appendChild(heading);
 
+  // The caller's commit re-renders its table (innerHTML), which replaces the
+  // trigger button. Re-anchor the still-open popover to the new button and
+  // mark it expanded again (renderHistoryFilterButton also does that).
+  const scopeKey = config.scope;
+  const columnKey = String(config.column);
+  const onCommit = (filter: ColumnFilterKind | null): void => {
+    config.onCommit(filter);
+    if (!openPopover || openPopover.el !== popover) return;
+    const anchor = findFilterButton(scopeKey, columnKey);
+    if (!anchor) return;
+    anchor.setAttribute('aria-expanded', 'true');
+    positionPopover(popover, anchor);
+  };
+
   let commitAllRef: ((target: boolean) => void) | null = null;
   let inputRef: HTMLInputElement | null = null;
   let errorRef: HTMLElement | null = null;
@@ -223,7 +245,7 @@ export function openHistoryColumnPopover<TColumnId extends string>(
       const expr = input.value.trim();
       if (expr === '') {
         errorEl.textContent = '';
-        config.onCommit(null);
+        onCommit(null);
         return;
       }
       const parsed = parseNumericFilter(expr);
@@ -232,7 +254,7 @@ export function openHistoryColumnPopover<TColumnId extends string>(
         return;
       }
       errorEl.textContent = '';
-      config.onCommit({ kind: 'expr', expr });
+      onCommit({ kind: 'expr', expr });
     };
     input.addEventListener('blur', commit);
     input.addEventListener('keydown', (e) => {
@@ -296,18 +318,18 @@ export function openHistoryColumnPopover<TColumnId extends string>(
       const selected: string[] = [];
       checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
       if (selected.length === checkboxes.size) {
-        config.onCommit(null);
+        onCommit(null);
       } else {
-        config.onCommit({ kind: 'set', values: selected });
+        onCommit({ kind: 'set', values: selected });
       }
       updateAllTriState();
     };
     const commitAll = (target: boolean): void => {
       checkboxes.forEach((cb) => { cb.checked = target; });
       if (target) {
-        config.onCommit(null);
+        onCommit(null);
       } else {
-        config.onCommit({ kind: 'set', values: [] });
+        onCommit({ kind: 'set', values: [] });
       }
       updateAllTriState();
     };
@@ -335,7 +357,7 @@ export function openHistoryColumnPopover<TColumnId extends string>(
     if (config.kind === 'numeric') {
       if (inputRef) inputRef.value = '';
       if (errorRef) errorRef.textContent = '';
-      config.onCommit(null);
+      onCommit(null);
     } else {
       // Categorical Clear: explicit empty allow-list to distinguish from
       // "no filter applied" (which would show every row). Mirrors the
@@ -380,7 +402,9 @@ export function renderHistoryFilterButton<TColumnId extends string>(
   );
   const safeColumn = escapeHtmlAttr(String(column));
   const safeScope = escapeHtmlAttr(scope);
+  // A re-render while this column's popover is open keeps it expanded.
+  const expanded = openPopover !== null && openPopover.scope === scope && openPopover.column === String(column);
   // Use the same filter icon the recommendations popover uses so the
   // two surfaces are visually identical to the user.
-  return `<button type="button" class="${cls}" data-filter-scope="${safeScope}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">${iconSvg('filter')}</button>`;
+  return `<button type="button" class="${cls}" data-filter-scope="${safeScope}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="${expanded}" aria-label="${ariaLabel}" title="${ariaLabel}">${iconSvg('filter')}</button>`;
 }
