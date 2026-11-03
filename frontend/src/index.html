@@ -16,7 +16,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.azurecontainerapps.io https://*.run.app; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <meta name="description" content="CUDly — Cloud Commitment Optimizer. Discover savings opportunities, plan and automate Reserved Instance / Savings Plan purchases, and manage commitment inventory across AWS, Azure, and GCP.">
-    <meta name="theme-color" content="#2563eb">
+    <meta name="theme-color" content="#ffffff">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title>CUDly - Cloud Commitment Optimizer</title>
 </head>
@@ -40,12 +40,16 @@
                 <h1>CUDly</h1>
             </div>
             <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
+            <!-- Account cluster: help links, then who is signed in (the email
+                 opens the profile dialog; auth.ts adds the initials avatar),
+                 then Log out. -->
             <div id="user-info">
-                <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
-                <span id="user-role-display" class="role-badge"></span>
                 <a href="/docs/" target="_blank" rel="noopener noreferrer" class="header-link">API Docs</a>
                 <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-                <button id="logout-btn">Log out</button>
+                <span class="user-info-divider" aria-hidden="true"></span>
+                <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
+                <span id="user-role-display" class="role-badge"></span>
+                <button id="logout-btn"><svg class="logout-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Log out</span></button>
             </div>
         </header>
         <!-- Overlay: covers content when sidebar drawer is open on mobile.

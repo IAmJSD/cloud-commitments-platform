@@ -188,3 +188,220 @@
 .admin-panel .settings-buttons {
     background: var(--cudly-bg);
 }
+
+/* ---------------------------------------------------------------------------
+ * Top bar: a quiet white bar. Brand over the sidebar column, the global
+ * filter chips aligned with the page content, and the account cluster on
+ * the right (help links, avatar + email, role, Log out), all 32px tall.
+ * ------------------------------------------------------------------------- */
+:root {
+    --cudly-topbar-control-h: 2rem;
+}
+
+.app-topbar {
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
+    border-bottom: 1px solid var(--cudly-border);
+    justify-content: flex-start;
+    gap: var(--cudly-sp-3);
+}
+
+.app-topbar .app-logo-mark {
+    color: var(--cudly-primary);
+}
+
+.app-topbar h1 {
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+    letter-spacing: -0.01em;
+}
+
+.app-topbar .hamburger {
+    color: var(--cudly-text-muted);
+}
+
+.app-topbar .hamburger:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+}
+
+.app-topbar .hamburger:focus-visible {
+    outline-color: var(--cudly-primary);
+}
+
+/* The brand fills the sidebar column, so the chips start on the same left
+ * edge as the page content below them. */
+@media (min-width: 901px) {
+    .app-topbar-brand {
+        flex: 0 0 auto;
+        width: calc(var(--cudly-sidebar-w) - var(--cudly-sp-3));
+    }
+}
+
+.app-topbar > .app-topbar-filters {
+    margin: 0;
+    gap: var(--cudly-sp-2);
+}
+
+.app-topbar .chip-select {
+    height: var(--cudly-topbar-control-h);
+    padding: 0 var(--cudly-sp-3);
+    border-color: var(--cudly-border);
+    background: var(--cudly-surface);
+}
+
+.app-topbar .chip-select:hover {
+    border-color: var(--cudly-border-strong);
+    background: var(--cudly-surface-muted);
+}
+
+.app-topbar .chip-select[aria-expanded="true"] {
+    border-color: var(--cudly-primary);
+    background: var(--cudly-info-bg);
+}
+
+.app-topbar > #user-info {
+    margin-left: auto;
+    gap: var(--cudly-sp-1);
+}
+
+.app-topbar #user-info .header-link,
+.app-topbar #logout-btn,
+.app-topbar #user-email-display {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    height: var(--cudly-topbar-control-h);
+    padding: 0 var(--cudly-sp-3);
+    border: 0;
+    border-radius: var(--cudly-r-md);
+    background: transparent;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), color var(--cudly-dur-fast) var(--cudly-ease);
+}
+
+.app-topbar #user-info .header-link:hover,
+.app-topbar #logout-btn:hover,
+.app-topbar #user-email-display:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+    border-color: transparent;
+}
+
+.app-topbar #user-info .header-link:focus-visible,
+.app-topbar #logout-btn:focus-visible,
+.app-topbar #user-email-display:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 1px;
+}
+
+.user-info-divider {
+    width: 1px;
+    height: 1.25rem;
+    margin: 0 var(--cudly-sp-2);
+    background: var(--cudly-border);
+}
+
+/* Signed-in identity: initials avatar + email; it opens the profile. */
+.app-topbar #user-email-display {
+    padding-left: var(--cudly-sp-1);
+    color: var(--cudly-text);
+}
+
+#user-email-display[data-initials]::before {
+    content: attr(data-initials) / "";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: var(--cudly-r-full);
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+    font-size: 0.6875rem;
+    font-weight: var(--cudly-fw-semibold);
+    letter-spacing: 0.02em;
+}
+
+.app-topbar .role-badge {
+    margin-left: 0;
+    background: var(--cudly-info-bg);
+    color: var(--cudly-primary);
+}
+
+.role-badge:empty {
+    display: none;
+}
+
+#logout-btn .logout-icon {
+    flex-shrink: 0;
+}
+
+/* The display rules above must not reveal the profile button before a user
+ * is known (auth.ts keeps it [hidden] until then). */
+:is(.app-topbar, .app-sidebar-extras) #user-email-display[hidden] {
+    display: none;
+}
+
+/* Phone drawer: the avatar sits beside the email (one size down so a typical
+ * address still fits on one line), and Log out keeps a gap between its icon
+ * and its label. Who is signed in is first in the DOM here (the drawer order
+ * is set by nav/mobile-nav.ts:syncHeaderPlacement, not by CSS `order`, so
+ * keyboard order matches what is painted). */
+.app-sidebar-extras #user-email-display {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    font-size: var(--cudly-fs-sm);
+}
+
+.app-sidebar-extras #logout-btn {
+    gap: var(--cudly-sp-2);
+}
+
+.app-sidebar-extras .user-info-divider {
+    display: none;
+}
+
+/* Mid-width desktops (tablet landscape, small laptops): the top bar drops
+ * the email text (the avatar stays, and the button keeps the address as its
+ * accessible name and tooltip) and the brand stops reserving the sidebar
+ * column, so the bar never pushes the page wider than the window. */
+@media (min-width: 769px) and (max-width: 1279px) {
+    .app-topbar-brand {
+        width: auto;
+        margin-right: var(--cudly-sp-3);
+    }
+
+    .app-topbar #user-email-display {
+        padding: 0 var(--cudly-sp-1);
+        font-size: 0;
+        gap: 0;
+    }
+
+    .app-topbar #user-email-display[data-initials]::before {
+        width: 1.75rem;
+        height: 1.75rem;
+        font-size: 0.6875rem;
+    }
+
+    .user-info-divider {
+        margin: 0 var(--cudly-sp-1);
+    }
+}
+
+/* The skip link appears just under the top bar when focused, instead of on
+ * top of the hamburger and the brand. */
+.skip-to-main {
+    top: calc(var(--cudly-topbar-h) + var(--cudly-sp-2));
+    transform: translateY(calc(-100% - var(--cudly-topbar-h) - var(--cudly-sp-4)));
+}
+
+.skip-to-main:focus {
+    transform: translateY(0);
+}
