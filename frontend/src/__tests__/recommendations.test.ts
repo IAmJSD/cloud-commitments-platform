@@ -2912,6 +2912,37 @@ describe('Bundle B: column header filter triggers', () => {
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
   });
 
+  test('a recommendation with term 0 shows a dash, not "0 yr", in the Term cell', async () => {
+    const zeroTermRecs = [
+      {
+        id: 'rec-zero-term',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'ec2',
+        resource_type: 'zero.term.type',
+        region: 'us-east-1',
+        count: 1,
+        term: 0,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: zeroTermRecs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+
+    await loadRecommendations();
+    const html = document.body.innerHTML;
+    expect(html).toContain('zero.term.type');
+    expect(html).not.toMatch(/0 yr/);
+    const termIdx = Array.from(document.querySelectorAll('thead th')).findIndex(
+      (th) => th.querySelector('.column-filter-btn[data-column="term"]'),
+    );
+    expect(termIdx).toBeGreaterThanOrEqual(0);
+    const row = Array.from(document.querySelectorAll('tbody tr')).find((r) => r.textContent?.includes('zero.term.type'));
+    expect(row?.children[termIdx]?.textContent).toBe('\u2014');
+  });
+
   test('numeric popover input validates expression on blur', async () => {
     await loadRecommendations();
     const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');
