@@ -82,26 +82,30 @@ for (const fontPx of [15, 16, 17]) for (const c of cases) {
 test.describe('focus ring inside the scroll box', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  for (const edge of ['bottom', 'top'] as const) {
+  // Rows are 25px apart in a 254px box that scrolls 133px, so row 12 can only
+  // sit flush with the bottom edge after scrolling, and row 4 can be scrolled
+  // flush with the top edge.
+  const cases = [{ edge: 'bottom', k: 12 }, { edge: 'top', k: 4 }] as const;
+  for (const { edge, k } of cases) {
     test(`Tab onto a checkbox parked flush with the ${edge} edge keeps its focus ring inside the list`, async ({ page }) => {
       await openCreateKey(page, RESOURCES);
-      const k = 9;
-      const m = await page.evaluate(({ k, edge }) => {
+      const parked = await page.evaluate(({ k, edge }) => {
         const list = document.getElementById('apikey-permissions-list')!;
         const box = (i: number) => document.getElementById(`apikey-perm-${i}`)!;
-        const prev = box(edge === 'bottom' ? k - 1 : k + 1);
-        prev.focus();
-        const target = box(k);
+        box(edge === 'bottom' ? k - 1 : k + 1).focus();
         const l = list.getBoundingClientRect();
         const border = parseFloat(getComputedStyle(list).borderTopWidth);
-        const r = target.getBoundingClientRect();
+        const r = box(k).getBoundingClientRect();
         const shift = edge === 'bottom'
           ? r.bottom - (l.top + border + list.clientHeight)
           : r.top - (l.top + border);
         list.scrollTo({ top: list.scrollTop + shift, behavior: 'instant' });
-        return { shift };
+        const after = box(k).getBoundingClientRect();
+        return edge === 'bottom'
+          ? after.bottom - (l.top + border + list.clientHeight)
+          : after.top - (l.top + border);
       }, { k, edge });
-      expect(Math.abs(m.shift)).toBeGreaterThan(0);
+      expect(Math.abs(parked)).toBeLessThanOrEqual(1);
       await page.keyboard.press(edge === 'bottom' ? 'Tab' : 'Shift+Tab');
       const room = await page.evaluate(() => {
         const list = document.getElementById('apikey-permissions-list')!;
