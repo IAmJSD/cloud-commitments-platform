@@ -708,14 +708,14 @@ jobs:
 
       - name: Save Go build cache
         if: ${{ !cancelled() && steps.go_build_prune.outcome == 'success' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gocache }}
           key: ${{ steps.go_cache.outputs.build_key }}
 
       - name: Save Go module cache
         if: ${{ !cancelled() && steps.go_mod_download.outcome == 'success' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gomodcache }}
           key: ${{ steps.go_cache.outputs.mod_key }}
@@ -1366,7 +1366,7 @@ jobs:
         # finding or a scan error). A pull_request run saves to its own
         # merge-ref scope, which main and other PRs cannot restore from.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec.outputs.clean_scan == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gosec-results.sarif
           key: ${{ steps.gosec_key.outputs.results_key }}
@@ -1375,7 +1375,7 @@ jobs:
         # Saved even when gosec reports findings: the binary depends only on
         # the gosec and Go versions in the key, not on the scan.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_bin.outputs.cache-hit != 'true' && steps.gosec.outputs.binary_ready == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gosec_key.outputs.bin_dir }}
           key: ${{ steps.gosec_key.outputs.bin_key }}

@@ -141,7 +141,7 @@ jobs:
         # implies success()), so only debs from a completed install reach the key.
         # Also skipped when apt kept no debs: an empty save would hit forever.
         if: steps.apt-cache.outputs.cache-hit != 'true' && steps.apt-deps.outputs.count != '0' && steps.apt-deps.outputs.count != ''
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/playwright-apt
           key: ${{ steps.apt-cache.outputs.cache-primary-key }}
@@ -173,7 +173,7 @@ jobs:
         # Skipped on a hit, and on an install failure (an untaken `if:` still
         # implies success()), so only a complete browser reaches the key.
         if: steps.chromium-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.chromium-cache.outputs.cache-primary-key }}
