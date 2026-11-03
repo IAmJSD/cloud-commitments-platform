@@ -170,7 +170,7 @@ export const RI_EXCHANGER_GROUP_ID = '00000000-0000-5000-8000-000000000008';
  * see CARVE_OUT_FALLBACK_CHECK below, which every entry here must also
  * appear in.
  */
-const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
+export const ADMIN_CARVED_OUTS: ReadonlySet<string> = new Set([
   'execute:purchases',
   'approve-any:purchases',
   'retry-any:purchases',

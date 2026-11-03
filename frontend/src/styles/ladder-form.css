@@ -147,3 +147,63 @@
         min-height: 0;
     }
 }
+
+/* Commitment Laddering section and Planned purchases card on Admin >
+ * Purchasing policies: room between the kill-switch row, the per-account
+ * table and the buttons around it, and quieter status / caption text so
+ * the stat line and the table read as the content. */
+.ladder-configs-heading {
+    margin: var(--cudly-sp-5) 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+#ladder-configs-section > #ladder-add-config-btn {
+    margin-top: var(--cudly-sp-4);
+}
+
+#ladder-configs-table-container > .settings-help {
+    margin: 0;
+}
+
+.ladder-timeline .ladder-timeline-state {
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.ladder-timeline .ladder-timeline-state:empty {
+    display: none;
+}
+
+.ladder-timeline [data-content] > .ladder-timeline-controls {
+    margin-bottom: var(--cudly-sp-2);
+}
+
+.ladder-timeline .ladder-timeline-stat {
+    margin-top: var(--cudly-sp-5);
+}
+
+.ladder-timeline .ladder-timeline-chart {
+    margin: var(--cudly-sp-4) 0 var(--cudly-sp-5);
+}
+
+.ladder-timeline [data-table] caption {
+    caption-side: top;
+    padding: 0 0 var(--cudly-sp-3);
+    text-align: left;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.ladder-timeline [data-table] + .ladder-timeline-note {
+    margin: var(--cudly-sp-3) 0 0;
+}
+
+/* Why a tranche can only be selected, on its own muted line under the button. */
+.ladder-timeline [data-table] td > button[data-event] + span {
+    display: block;
+    margin-top: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
