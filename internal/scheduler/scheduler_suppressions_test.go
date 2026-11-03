@@ -493,11 +493,20 @@ func TestApplySuppressions_AzureSQLIgnoresAZConfig(t *testing.T) {
 		r.Provider, r.Service, r.Region, r.ResourceType, r.Engine = "azure", "database", "eastus", "GP_Gen5_2", "sqlserver"
 		return r
 	}
-	purchase := azure("zoneRedundant")
-	purchase.Count = 2
-	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1", &config.GlobalConfig{GracePeriodDays: map[string]int{"azure": 7}}, time.Now())
-	require.Len(t, sups, 1)
-	out := applySuppressionIndex([]config.RecommendationRecord{azure("")}, aggregateSuppressions(sups))
-	require.Len(t, out, 1)
-	assert.Equal(t, 3, out[0].Count)
+	// "none" is the real double-buy direction: an empty az_config is a
+	// wildcard, but "zoneRedundant" vs "none" would un-suppress the rec if the
+	// variant carried it.
+	for _, tc := range []struct{ bought, listed string }{
+		{"zoneRedundant", ""}, {"zoneRedundant", "none"}, {"none", "zoneRedundant"}, {"none", ""},
+	} {
+		t.Run(tc.bought+" then "+tc.listed, func(t *testing.T) {
+			purchase := azure(tc.bought)
+			purchase.Count = 2
+			sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1", &config.GlobalConfig{GracePeriodDays: map[string]int{"azure": 7}}, time.Now())
+			require.Len(t, sups, 1)
+			out := applySuppressionIndex([]config.RecommendationRecord{azure(tc.listed)}, aggregateSuppressions(sups))
+			require.Len(t, out, 1)
+			assert.Equal(t, 3, out[0].Count)
+		})
+	}
 }
