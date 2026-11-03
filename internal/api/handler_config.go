@@ -74,6 +74,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	_, gracePresent := present["grace_period_days"]
 	modeSent := riExchangeModeSent(present)
+	providersSent := bodyHasKey(present, "enabled_providers")
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
 			return NewClientError(400, "invalid request body")
 		}
-		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode); vErr != nil {
+		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode, providersSent); vErr != nil {
 			return vErr
 		}
 		if gErr := requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), grants.riExchange); gErr != nil {
@@ -145,6 +146,17 @@ func globalConfigWriteFields(body string) (map[string]json.RawMessage, error) {
 	return present, nil
 }
 
+// bodyHasKey reports whether the body carries the key under any casing, as
+// json.Unmarshal matches keys case-insensitively. An explicit null counts.
+func bodyHasKey(present map[string]json.RawMessage, name string) bool {
+	for key := range present {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
 // null does not: json.Unmarshal leaves the stored value in place for it.
 func riExchangeModeSent(present map[string]json.RawMessage) bool {
@@ -166,7 +178,12 @@ func riExchangeModeSent(present map[string]json.RawMessage) bool {
 // such as "Auto". Such a row keeps its value until a caller sends a valid one,
 // and armed() keeps treating it as auto. Runs before the arming gates so a
 // malformed write never reveals grant state.
-func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent bool) error {
+func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent bool) error {
+	// Presence-based, not in Validate: a fresh install stores [] and partial
+	// saves that omit the key must keep working.
+	if providersSent && len(cfg.EnabledProviders) == 0 {
+		return NewClientError(400, "enabled_providers must list at least one provider")
+	}
 	if modeSent && !config.IsValidRIExchangeMode(cfg.RIExchangeMode) {
 		return NewClientError(400, "ri_exchange_mode must be 'manual' or 'auto'")
 	}
