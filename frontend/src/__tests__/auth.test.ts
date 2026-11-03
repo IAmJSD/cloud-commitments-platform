@@ -1,7 +1,7 @@
 /**
  * Auth module tests
  */
-import { showLoginModal, showResetPasswordModal, updateUserUI, logout } from '../auth';
+import { showLoginModal, showResetPasswordModal, updateUserUI, logout, emailInitials } from '../auth';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import { reloadPage } from '../utils';
 
@@ -460,6 +460,16 @@ describe('Auth Module', () => {
 
       const userEmail = document.getElementById('user-email-display');
       expect(userEmail?.textContent).toBe('test@example.com');
+      // The avatar initials ride on a data attribute (drawn by CSS), so the
+      // button's text stays exactly the address.
+      expect(userEmail?.dataset['initials']).toBe('TE');
+    });
+
+    test('emailInitials takes one letter from each of the first two name parts', () => {
+      expect(emailInitials('dana.okafor@example.com')).toBe('DO');
+      expect(emailInitials('priya_raman@example.com')).toBe('PR');
+      expect(emailInitials('admin@example.com')).toBe('AD');
+      expect(emailInitials('x@example.com')).toBe('X');
     });
 
     test('shows user info when logged in', () => {
@@ -879,6 +889,25 @@ describe('Auth Module', () => {
       }));
       // alert() replaced by showToast() (finding 11-L3).
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Profile updated successfully', kind: 'success' }));
+    });
+
+    test('save profile refreshes the avatar initials with the new email', async () => {
+      (api.apiRequest as jest.Mock).mockResolvedValue({});
+      updateUserUI();
+
+      const userEmail = document.getElementById('user-email-display') as HTMLElement;
+      const before = userEmail.dataset['initials'];
+      userEmail.click();
+      await flushPromises();
+
+      (document.getElementById('profile-email') as HTMLInputElement).value = 'newemail@example.com';
+      (document.getElementById('profile-current-password') as HTMLInputElement).value = 'oldpassword';
+      document.getElementById('profile-form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+      await flushPromises();
+
+      expect(userEmail.textContent).toBe('newemail@example.com');
+      expect(userEmail.dataset['initials']).toBe('NE');
+      expect(before).not.toBe('NE');
     });
 
     test('save profile handles API errors', async () => {

@@ -18,6 +18,8 @@ describe('table cell formatters', () => {
     expect(formatTermShort(3)).toBe('3 yr');
     expect(formatTermShort(null)).toBe('');
     expect(formatTermShort(Number.NaN)).toBe('');
+    expect(formatTermShort(0)).toBe('');
+    expect(formatTermShort(-1)).toBe('');
     expect(formatIsoTermShort('P3Y')).toBe('3 yr');
     expect(formatIsoTermShort('P1M')).toBe('P1M');
     expect(formatIsoTermShort(undefined)).toBe('');
