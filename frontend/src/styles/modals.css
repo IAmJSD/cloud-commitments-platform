@@ -719,7 +719,9 @@
 .apikey-permissions-list {
     display: grid;
     gap: var(--cudly-sp-1);
-    max-height: 16rem;
+    /* 15.5rem ends mid-row (rows are ~25px, box padding 8px), so a clipped
+     * row always hints that the list scrolls; 16rem cut on a row boundary. */
+    max-height: 15.5rem;
     overflow-y: auto;
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
     border: 1px solid var(--cudly-border);
