@@ -110,6 +110,27 @@ describe('accessibility smoke', () => {
       const deleteBtn = container.querySelector('.btn-destructive') as HTMLButtonElement | null;
       expect(deleteBtn?.getAttribute('aria-label')).toBe('Delete Prod (111222333)');
     });
+
+    it('row actions are icon buttons with a per-account name and a tooltip', async () => {
+      const container = document.createElement('div');
+      container.id = 'aws-accounts-list';
+      document.body.appendChild(container);
+
+      (api.listAccounts as jest.Mock).mockResolvedValue([
+        { id: 'a1', name: 'Prod', provider: 'aws', external_id: '111222333', enabled: true },
+      ]);
+
+      await loadAccountsForProvider('aws');
+
+      const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('td.account-actions .row-actions button'));
+      expect(buttons.map(b => [b.getAttribute('aria-label'), b.title, b.querySelector('svg.icon')?.getAttribute('class')])).toEqual([
+        ['Edit Prod (111222333)', 'Edit account', 'icon icon-edit'],
+        ['Test credentials for Prod (111222333)', 'Test credentials', 'icon icon-zap'],
+        ['Service overrides for Prod (111222333)', 'Service overrides', 'icon icon-sliders'],
+        ['Delete Prod (111222333)', 'Delete account', 'icon icon-trash-2'],
+      ]);
+      for (const b of buttons) expect(b.classList.contains('icon-btn')).toBe(true);
+    });
   });
 
   describe('RI Exchange settings deep-link', () => {

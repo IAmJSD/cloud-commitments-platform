@@ -2912,6 +2912,64 @@ describe('Bundle B: column header filter triggers', () => {
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
   });
 
+  test('a recommendation with term 0 shows a dash, not "0 yr", in the Term cell', async () => {
+    const zeroTermRecs = [
+      {
+        id: 'rec-zero-term',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'ec2',
+        resource_type: 'zero.term.type',
+        region: 'us-east-1',
+        count: 1,
+        term: 0,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: zeroTermRecs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+
+    await loadRecommendations();
+    const html = document.body.innerHTML;
+    expect(html).toContain('zero.term.type');
+    expect(html).not.toMatch(/0 yr/);
+    const termIdx = Array.from(document.querySelectorAll('thead th')).findIndex(
+      (th) => th.querySelector('.column-filter-btn[data-column="term"]'),
+    );
+    expect(termIdx).toBeGreaterThanOrEqual(0);
+    const row = Array.from(document.querySelectorAll('tbody tr')).find((r) => r.textContent?.includes('zero.term.type'));
+    expect(row?.children[termIdx]?.textContent).toBe('\u2014');
+  });
+
+  test.each([
+    ['mixed 0 and 3', [0, 3], /term: 3 yr(?!\s*\u2013)/],
+    ['all zero', [0, 0], /term: \u2014(?!\s*\u2013)/],
+  ])('group row term range with a missing term (%s) has no empty endpoint', async (_label, terms, expected) => {
+    const recs = terms.map((term, i) => ({
+      id: `rec-range-${i}`,
+      provider: 'aws',
+      cloud_account_id: 'a3',
+      service: 'ec2',
+      resource_type: 'range.term.type',
+      region: 'us-east-1',
+      count: 1,
+      term,
+      payment: i === 0 ? 'all-upfront' : 'no-upfront',
+      savings: 300,
+      upfront_cost: 1200,
+    }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+    await loadRecommendations();
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(expected);
+    expect(text).not.toMatch(/term:\s*(\u2013|$)/m);
+  });
+
   test('numeric popover input validates expression on blur', async () => {
     await loadRecommendations();
     const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');

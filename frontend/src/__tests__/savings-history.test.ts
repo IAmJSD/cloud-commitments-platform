@@ -83,6 +83,16 @@ describe('Savings History Module', () => {
     (Chart as unknown as jest.Mock).mockClear();
   });
 
+  afterEach(() => { jest.useRealTimers(); });
+
+  // Freeze only Date so promise/timer-based helpers (flushPromises) keep working.
+  const pinDateOnly = (iso: string): void => {
+    jest.useFakeTimers({
+      now: new Date(iso),
+      doNotFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate', 'nextTick', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance'],
+    });
+  };
+
   describe('requested-window average', () => {
     const now = new Date('2026-10-01T12:17:15.123Z');
 
@@ -1003,6 +1013,9 @@ describe('Savings History Module', () => {
       const periodSelect = document.getElementById('savings-period') as HTMLSelectElement;
       periodSelect.value = '30d';
 
+      // The 30d window is 30 local calendar days; pin to a date with no DST
+      // change in range (jest pins TZ=America/New_York) so it is exactly 30 * 24h.
+      pinDateOnly('2026-10-01T12:17:15.123Z');
       const before = Date.now();
       await loadSavingsHistory();
       const after = Date.now();
@@ -1371,6 +1384,11 @@ describe('Savings History Module', () => {
 
   // Issue #750: unit dropdown wires + KPI display per unit
   describe('unit dropdown (issue #750)', () => {
+    // Windows are local calendar days (getPeriodDates) and the average divides
+    // by the actual elapsed count, so a window spanning a DST change (jest pins
+    // TZ=America/New_York; DST ends 2026-11-01) is not exactly 90 * 24h. Pin the
+    // clock to a date whose 90d window has no DST change.
+    beforeEach(() => { pinDateOnly('2026-10-01T12:17:15.123Z'); });
     const mockData = {
       summary: { total_monthly_savings: 730, total_annual_savings: 8760 }, // $730/mo cumulative total
       data_points: [
