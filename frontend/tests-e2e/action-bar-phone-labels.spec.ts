@@ -8,8 +8,8 @@
 import { test, expect } from '@playwright/test';
 import { mockApi, seedAuth } from './fixtures/recs';
 
-test('phone action-bar labels wrap rather than truncate, last row stays clear', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+for (const width of [390, 320]) test(`phone action-bar labels wrap rather than truncate, last row stays clear at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
   await seedAuth(page);
   await mockApi(page);
   await page.goto('/opportunities');
@@ -41,4 +41,22 @@ test('phone action-bar labels wrap rather than truncate, last row stays clear', 
   const rowBox = (await lastRow.boundingBox())!;
   const barBox = (await page.locator('#recommendations-action-box').boundingBox())!;
   expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(barBox.y + 1);
+});
+
+test.describe('touch device', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('action-bar buttons keep the 44px touch target with a one-line label', async ({ page }) => {
+    await seedAuth(page);
+    await mockApi(page);
+    await page.goto('/opportunities');
+    await page.waitForLoadState('networkidle');
+
+    await page.locator('#recommendations-list tbody input[type="checkbox"]').first().check();
+    await expect(page.locator('#bulk-purchase-btn')).toHaveText('Purchase 1 selected');
+    for (const id of ['#bulk-purchase-btn', '#create-plan-btn']) {
+      const h = await page.locator(id).evaluate((el) => el.getBoundingClientRect().height);
+      expect(h).toBeGreaterThanOrEqual(44);
+    }
+  });
 });

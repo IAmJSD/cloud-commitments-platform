@@ -929,4 +929,11 @@ th .history-column-filter-btn:focus-visible {
         white-space: normal;
         line-height: 1.2;
     }
+
+    /* The 2.25rem floor above outranks responsive.css's coarse-pointer 44px. */
+    @media (pointer: coarse) {
+        .recommendations-action-box > button {
+            min-height: 44px;
+        }
+    }
 }
