@@ -923,8 +923,10 @@ th .history-column-filter-btn:focus-visible {
 
     .recommendations-action-box > button {
         min-width: 0;
-        padding: 0 var(--cudly-sp-2);
-        overflow: hidden;
-        text-overflow: ellipsis;
+        height: auto;
+        min-height: 2.25rem;
+        padding: var(--cudly-sp-1) var(--cudly-sp-2);
+        white-space: normal;
+        line-height: 1.2;
     }
 }
