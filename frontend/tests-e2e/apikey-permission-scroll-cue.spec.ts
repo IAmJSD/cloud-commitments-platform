@@ -5,8 +5,9 @@ const RESOURCES = [
   'recommendations', 'plans', 'purchases', 'accounts', 'users', 'groups', 'api-keys',
   'config', 'history', 'ladder', 'coverage', 'exchanges', 'reports', 'budgets', 'audit',
 ];
+const LONG = 'resource-with-a-very-long-name-that-forces-the-row-label-to-wrap-onto-several-lines-in-a-narrow-modal-';
 
-async function openCreateKey(page: Page): Promise<void> {
+async function openCreateKey(page: Page, resources: string[]): Promise<void> {
   await seedAuth(page);
   await mockApi(page);
   await page.route('**/api/users*', route => route.fulfill({ json: { users: [] } }));
@@ -16,35 +17,59 @@ async function openCreateKey(page: Page): Promise<void> {
   } }));
   await page.route('**/api/api-keys', route => route.fulfill({ json: { api_keys: [] } }));
   await page.route('**/api/auth/me/permissions', route => route.fulfill({ json: {
-    permissions: RESOURCES.map(resource => ({ action: 'view', resource })), is_admin: true,
+    permissions: resources.map(resource => ({ action: 'view', resource })), is_admin: true,
   } }));
   await page.goto('/admin/users');
   await page.locator('#create-apikey-btn').click();
-  await expect(page.locator('#apikey-permissions-list input[type="checkbox"]')).toHaveCount(RESOURCES.length);
+  await expect(page.locator('#apikey-permissions-list input[type="checkbox"]')).toHaveCount(resources.length);
 }
 
-// The permission box is a fixed-height scroll area. If its height lands exactly
-// on a row boundary, overlay scrollbars give no cue that more rows exist, so a
-// user can miss later permissions. Some row must be cut by the bottom edge.
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-  test(`API key permission list shows a partly clipped row at ${viewport.width}x${viewport.height}`, async ({ page }) => {
-    await page.setViewportSize(viewport);
-    await openCreateKey(page);
+// The permission box is a fixed-height scroll area. Overlay scrollbars give no
+// cue that more rows exist, and a cue based on cutting a row mid-way breaks with
+// touch-sized or wrapped rows. The box must show a shadow on its bottom edge
+// while rows remain below, and none once scrolled to the end.
+// Rows are hidden so only the box background is compared.
+async function bottomStrip(page: Page, scrollTo: 'top' | 'end'): Promise<Buffer> {
+  const clip = await page.evaluate((to) => {
+    const list = document.getElementById('apikey-permissions-list')!;
+    list.querySelectorAll<HTMLElement>('.apikey-permission-option').forEach(r => { r.style.visibility = 'hidden'; });
+    list.scrollTo({ top: to === 'end' ? list.scrollHeight : 0, behavior: 'instant' });
+    const b = list.getBoundingClientRect();
+    return { overflows: list.scrollHeight > list.clientHeight, x: b.x + 16, width: b.width - 32, y: b.bottom - 9, height: 8 };
+  }, scrollTo);
+  expect(clip.overflows).toBe(true);
+  return page.screenshot({ clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height } });
+}
 
-    const m = await page.evaluate(() => {
-      const list = document.getElementById('apikey-permissions-list')!;
-      list.scrollTop = 0;
-      const box = list.getBoundingClientRect();
-      const edge = box.bottom - parseFloat(getComputedStyle(list).borderBottomWidth);
-      const rows = Array.from(list.querySelectorAll('.apikey-permission-option')).map(r => r.getBoundingClientRect());
-      return {
-        overflows: list.scrollHeight > list.clientHeight,
-        clipped: rows.filter(r => r.top < edge - 1 && r.bottom > edge + 1).length,
-        visible: rows.filter(r => r.bottom <= edge + 1).length,
-      };
+async function topStripAtTop(page: Page): Promise<Buffer> {
+  const clip = await page.evaluate(() => {
+    const list = document.getElementById('apikey-permissions-list')!;
+    list.scrollTo({ top: 0, behavior: 'instant' });
+    const b = list.getBoundingClientRect();
+    return { x: b.x + 16, width: b.width - 32, y: b.top + 1, height: 8 };
+  });
+  return page.screenshot({ clip });
+}
+
+const cases = [
+  { name: '1440x900 desktop', viewport: { width: 1440, height: 900 }, touch: false, resources: RESOURCES },
+  { name: '390x844 phone', viewport: { width: 390, height: 844 }, touch: false, resources: RESOURCES },
+  { name: '390x844 touch phone (44px rows)', viewport: { width: 390, height: 844 }, touch: true, resources: RESOURCES },
+  { name: '390x844 touch phone, wrapped rows', viewport: { width: 390, height: 844 }, touch: true,
+    resources: RESOURCES.map((r, i) => (i % 2 ? `${LONG}${r}` : r)) },
+];
+
+for (const c of cases) {
+  test.describe(c.name, () => {
+    test.use({ viewport: c.viewport, hasTouch: c.touch, isMobile: c.touch });
+
+    test('API key permission list shows a bottom scroll shadow only while rows remain below', async ({ page }) => {
+      await openCreateKey(page, c.resources);
+      const plain = await topStripAtTop(page);
+      const atTop = await bottomStrip(page, 'top');
+      const atEnd = await bottomStrip(page, 'end');
+      expect(atTop.equals(atEnd)).toBe(false);
+      expect(atEnd.equals(plain)).toBe(true);
     });
-    expect(m.overflows).toBe(true);
-    expect(m.visible).toBeGreaterThan(0);
-    expect(m.clipped).toBeGreaterThanOrEqual(1);
   });
 }
