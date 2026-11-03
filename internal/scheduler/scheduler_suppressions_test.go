@@ -444,3 +444,60 @@ func withCount(r config.RecommendationRecord, n int) config.RecommendationRecord
 	r.Count = n
 	return r
 }
+
+func rdsAZConfigSuppressionRec(id, azConfig string) config.RecommendationRecord {
+	return config.RecommendationRecord{ID: id, Provider: "aws", Service: "rds", Region: "us-east-1",
+		ResourceType: "db.r5.large", Engine: "mysql", Count: 5, Term: 1, Payment: "all-upfront",
+		CloudAccountID: strPtr("acct-1"),
+		Details:        []byte(`{"engine":"mysql","az_config":"` + azConfig + `"}`)}
+}
+
+// Issue #408: buying 2x Single-AZ db.r5.large mysql must not hide or reduce
+// the Multi-AZ rec of the same class, which is a different offering.
+func TestApplySuppressions_RDSAZConfigScopesToPurchasedOffering(t *testing.T) {
+	single := rdsAZConfigSuppressionRec("single", "single-az")
+	multi := rdsAZConfigSuppressionRec("multi", "multi-az")
+	purchase := single
+	purchase.Count = 2
+	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1", &config.GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+
+	out := applySuppressionIndex([]config.RecommendationRecord{single, multi}, aggregateSuppressions(sups))
+	require.Len(t, out, 2)
+	assert.Equal(t, 3, out[0].Count, "single-az: 5 - 2")
+	assert.Equal(t, 5, out[1].Count, "multi-az must keep its full count")
+	assert.Zero(t, out[1].SuppressedCount)
+}
+
+// A suppression row written before az_config existed (variant columns set,
+// az_config NULL) still suppresses both offerings, as it did before, so the
+// fix fails safe against a double purchase.
+func TestApplySuppressions_RDSLegacyVariantRowIsAZConfigWildcard(t *testing.T) {
+	legacy := config.PurchaseSuppression{ExecutionID: "old", AccountID: "acct-1", Provider: "aws",
+		Service: "rds", Region: "us-east-1", ResourceType: "db.r5.large", Engine: "mysql",
+		SuppressedCount: 2, ExpiresAt: time.Now().Add(24 * time.Hour),
+		Variant: &config.SuppressionVariant{}}
+	out := applySuppressionIndex([]config.RecommendationRecord{
+		rdsAZConfigSuppressionRec("single", "single-az"), rdsAZConfigSuppressionRec("multi", "multi-az"),
+	}, aggregateSuppressions([]config.PurchaseSuppression{legacy}))
+	require.Len(t, out, 2)
+	assert.Equal(t, 3, out[0].Count)
+	assert.Equal(t, 3, out[1].Count)
+}
+
+// Azure SQL keeps az_config out of the suppression variant: a flip of the
+// subscription-wide value between collections must not un-suppress the rec.
+func TestApplySuppressions_AzureSQLIgnoresAZConfig(t *testing.T) {
+	azure := func(azConfig string) config.RecommendationRecord {
+		r := rdsAZConfigSuppressionRec("sql", azConfig)
+		r.Provider, r.Service, r.Region, r.ResourceType, r.Engine = "azure", "database", "eastus", "GP_Gen5_2", "sqlserver"
+		return r
+	}
+	purchase := azure("zoneRedundant")
+	purchase.Count = 2
+	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1", &config.GlobalConfig{GracePeriodDays: map[string]int{"azure": 7}}, time.Now())
+	require.Len(t, sups, 1)
+	out := applySuppressionIndex([]config.RecommendationRecord{azure("")}, aggregateSuppressions(sups))
+	require.Len(t, out, 1)
+	assert.Equal(t, 3, out[0].Count)
+}

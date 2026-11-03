@@ -114,8 +114,9 @@ func RecIdentityKey(rec *RecommendationRecord) (string, error) {
 	}, "\x1f"), nil
 }
 
-// SuppressionVariant is the rec's availability zone, platform and tenancy as
-// the purchase suppression key carries them (issue #816): the platform and
+// SuppressionVariant is the rec's availability zone, platform, tenancy and
+// (AWS RDS only) az_config as the purchase suppression key carries them
+// (issues #816, #408): the platform and
 // tenancy come from the same Details read (ComputeIdentity) as RecIdentityKey,
 // so the write side (BuildSuppressions) and the read side (the scheduler's
 // subtraction pass) cannot drift from it or from each other. For AWS EC2 only,
@@ -126,7 +127,11 @@ func (r *RecommendationRecord) SuppressionVariant() (SuppressionVariant, error) 
 	if err != nil {
 		return SuppressionVariant{}, err
 	}
-	v := SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}
+	azConfig, err := r.IdentityAZConfig()
+	if err != nil {
+		return SuppressionVariant{}, err
+	}
+	v := SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy, AZConfig: azConfig}
 	if isAWSEC2(r.Provider, r.Service) {
 		v.Tenancy = canonicalSuppressionTenancy(v.Tenancy)
 		if v.AvailabilityZone == "" {

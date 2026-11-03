@@ -19,7 +19,7 @@ func TestPGXMock_CreateSuppression_RoundTrip(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 3, pgxmock.AnyArg(), (*string)(nil), (*string)(nil), (*string)(nil)).
+			"t4g.nano", "", 3, pgxmock.AnyArg(), (*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -45,7 +45,7 @@ func TestPGXMock_CreateSuppression_WritesVariant(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 3, pgxmock.AnyArg(), &az, &platform, &tenancy).
+			"t4g.nano", "", 3, pgxmock.AnyArg(), &az, &platform, &tenancy, (*string)(nil)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -120,14 +120,14 @@ func TestPGXMock_ListActiveSuppressions(t *testing.T) {
 	cols := []string{
 		"id", "execution_id", "account_id", "provider", "service", "region",
 		"resource_type", "engine", "suppressed_count", "expires_at", "created_at",
-		"availability_zone", "platform", "tenancy",
+		"availability_zone", "platform", "tenancy", "az_config",
 	}
 	az, platform, tenancy := "us-east-1a", "Linux/UNIX", "default"
 	rows := pgxmock.NewRows(cols).
 		AddRow("sup-1", "exec-1", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 3, future, now, nil, nil, nil).
+			"t4g.nano", "", 3, future, now, nil, nil, nil, nil).
 		AddRow("sup-2", "exec-2", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 2, future, now, &az, &platform, &tenancy)
+			"t4g.nano", "", 2, future, now, &az, &platform, &tenancy, nil)
 	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions WHERE expires_at > NOW\(\)`).
 		WillReturnRows(rows)
 
@@ -173,5 +173,42 @@ func TestPGXMock_WithTx_RollsBackOnError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Issue #408: an RDS suppression writes its az_config, and a NULL az_config
+// reads back as "" (a wildcard); a row with a value reads back with it.
+func TestPGXMock_Suppression_AZConfigRoundTrip(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	az, platform, tenancy, azConfig := "", "", "", "multi-az"
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
+		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "relational-db", "us-east-1",
+			"db.r5.large", "mysql", 2, pgxmock.AnyArg(), &az, &platform, &tenancy, &azConfig).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	require.NoError(t, store.CreateSuppression(ctx, &PurchaseSuppression{
+		ExecutionID: "exec-1", AccountID: "acct-1", Provider: "aws", Service: "relational-db",
+		Region: "us-east-1", ResourceType: "db.r5.large", Engine: "mysql",
+		SuppressedCount: 2, ExpiresAt: time.Now().Add(time.Hour),
+		Variant: &SuppressionVariant{AZConfig: "multi-az"},
+	}))
+
+	now := time.Now().UTC().Truncate(time.Second)
+	cols := []string{"id", "execution_id", "account_id", "provider", "service", "region",
+		"resource_type", "engine", "suppressed_count", "expires_at", "created_at",
+		"availability_zone", "platform", "tenancy", "az_config"}
+	rows := pgxmock.NewRows(cols).
+		AddRow("a", "e", "acct-1", "aws", "relational-db", "us-east-1", "db.r5.large", "mysql", 2, now, now, &az, &platform, &tenancy, nil).
+		AddRow("b", "e", "acct-1", "aws", "relational-db", "us-east-1", "db.r5.large", "mysql", 2, now, now, &az, &platform, &tenancy, &azConfig)
+	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions`).WillReturnRows(rows)
+	sups, err := store.ListActiveSuppressions(ctx)
+	require.NoError(t, err)
+	require.Len(t, sups, 2)
+	assert.Equal(t, "", sups[0].Variant.AZConfig)
+	assert.Equal(t, "multi-az", sups[1].Variant.AZConfig)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

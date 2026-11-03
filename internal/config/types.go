@@ -774,13 +774,18 @@ type PurchaseSuppression struct {
 }
 
 // SuppressionVariant is the part of the suppression key beyond the 6-tuple:
-// the zonal EC2 availability zone and the EC2 platform and tenancy, the same
-// three fields the rec identity key carries (issues #792, #806). Empty strings
-// are known values (a regional rec, a non-EC2 rec), not wildcards.
+// the zonal EC2 availability zone, the EC2 platform and tenancy, and the AWS
+// RDS az_config, the same fields the rec identity key carries (issues #792,
+// #806, #408). Empty AvailabilityZone, Platform and Tenancy are known values
+// (a regional rec, a non-EC2 rec), not wildcards. AZConfig is the exception:
+// "" means "not applicable or unknown" and matches any az_config (see
+// AppliesTo), because suppressions written before migration 000156 have none
+// and must keep suppressing both the Single-AZ and the Multi-AZ rec.
 type SuppressionVariant struct {
 	AvailabilityZone string `json:"availability_zone"`
 	Platform         string `json:"platform"`
 	Tenancy          string `json:"tenancy"`
+	AZConfig         string `json:"az_config,omitempty"`
 }
 
 // awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
@@ -838,12 +843,16 @@ func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
 		return true
 	}
 	a, b := *s.Variant, *v
+	// An empty az_config on either side is a wildcard: legacy rows predate it
+	// and an RDS rec without one cannot say which offering it is (#408).
+	azConfigOK := a.AZConfig == "" || b.AZConfig == "" || a.AZConfig == b.AZConfig
+	a.AZConfig, b.AZConfig = "", ""
 	// Only the stored side needs canonicalising: SuppressionVariant already
 	// canonicalises every rec variant, so a raw "shared" never reaches v.
 	if isAWSEC2(s.Provider, s.Service) {
 		a.Tenancy = canonicalSuppressionTenancy(a.Tenancy)
 	}
-	return a == b
+	return azConfigOK && a == b
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the

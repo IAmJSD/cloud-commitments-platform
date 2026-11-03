@@ -70,11 +70,11 @@ func suppressionRows(n int) *pgxmock.Rows {
 	rows := pgxmock.NewRows([]string{
 		"id", "execution_id", "account_id", "provider", "service", "region",
 		"resource_type", "engine", "suppressed_count", "expires_at", "created_at",
-		"availability_zone", "platform", "tenancy",
+		"availability_zone", "platform", "tenancy", "az_config",
 	})
 	for i := 0; i < n; i++ {
 		rows.AddRow("sup", "exec", "acct", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 1, now.Add(time.Hour), now, nil, nil, nil)
+			"t4g.nano", "", 1, now.Add(time.Hour), now, nil, nil, nil, nil)
 	}
 	return rows
 }

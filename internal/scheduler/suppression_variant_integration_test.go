@@ -146,3 +146,51 @@ func TestSuppressionsMatchAcrossEC2Slugs_RealPostgres(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"ec2-rec": 3, "compute-rec": 3, "azure-rec": 5}, counts)
 }
+
+// TestRDSSuppressionScopedToAZConfig_RealPostgres is the issue #408
+// regression on a real database: after migrations 000154-000156 a Single-AZ
+// and a Multi-AZ db.r5.large mysql rec coexist. Buying 2x Single-AZ must leave
+// the Multi-AZ rec at its full count, while a suppression row written before
+// az_config existed (variant set, az_config NULL) still hides both.
+func TestRDSSuppressionScopedToAZConfig_RealPostgres(t *testing.T) {
+	ctx := t.Context()
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
+	store := config.NewPostgresStore(pg.DB)
+
+	rec := func(id, resourceType, azConfig string) config.RecommendationRecord {
+		return config.RecommendationRecord{
+			ID: id, Provider: "aws", Service: "relational-db", Region: "us-east-1", ResourceType: resourceType,
+			Engine: "mysql", Count: 5, Term: 1, Payment: "all-upfront",
+			Details: []byte(`{"engine":"mysql","az_config":"` + azConfig + `"}`),
+		}
+	}
+	single := rec("single", "db.r5.large", "single-az")
+	records := []config.RecommendationRecord{
+		single, rec("multi", "db.r5.large", "multi-az"),
+		rec("old-single", "db.m5.large", "single-az"), rec("old-multi", "db.m5.large", "multi-az"),
+	}
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), records, nil))
+
+	purchase := single
+	purchase.Count = 2
+	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, uuid.NewString(), &config.GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error { return store.CreateSuppressionTx(ctx, tx, &sups[0]) }))
+
+	// Written by code that predates az_config: variant set, az_config NULL.
+	_, err := pg.DB.Pool().Exec(ctx, `
+		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
+		                                   resource_type, engine, suppressed_count, expires_at,
+		                                   availability_zone, platform, tenancy)
+		VALUES ($1, '', 'aws', 'relational-db', 'us-east-1', 'db.m5.large', 'mysql', 1, NOW() + INTERVAL '1 day', '', '', '')`, uuid.NewString())
+	require.NoError(t, err)
+
+	s := &Scheduler{config: store, isLambda: true}
+	got, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	counts := map[string]int{}
+	for _, r := range got {
+		counts[r.ID] = r.Count
+	}
+	assert.Equal(t, map[string]int{"single": 3, "multi": 5, "old-single": 4, "old-multi": 4}, counts)
+}

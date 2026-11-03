@@ -106,21 +106,25 @@ func (s *PostgresStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup 
 	// A nil Variant writes NULL into all three variant columns (a legacy,
 	// 6-tuple-wide row); otherwise all three are written, empty strings included
 	// (migration 000134 keeps them all-NULL or all-set).
-	var az, platform, tenancy *string
+	// az_config is NULL when empty: unknown or not applicable (migration 000156).
+	var az, platform, tenancy, azConfig *string
 	if sup.Variant != nil {
 		az, platform, tenancy = &sup.Variant.AvailabilityZone, &sup.Variant.Platform, &sup.Variant.Tenancy
+		if sup.Variant.AZConfig != "" {
+			azConfig = &sup.Variant.AZConfig
+		}
 	}
 	const q = `
 		INSERT INTO purchase_suppressions (
 			id, execution_id, account_id, provider, service, region,
 			resource_type, engine, suppressed_count, expires_at,
-			availability_zone, platform, tenancy
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			availability_zone, platform, tenancy, az_config
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 	if _, err := tx.Exec(ctx, q,
 		sup.ID, sup.ExecutionID, sup.AccountID, sup.Provider, sup.Service,
 		sup.Region, sup.ResourceType, sup.Engine, sup.SuppressedCount,
-		sup.ExpiresAt, az, platform, tenancy,
+		sup.ExpiresAt, az, platform, tenancy, azConfig,
 	); err != nil {
 		return fmt.Errorf("failed to insert purchase suppression: %w", err)
 	}
@@ -165,7 +169,7 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 	const q = `
 		SELECT id, execution_id, account_id, provider, service, region,
 		       resource_type, engine, suppressed_count, expires_at, created_at,
-		       availability_zone, platform, tenancy
+		       availability_zone, platform, tenancy, az_config
 		FROM purchase_suppressions
 		WHERE expires_at > NOW()
 	`
@@ -178,16 +182,16 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 	var out []PurchaseSuppression
 	for rows.Next() {
 		var sup PurchaseSuppression
-		var az, platform, tenancy *string
+		var az, platform, tenancy, azConfig *string
 		if err := rows.Scan(
 			&sup.ID, &sup.ExecutionID, &sup.AccountID, &sup.Provider,
 			&sup.Service, &sup.Region, &sup.ResourceType, &sup.Engine,
 			&sup.SuppressedCount, &sup.ExpiresAt, &sup.CreatedAt,
-			&az, &platform, &tenancy,
+			&az, &platform, &tenancy, &azConfig,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan suppression row: %w", err)
 		}
-		sup.Variant = suppressionVariantFromColumns(az, platform, tenancy)
+		sup.Variant = suppressionVariantFromColumns(az, platform, tenancy, azConfig)
 		out = append(out, sup)
 	}
 	if err := rows.Err(); err != nil {
@@ -199,10 +203,15 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 // suppressionVariantFromColumns rebuilds a row's variant from its nullable
 // columns. The 000134 CHECK keeps them all-NULL or all-set; a row with any
 // NULL is read as having no variant (a 6-tuple-wide wildcard), which
-// over-suppresses rather than over-shows.
-func suppressionVariantFromColumns(az, platform, tenancy *string) *SuppressionVariant {
+// over-suppresses rather than over-shows. A NULL az_config (rows written before
+// migration 000156, or a rec with none) is read as "" = any az_config.
+func suppressionVariantFromColumns(az, platform, tenancy, azConfig *string) *SuppressionVariant {
 	if az == nil || platform == nil || tenancy == nil {
 		return nil
 	}
-	return &SuppressionVariant{AvailabilityZone: *az, Platform: *platform, Tenancy: *tenancy}
+	v := &SuppressionVariant{AvailabilityZone: *az, Platform: *platform, Tenancy: *tenancy}
+	if azConfig != nil {
+		v.AZConfig = *azConfig
+	}
+	return v
 }

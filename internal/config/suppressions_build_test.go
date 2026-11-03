@@ -94,11 +94,11 @@ func TestBuildSuppressions_SeparatesVariants(t *testing.T) {
 		variant SuppressionVariant
 		count   int
 	}{
-		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, 3},
-		{SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}, 3},
-		{SuppressionVariant{"", "Linux/UNIX", "default"}, 4},
-		{SuppressionVariant{"us-east-1a", "Windows", "default"}, 5},
-		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}, 6},
+		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}, 3},
+		{SuppressionVariant{"us-east-1b", "Linux/UNIX", "default", ""}, 3},
+		{SuppressionVariant{"", "Linux/UNIX", "default", ""}, 4},
+		{SuppressionVariant{"us-east-1a", "Windows", "default", ""}, 5},
+		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated", ""}, 6},
 	}
 	for i, w := range want {
 		require.NotNil(t, sups[i].Variant, "row %d", i)
@@ -143,13 +143,13 @@ func TestPurchaseSuppression_AppliesTo(t *testing.T) {
 	scoped := PurchaseSuppression{Variant: &v}
 	legacy := PurchaseSuppression{}
 
-	assert.True(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
-	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}))
-	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"", "Linux/UNIX", "default"}))
-	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Windows", "default"}))
-	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+	assert.True(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1b", "Linux/UNIX", "default", ""}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"", "Linux/UNIX", "default", ""}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Windows", "default", ""}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated", ""}))
 	assert.True(t, scoped.AppliesTo(nil), "an unreadable rec variant matches every row")
-	assert.True(t, legacy.AppliesTo(&SuppressionVariant{"us-east-1b", "Windows", "dedicated"}), "a legacy row is a wildcard")
+	assert.True(t, legacy.AppliesTo(&SuppressionVariant{"us-east-1b", "Windows", "dedicated", ""}), "a legacy row is a wildcard")
 	assert.True(t, legacy.AppliesTo(nil))
 }
 
@@ -166,7 +166,7 @@ func TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard(t *testing.T) {
 			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
 			require.Len(t, sups, 1)
 			assert.Nil(t, sups[0].Variant)
-			assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+			assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}))
 		})
 	}
 
@@ -174,7 +174,7 @@ func TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard(t *testing.T) {
 	full.Details = []byte(`{"platform":"Linux/UNIX","tenancy":"default"}`)
 	sups := BuildSuppressions([]RecommendationRecord{full}, "exec-1", &GlobalConfig{}, time.Now())
 	require.Len(t, sups, 1)
-	assert.Equal(t, &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, sups[0].Variant)
+	assert.Equal(t, &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}, sups[0].Variant)
 }
 
 // TestBuildSuppressions_ComputeSlugEC2: AWS EC2 recs under the canonical
@@ -185,14 +185,14 @@ func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
 	sups := BuildSuppressions([]RecommendationRecord{base}, "exec-1", &GlobalConfig{}, time.Now())
 	require.Len(t, sups, 1)
 	assert.Nil(t, sups[0].Variant)
-	assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+	assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}))
 
 	for name, tc := range map[string]struct {
 		details []byte
 		want    SuppressionVariant
 	}{
-		"platform only": {[]byte(`{"platform":"Linux/UNIX"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", ""}},
-		"tenancy only":  {[]byte(`{"tenancy":"default"}`), SuppressionVariant{"us-east-1a", "", "default"}},
+		"platform only": {[]byte(`{"platform":"Linux/UNIX"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "", ""}},
+		"tenancy only":  {[]byte(`{"tenancy":"default"}`), SuppressionVariant{"us-east-1a", "", "default", ""}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := base
@@ -284,12 +284,12 @@ func TestBuildSuppressions_LegacyShapesCanonicalised(t *testing.T) {
 		rec  RecommendationRecord
 		want SuppressionVariant
 	}{
-		"legacy shared tenancy":   {mk("ec2", "us-east-1a", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
-		"compute slug shared":     {mk("compute", "", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"", "Linux/UNIX", "default"}},
-		"AZ only in details":      {mk("ec2", "", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
-		"field wins over details": {mk("ec2", "us-east-1b", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}},
-		"modern rec unchanged":    {mk("ec2", "us-east-1a", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"dedicated"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}},
-		"non-EC2 untouched":       {RecommendationRecord{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db", Count: 1, Details: []byte(`{"availability_zone":"us-east-1a","tenancy":"shared"}`)}, SuppressionVariant{"", "", "shared"}},
+		"legacy shared tenancy":   {mk("ec2", "us-east-1a", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}},
+		"compute slug shared":     {mk("compute", "", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"", "Linux/UNIX", "default", ""}},
+		"AZ only in details":      {mk("ec2", "", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}},
+		"field wins over details": {mk("ec2", "us-east-1b", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1b", "Linux/UNIX", "default", ""}},
+		"modern rec unchanged":    {mk("ec2", "us-east-1a", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"dedicated"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated", ""}},
+		"non-EC2 untouched":       {RecommendationRecord{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db", Count: 1, Details: []byte(`{"availability_zone":"us-east-1a","tenancy":"shared"}`)}, SuppressionVariant{"", "", "shared", ""}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sups := BuildSuppressions([]RecommendationRecord{tc.rec}, "exec-1", &GlobalConfig{}, time.Now())
@@ -300,8 +300,8 @@ func TestBuildSuppressions_LegacyShapesCanonicalised(t *testing.T) {
 }
 
 func TestPurchaseSuppression_AppliesTo_LegacySharedTenancy(t *testing.T) {
-	def := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}
-	variant := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared"}
+	def := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default", ""}
+	variant := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared", ""}
 	for name, tc := range map[string]struct {
 		provider, service string
 		want              bool
@@ -317,7 +317,7 @@ func TestPurchaseSuppression_AppliesTo_LegacySharedTenancy(t *testing.T) {
 		})
 	}
 	ec2 := PurchaseSuppression{Provider: "aws", Service: "ec2", Variant: variant}
-	assert.False(t, ec2.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+	assert.False(t, ec2.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated", ""}))
 }
 
 func TestRecommendationRecord_SuppressionVariant_DetailsAZ(t *testing.T) {
