@@ -7,7 +7,7 @@ import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
 import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
-import { iconSvg } from './icons';
+import { createIcon, iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -17,6 +17,7 @@ import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import {
   openColumnFilterPopover,
   rebindColumnFilterPopover,
@@ -164,11 +165,11 @@ function renderPlannedPurchasesInternal(): void {
   };
 
   const tbody = filtered.length === 0
-    ? `<tr><td colspan="11" class="empty">No rows match these filters.</td></tr>`
+    ? `<tr><td colspan="12" class="empty">No rows match these filters.</td></tr>`
     : filtered.map(purchase => renderPlannedPurchaseRow(purchase)).join('');
 
   container.innerHTML = `
-    <table class="planned-purchases-table">
+    <table class="planned-purchases-table table-compact table-sticky-end">
       <thead>
         <tr>
           <th>Plan</th>
@@ -177,7 +178,8 @@ function renderPlannedPurchasesInternal(): void {
           <th><span>Service</span>${filterBtn('service', 'Service')}</th>
           <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
           <th class="num"><span>Count</span>${filterBtn('count', 'Count')}</th>
-          <th><span>Term</span>${filterBtn('term', 'Term')}${filterBtn('payment', 'Payment')}</th>
+          <th><span>Term</span>${filterBtn('term', 'Term')}</th>
+          <th><span>Payment</span>${filterBtn('payment', 'Payment')}</th>
           <th class="num"><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
           <th class="num"><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
           <th><span>Status</span>${filterBtn('status', 'Status')}</th>
@@ -325,7 +327,10 @@ function plansCategoricalDisplayLabel(column: state.PlansColumnId, value: string
   if (value === '') return '(empty)';
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) && n > 0 ? formatTerm(n) : value;
+    return Number.isFinite(n) && n > 0 ? formatTermShort(n) : value;
+  }
+  if (column === 'payment') {
+    return formatPaymentOption(value);
   }
   if (column === 'provider') {
     return value.toUpperCase();
@@ -388,8 +393,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const isPaused = purchase.status === 'paused';
   const isPending = purchase.status === 'pending' || purchase.status === 'notified';
   const canRun = isPending || isPaused;
-  const termCell = purchase.term > 0
-    ? `${purchase.term}yr ${escapeHtml((purchase.payment ?? '').replace('-', ' '))}`
+  // Term and payment are separate columns, each with its own filter (the
+  // two funnels used to share one header).
+  const termCell = purchase.term > 0 ? formatTermShort(purchase.term) : '—';
+  const paymentCell = purchase.term > 0
+    ? escapeHtml(formatPaymentOption(purchase.payment))
     : '—';
   // Show an em-dash for upfront=0 unless the plan truly is all-upfront;
   // $0 upfront on "partial" or "no-upfront" is informative ($0 is real).
@@ -404,7 +412,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const hasNoRecommendations = purchase.has_recommendations === false;
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
-    : `${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})`;
+    : `${escapeHtml(purchase.resource_type)} <span class="cell-sub">(${escapeHtml(purchase.region)})</span>`;
   const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
   const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
   const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
@@ -449,7 +457,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
-        <span class="plan-name">${escapeHtml(purchase.plan_name)}</span>
+        <span class="plan-name cell-truncate cell-truncate--sm" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
@@ -458,16 +466,17 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${resourceCell}</td>
       <td class="num">${countCell}</td>
       <td>${termCell}</td>
+      <td>${paymentCell}</td>
       <td class="num">${upfrontShown}</td>
       <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
-      <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
-      </td>
+      <td class="actions"><span class="row-actions">
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small icon-btn" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger icon-btn" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
+      </span></td>
     </tr>
   `;
 }
@@ -832,9 +841,12 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
-          <label class="toggle-label">
-            <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" ${plan.enabled ? 'checked' : ''}>
-            <span class="slider"></span>
+          <label class="plan-toggle">
+            <span class="plan-toggle-text">Enabled</span>
+            <span class="toggle-label">
+              <input type="checkbox" data-action="toggle-plan" data-id="${escapeHtmlAttr(plan.id)}" aria-label="Enabled: ${escapeHtmlAttr(plan.name)}" ${plan.enabled ? 'checked' : ''}>
+              <span class="slider"></span>
+            </span>
           </label>
           ` : ''}
         </div>
@@ -874,9 +886,9 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
         </div>
         <div class="plan-actions">
           ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" data-notification-days="${escapeHtmlAttr(String(plan.notification_days_before))}" class="primary">Add Purchases</button>` : ''}
-          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
-          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
-          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
+          ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">Edit</button>` : ''}
+          <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-ghost">History</button>
+          ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="plan-action-delete">${iconSvg('trash-2')}Delete</button>` : ''}
         </div>
       </div>
     </div>
@@ -1287,13 +1299,23 @@ function renderPlanAccountChips(): void {
   if (!container) return;
   container.textContent = '';
   planSelectedAccounts.forEach(acct => {
+    const label = `${acct.name} (${acct.external_id})`;
     const chip = document.createElement('span');
     chip.className = 'account-chip';
-    chip.textContent = `${acct.name} (${acct.external_id})`;
+    // A pill that never wraps mid-name: a long name is truncated with an
+    // ellipsis and shown in full on hover.
+    const name = document.createElement('span');
+    name.className = 'account-chip-name';
+    name.textContent = label;
+    name.title = label;
+    chip.appendChild(name);
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.textContent = '\u00d7';
+    removeBtn.className = 'account-chip-remove';
+    removeBtn.setAttribute('aria-label', `Remove ${label}`);
+    removeBtn.title = 'Remove';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.addEventListener('click', () => {
       planSelectedAccounts = planSelectedAccounts.filter(a => a.id !== acct.id);
       renderPlanAccountChips();
