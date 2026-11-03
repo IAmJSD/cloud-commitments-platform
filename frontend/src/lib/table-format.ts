@@ -10,6 +10,7 @@
  */
 
 import { ownValue } from './own-property';
+import { isRealTerm } from './purchase-row-guards';
 
 const PAYMENT_LABELS: Record<string, string> = {
   'all-upfront': 'All Upfront',
@@ -30,9 +31,9 @@ export function formatPaymentOption(payment: string | null | undefined): string 
   return ownValue(PAYMENT_LABELS, key) ?? payment;
 }
 
-/** Compact term for table cells: "1 yr", "3 yr". Empty for a missing term. */
+/** Compact term for table cells: "1 yr", "3 yr". Empty for a missing term (null, NaN or non-positive). */
 export function formatTermShort(years: number | null | undefined): string {
-  if (years === null || years === undefined || !Number.isFinite(years)) return '';
+  if (!isRealTerm(years)) return '';
   return `${Math.round(years)} yr`;
 }
 

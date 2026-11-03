@@ -131,7 +131,7 @@ RUN npm run build
 # To refresh: `docker buildx imagetools inspect alpine:3.24.2` and update the
 # digest below. This is the multi-arch index digest, not a per-platform one, so
 # it stays correct for every TARGETARCH this image is built for.
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 # Re-declare args for use in this stage
 ARG TARGETARCH

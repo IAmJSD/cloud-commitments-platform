@@ -1602,6 +1602,7 @@ function formatPaybackRange(min: number, max: number): string {
 function formatTermRange(min: number, max: number): string {
   const lo = formatTermShort(min);
   const hi = formatTermShort(max);
+  if (!lo || !hi) return lo || hi || NO_VALUE;
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -2263,7 +2264,7 @@ function categoricalDisplayLabel(
   }
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) ? formatTermShort(n) : value;
+    return n > 0 ? formatTermShort(n) : value;
   }
   if (column === 'payment') {
     return formatPaymentOption(value);
@@ -3291,7 +3292,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'count':
       return `<td class="num">${rec.count}</td>`;
     case 'term':
-      return `<td>${formatTermShort(rec.term)}</td>`;
+      return `<td>${formatTermShort(rec.term) || NO_VALUE}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
@@ -3522,7 +3523,7 @@ function buildListMarkup(
           ? formatCurrency(selectedChildVariant.upfront_cost)
           : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
         const childTermDisplay = selectedChildVariant
-          ? formatTermShort(selectedChildVariant.term)
+          ? formatTermShort(selectedChildVariant.term) || NO_VALUE
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
@@ -3591,7 +3592,7 @@ function buildListMarkup(
       : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
 
     const termDisplay = selectedVariant
-      ? formatTermShort(selectedVariant.term)
+      ? formatTermShort(selectedVariant.term) || NO_VALUE
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
