@@ -2912,6 +2912,64 @@ describe('Bundle B: column header filter triggers', () => {
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
   });
 
+  test('a recommendation with term 0 shows a dash, not "0 yr", in the Term cell', async () => {
+    const zeroTermRecs = [
+      {
+        id: 'rec-zero-term',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'ec2',
+        resource_type: 'zero.term.type',
+        region: 'us-east-1',
+        count: 1,
+        term: 0,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: zeroTermRecs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+
+    await loadRecommendations();
+    const html = document.body.innerHTML;
+    expect(html).toContain('zero.term.type');
+    expect(html).not.toMatch(/0 yr/);
+    const termIdx = Array.from(document.querySelectorAll('thead th')).findIndex(
+      (th) => th.querySelector('.column-filter-btn[data-column="term"]'),
+    );
+    expect(termIdx).toBeGreaterThanOrEqual(0);
+    const row = Array.from(document.querySelectorAll('tbody tr')).find((r) => r.textContent?.includes('zero.term.type'));
+    expect(row?.children[termIdx]?.textContent).toBe('\u2014');
+  });
+
+  test.each([
+    ['mixed 0 and 3', [0, 3], /term: 3 yr(?!\s*\u2013)/],
+    ['all zero', [0, 0], /term: \u2014(?!\s*\u2013)/],
+  ])('group row term range with a missing term (%s) has no empty endpoint', async (_label, terms, expected) => {
+    const recs = terms.map((term, i) => ({
+      id: `rec-range-${i}`,
+      provider: 'aws',
+      cloud_account_id: 'a3',
+      service: 'ec2',
+      resource_type: 'range.term.type',
+      region: 'us-east-1',
+      count: 1,
+      term,
+      payment: i === 0 ? 'all-upfront' : 'no-upfront',
+      savings: 300,
+      upfront_cost: 1200,
+    }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+    await loadRecommendations();
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(expected);
+    expect(text).not.toMatch(/term:\s*(\u2013|$)/m);
+  });
+
   test('numeric popover input validates expression on blur', async () => {
     await loadRecommendations();
     const savingsBtn = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="savings"]');
@@ -6376,32 +6434,43 @@ describe('Column visibility (issue #318)', () => {
   // --- loadColumnVisibility ---
 
   describe('loadColumnVisibility', () => {
-    test('returns empty set when localStorage key is absent', () => {
+    // Nothing saved (or an unreadable entry): the default hidden set, which
+    // keeps Monthly Savings in view at a 1440px window.
+    const DEFAULTS = ['capacity', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'usage_history'];
+
+    test('returns the default hidden columns when localStorage key is absent', () => {
       // Default mock: getItem returns null
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set on JSON parse error', () => {
+    test('returns the default hidden columns on JSON parse error', () => {
       localStorageMock.getItem.mockReturnValue('{not valid json}');
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when schemaVersion is wrong', () => {
+    test('returns the default hidden columns when schemaVersion is wrong', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 99, hidden: ['count'] }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when hidden is not an array', () => {
+    test('returns the default hidden columns when hidden is not an array', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 1, hidden: 'count' }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
+    });
+
+    test('a saved "show every column" choice beats the defaults', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: [] }),
+      );
+      expect(loadColumnVisibility().size).toBe(0);
     });
 
     test('returns the correct hidden set for valid JSON', () => {

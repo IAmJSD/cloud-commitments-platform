@@ -21,7 +21,7 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
-import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, type CommitmentLine } from './commitmentSummary';
+import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, paymentLabel, type CommitmentLine } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
@@ -1602,6 +1602,7 @@ function formatPaybackRange(min: number, max: number): string {
 function formatTermRange(min: number, max: number): string {
   const lo = formatTermShort(min);
   const hi = formatTermShort(max);
+  if (!lo || !hi) return lo || hi || NO_VALUE;
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -2263,7 +2264,7 @@ function categoricalDisplayLabel(
   }
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) ? formatTermShort(n) : value;
+    return n > 0 ? formatTermShort(n) : value;
   }
   if (column === 'payment') {
     return formatPaymentOption(value);
@@ -3277,11 +3278,11 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'provider':
       return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
     case 'account':
-      return `<td><span class="cell-truncate" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
+      return `<td><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
     case 'service':
       return `<td><span class="service-badge" title="${escapeHtml(rec.service)}">${escapeHtml(rec.service)}</span></td>`;
     case 'resource_type':
-      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
+      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
     case 'capacity': {
       const cap = formatCapacity(rec.vcpu, rec.memory_gb);
       return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;
@@ -3291,7 +3292,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'count':
       return `<td class="num">${rec.count}</td>`;
     case 'term':
-      return `<td>${formatTermShort(rec.term)}</td>`;
+      return `<td>${formatTermShort(rec.term) || NO_VALUE}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
@@ -3522,7 +3523,7 @@ function buildListMarkup(
           ? formatCurrency(selectedChildVariant.upfront_cost)
           : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
         const childTermDisplay = selectedChildVariant
-          ? formatTermShort(selectedChildVariant.term)
+          ? formatTermShort(selectedChildVariant.term) || NO_VALUE
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
@@ -3591,7 +3592,7 @@ function buildListMarkup(
       : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
 
     const termDisplay = selectedVariant
-      ? formatTermShort(selectedVariant.term)
+      ? formatTermShort(selectedVariant.term) || NO_VALUE
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
@@ -3841,14 +3842,29 @@ interface ColumnVisibilitySchema {
   hidden: string[];
 }
 
-/** Load hidden columns from localStorage. Returns empty set on any error. Exported for tests. */
+// Columns hidden until the user picks their own set in the Columns menu.
+// With all sixteen columns the table is ~1700px wide, so at a 1440px
+// window Monthly Savings and everything after it sat behind the sideways
+// scroll. These five are the least needed to choose a commitment: capacity
+// restates the resource type, monthly cost and on-demand monthly are the
+// inputs behind Monthly Savings, Effective % is savings over on-demand, and
+// the 7-day coverage sparkline is AWS-only. All stay one click away.
+export const DEFAULT_HIDDEN_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set<state.RecommendationsColumnId>([
+  'capacity', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct', 'usage_history',
+]);
+
+/**
+ * Load hidden columns from localStorage. A saved choice (even "show all")
+ * wins; with nothing saved, or an unreadable entry, the defaults above
+ * apply. Exported for tests.
+ */
 export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
   try {
     const raw = localStorage.getItem(COLUMN_VISIBILITY_LS_KEY);
-    if (!raw) return new Set();
+    if (!raw) return new Set(DEFAULT_HIDDEN_COLUMNS);
     const parsed = JSON.parse(raw) as Partial<ColumnVisibilitySchema>;
-    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set();
-    if (!Array.isArray(parsed.hidden)) return new Set();
+    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set(DEFAULT_HIDDEN_COLUMNS);
+    if (!Array.isArray(parsed.hidden)) return new Set(DEFAULT_HIDDEN_COLUMNS);
     // Whitelist: only accept known toggleable column keys so stale/unknown
     // values from future versions are silently dropped.
     const valid = parsed.hidden.filter(
@@ -3856,7 +3872,7 @@ export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
     );
     return new Set(valid);
   } catch {
-    return new Set();
+    return new Set(DEFAULT_HIDDEN_COLUMNS);
   }
 }
 
@@ -4750,26 +4766,38 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
   summary.appendChild(emailNote);
 
   const totals = computeFanOutTotals(submittable);
+  // A key/value grid: each total is a small tile with its label above the
+  // value. The text still reads "Label: value" for assistive tech and copy;
+  // only the colon is hidden visually.
+  const grid = document.createElement('div');
+  grid.className = 'fanout-totals';
   const totalLine = (label: string, value: string, cls = ''): HTMLParagraphElement => {
     const p = document.createElement('p');
+    p.className = cls ? `fanout-total fanout-total-${cls}` : 'fanout-total';
+    const labelEl = document.createElement('span');
+    labelEl.className = 'fanout-total-label';
+    labelEl.textContent = label;
+    const sep = document.createElement('span');
+    sep.className = 'fanout-total-sep';
+    sep.textContent = ': ';
     const strong = document.createElement('strong');
     if (cls) strong.className = cls;
     strong.textContent = value;
-    p.appendChild(document.createTextNode(label + ': '));
-    p.appendChild(strong);
+    p.append(labelEl, sep, strong);
     return p;
   };
   // issue #319: scale total savings by the active cost period.
   const fanOutPeriod = state.getCostPeriod();
-  summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
-  summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  grid.appendChild(totalLine('Total commitments', String(totals.totalCount)));
+  grid.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
   // Issue #711: upfront alone reads $0 for no-upfront buckets that bill
   // monthly for one or three years, so state the recurring charge and the
   // total over the term next to it.
   const termText = formatCommitmentTotals(submittable.flatMap(bucketCommitmentLines), CURRENCY_DEFAULT_DIGITS);
-  summary.appendChild(totalLine('Monthly recurring', termText.monthly));
-  summary.appendChild(totalLine('Total over term', termText.termTotal));
-  summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
+  grid.appendChild(totalLine('Monthly recurring', termText.monthly));
+  grid.appendChild(totalLine('Total over term', termText.termTotal));
+  grid.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
+  summary.appendChild(grid);
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
@@ -4824,8 +4852,17 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     ? savingsPlansBucketLabel(b.recs.map((r) => r.service))
     : b.service;
 
+  // The header counts recommendations (table rows); the totals line below
+  // counts the commitments (units) they buy, so the two numbers no longer
+  // share a word.
   const title = document.createElement('h4');
-  title.textContent = `${b.provider.toUpperCase()} / ${fanOutBucketAccountLabel(b)} / ${serviceLabel} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
+  title.className = 'fanout-bucket-title';
+  const titleText = document.createElement('span');
+  titleText.textContent = `${b.provider.toUpperCase()} / ${fanOutBucketAccountLabel(b)} / ${serviceLabel}`;
+  const recCount = document.createElement('span');
+  recCount.className = 'fanout-bucket-rec-count';
+  recCount.textContent = `${b.recs.length} recommendation${b.recs.length === 1 ? '' : 's'}`;
+  title.append(titleText, recCount);
   section.appendChild(title);
 
   const status = document.createElement('p');
@@ -4835,7 +4872,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     const compat = isSubmittableBucket(b);
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
-      ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
+      ? `${b.capacityPercent}% capacity · ${b.term}-year term · ${paymentLabel(b.payment).toLowerCase()}`
       : `A selected payment option is unavailable at ${b.capacityPercent}% capacity. This bucket will be skipped.`;
   };
   renderStatus();
@@ -4852,9 +4889,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   // right value per POST.
   const paymentRow = document.createElement('div');
   paymentRow.className = 'fanout-bucket-payment-row';
-  const paymentLabel = document.createElement('label');
-  paymentLabel.className = 'fanout-bucket-payment-label';
-  paymentLabel.appendChild(document.createTextNode('Payment: '));
+  const paymentLabelEl = document.createElement('label');
+  paymentLabelEl.className = 'fanout-bucket-payment-label';
+  paymentLabelEl.appendChild(document.createTextNode('Payment'));
   const paymentSelect = document.createElement('select');
   paymentSelect.className = 'fanout-bucket-payment';
   const purchasePending = document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true';
@@ -4876,7 +4913,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   for (const opt of bucketOptions) {
     const option = document.createElement('option');
     option.value = opt;
-    option.textContent = opt;
+    option.textContent = paymentLabel(opt);
     option.selected = opt === b.payment;
     paymentSelect.appendChild(option);
   }
@@ -4915,12 +4952,12 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     section.replaceWith(refreshed);
     refreshed.querySelector<HTMLSelectElement>('.fanout-bucket-payment')?.focus();
   });
-  paymentLabel.appendChild(paymentSelect);
-  paymentRow.appendChild(paymentLabel);
+  paymentLabelEl.appendChild(paymentSelect);
+  paymentRow.appendChild(paymentLabelEl);
   if (b.paymentSource === 'override') {
     const sourceNote = document.createElement('span');
     sourceNote.className = 'fanout-bucket-payment-source';
-    sourceNote.textContent = ' (from account override)';
+    sourceNote.textContent = 'Set by account override';
     paymentRow.appendChild(sourceNote);
   }
   section.appendChild(paymentRow);
@@ -4939,7 +4976,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   totals.className = 'fanout-bucket-totals';
   const bucketMonthly = commitmentTotals(bucketCommitmentLines(b)).monthly;
   const monthlyPart = bucketMonthly === null ? 'monthly cost not reported' : `${formatCurrency(bucketMonthly)}/mo recurring`;
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+  totals.textContent = `${bucketTotal.count} commitment${bucketTotal.count === 1 ? '' : 's'} · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render

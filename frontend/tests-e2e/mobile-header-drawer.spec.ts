@@ -392,6 +392,40 @@ test.describe('phone viewport', () => {
     await expect(page.locator('#hamburger-btn')).toHaveAttribute('aria-expanded', 'false');
     expect(await tabStopsInsideDrawer(page), 'tab stops after closing').toEqual([]);
   });
+
+  /** WCAG 2.4.3: Tab must walk the account cluster in the order it is painted. */
+  test('the account controls are tabbed in visual top-to-bottom order', async ({ page }) => {
+    await openApp(page);
+    await openDrawer(page);
+    await page.locator('#hamburger-btn').focus();
+
+    const account = ['user-email-display', 'feedback-link', 'logout-btn'];
+    const tabbed: string[] = [];
+    for (let i = 0; i < TAB_CYCLE_PRESSES; i++) {
+      await page.keyboard.press('Tab');
+      const id = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (el?.matches('#sidebar #user-info a[href="/docs/"]')) return 'docs-link';
+        return el?.id ?? '';
+      });
+      if ((account.includes(id) || id === 'docs-link') && !tabbed.includes(id)) tabbed.push(id);
+    }
+
+    const painted = await page.evaluate(() => {
+      const sel = ['#user-email-display', '#user-info a[href="/docs/"]', '#feedback-link', '#logout-btn'];
+      return sel
+        .map(q => {
+          const el = document.querySelector<HTMLElement>(`#sidebar ${q}`)!;
+          const r = el.getBoundingClientRect();
+          return { id: q.includes('docs') ? 'docs-link' : el.id, y: Math.round(r.y), x: Math.round(r.x) };
+        })
+        .sort((p, q) => p.y - q.y || p.x - q.x)
+        .map(e => e.id);
+    });
+
+    expect(painted[0], 'signed-in email is painted first').toBe('user-email-display');
+    expect(tabbed).toEqual(painted);
+  });
 });
 
 test.describe('desktop viewport', () => {
