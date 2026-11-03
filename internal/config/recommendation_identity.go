@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 )
 
 // ComputeIdentity is the EC2 platform and tenancy of a recommendation, the two
@@ -63,6 +65,26 @@ func (r *RecommendationRecord) DetailsAZConfig() (string, error) {
 	return d.AZConfig, nil
 }
 
+// isAWSRDS is the scope of the az_config identity component: only AWS RDS has
+// Single-AZ and Multi-AZ offerings of one class that Cost Explorer returns as
+// separate recs. Azure SQL's az_config is a subscription-wide "dominant" value
+// that is "" when the server lookup is incomplete, so keying on it would flip
+// IDs between collections with no benefit (issue #408).
+func isAWSRDS(provider, service string) bool {
+	p := strings.ToLower(provider)
+	return p == "aws" && CanonicalSuppressionService(p, service) == string(common.ServiceRelationalDB)
+}
+
+// IdentityAZConfig is the az_config component of the rec ID, identity key,
+// purchase fingerprint and suppression variant: DetailsAZConfig for AWS RDS,
+// "" for every other rec.
+func (r *RecommendationRecord) IdentityAZConfig() (string, error) {
+	if !isAWSRDS(r.Provider, r.Service) {
+		return "", nil
+	}
+	return r.DetailsAZConfig()
+}
+
 // RecIdentityKey is the tuple a price is a function of: the same twelve
 // components (the ninth is the zonal EC2 availability zone, "" for every
 // other rec, issue #792; the tenth and eleventh are the EC2 platform and
@@ -77,7 +99,7 @@ func RecIdentityKey(rec *RecommendationRecord) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	azConfig, err := rec.DetailsAZConfig()
+	azConfig, err := rec.IdentityAZConfig()
 	if err != nil {
 		return "", err
 	}

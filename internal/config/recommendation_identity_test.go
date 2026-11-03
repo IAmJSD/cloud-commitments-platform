@@ -76,7 +76,7 @@ func TestDetailsAZConfig_Vectors(t *testing.T) {
 }
 
 func TestDetailsAZConfig_MalformedFailsLoud(t *testing.T) {
-	bad := RecommendationRecord{Details: json.RawMessage(`{"az_config":5}`)}
+	bad := RecommendationRecord{Provider: "aws", Service: "rds", Details: json.RawMessage(`{"az_config":5}`)}
 	_, err := bad.DetailsAZConfig()
 	require.Error(t, err)
 	_, err = RecIdentityKey(&bad)
@@ -100,4 +100,25 @@ func TestRecIdentityKey_DiffersByAZConfig(t *testing.T) {
 	assert.NotEqual(t, key(rds("single-az")), key(rds("multi-az")))
 	assert.NotEqual(t, key(rds("single-az")), key(rds("")))
 	assert.Equal(t, key(rds("multi-az")), key(rds("multi-az")))
+}
+
+// Azure SQL's az_config is a subscription-wide value that is "" when the
+// server lookup is incomplete; it must not enter the identity key, or the key
+// would flip between collections (issue #408).
+func TestRecIdentityKey_IgnoresAZConfigOutsideAWSRDS(t *testing.T) {
+	rec := func(provider, service, azConfig string) *RecommendationRecord {
+		return &RecommendationRecord{
+			Provider: provider, Service: service, Region: "eastus", ResourceType: "GP_Gen5_2", Engine: "sqlserver",
+			Term: 1, Payment: "upfront", Details: json.RawMessage(`{"engine":"sqlserver","az_config":"` + azConfig + `"}`),
+		}
+	}
+	key := func(r *RecommendationRecord) string {
+		k, err := RecIdentityKey(r)
+		require.NoError(t, err)
+		return k
+	}
+	assert.Equal(t, key(rec("azure", "database", "")), key(rec("azure", "database", "zoneRedundant")))
+	assert.Equal(t, key(rec("azure", "relational-db", "none")), key(rec("azure", "relational-db", "")))
+	assert.NotEqual(t, key(rec("aws", "relational-db", "single-az")), key(rec("aws", "relational-db", "multi-az")))
+	assert.NotEqual(t, key(rec("aws", "rds", "single-az")), key(rec("aws", "rds", "multi-az")))
 }

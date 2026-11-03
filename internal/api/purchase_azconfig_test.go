@@ -86,3 +86,13 @@ func TestDescribeRec_IncludesAZConfig(t *testing.T) {
 	bare := config.RecommendationRecord{Provider: "aws", Service: "rds"}
 	assert.NotContains(t, describeRec(&bare), "az_config=")
 }
+
+func TestPurchaseIdempotencyKey_IgnoresAZConfigForAzureSQL(t *testing.T) {
+	t.Parallel()
+	key := func(azConfig string) string {
+		r := rdsAZConfigRec(azConfig, 1)
+		r.Provider, r.Service = "azure", "database"
+		return mustPurchaseIdempotencyKey("u", []config.RecommendationRecord{r}, 100)
+	}
+	assert.Equal(t, key(""), key("zoneRedundant"))
+}

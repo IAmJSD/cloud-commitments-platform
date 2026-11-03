@@ -1161,7 +1161,7 @@ func recommendationID(rec config.RecommendationRecord) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	azConfig, err := rec.DetailsAZConfig()
+	azConfig, err := rec.IdentityAZConfig()
 	if err != nil {
 		return "", err
 	}
@@ -1185,10 +1185,10 @@ func recommendationID(rec config.RecommendationRecord) (string, error) {
 		id += "|" + ci.Platform + "|" + ci.Tenancy
 	}
 	if azConfig != "" {
-		// Appended only for database recs whose Details carry it (RDS
-		// single-az/multi-az, Azure SQL zone redundancy), so every other rec
-		// keeps its ID (issue #408). Those recs never carry an AZ or a
-		// platform/tenancy pair, and the service field already differs.
+		// Appended only for AWS RDS recs whose Details carry it
+		// (single-az/multi-az), so every other rec keeps its ID (issue #408).
+		// Azure SQL is excluded: its az_config is a subscription-wide value
+		// that is "" on an incomplete server lookup, so it would only flip IDs.
 		id += "|" + azConfig
 	}
 	return id, nil

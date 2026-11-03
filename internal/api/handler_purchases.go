@@ -3640,7 +3640,7 @@ func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord
 		}
 		// Single-AZ and Multi-AZ RDS buys of the same class are different
 		// purchases and must not dedupe into one (issue #408).
-		azConfig, err := r.DetailsAZConfig()
+		azConfig, err := r.IdentityAZConfig()
 		if err != nil {
 			return "", err
 		}

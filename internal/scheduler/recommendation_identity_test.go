@@ -222,3 +222,22 @@ func TestRecommendationID_MalformedAZConfigErrors(t *testing.T) {
 	s := &Scheduler{}
 	assert.Empty(t, s.tagAccount([]config.RecommendationRecord{bad}, "acct"))
 }
+
+// An Azure SQL rec's ID is stable when its subscription-wide az_config flips
+// between "" (incomplete server lookup) and a value (issue #408).
+func TestRecommendationID_AzureSQLStableAcrossAZConfig(t *testing.T) {
+	azure := func(azConfig string) config.RecommendationRecord {
+		return config.RecommendationRecord{
+			Provider: "azure", Service: "database", Region: "eastus", ResourceType: "GP_Gen5_2",
+			Engine: "sqlserver", Term: 1, Payment: "upfront",
+			Details: []byte(`{"engine":"sqlserver","az_config":"` + azConfig + `"}`),
+		}
+	}
+	empty, err := recommendationID(azure(""))
+	require.NoError(t, err)
+	for _, v := range []string{"zoneRedundant", "none"} {
+		got, err := recommendationID(azure(v))
+		require.NoError(t, err)
+		assert.Equal(t, empty, got, v)
+	}
+}
