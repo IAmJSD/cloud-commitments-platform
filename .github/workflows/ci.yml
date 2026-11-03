@@ -388,7 +388,7 @@ jobs:
           go tool cover -html="$RUNNER_TEMP/coverage.out" -o "$RUNNER_TEMP/coverage.html"
 
       - name: Upload coverage artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: |
@@ -721,7 +721,7 @@ jobs:
           key: ${{ steps.go_cache.outputs.mod_key }}
 
       - name: Upload integration coverage
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # One artifact per shard; the integration-coverage job below merges
           # them into the single artifact this job used to upload. Short
@@ -784,7 +784,7 @@ jobs:
           echo "Merged ${#profiles[@]} coverage profile(s), $(( $(wc -l < "$merged") - 1 )) block(s)"
 
       - name: Upload integration coverage
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: integration-coverage
           path: ${{ runner.temp }}/coverage-integration.out
