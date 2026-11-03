@@ -722,6 +722,9 @@
     max-height: 16rem;
     overflow-y: auto;
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    /* Keyboard focus scrolls a row in with a margin, so its focus ring is not
+     * flush against (or clipped by) the box edge. */
+    scroll-padding-block: var(--cudly-sp-2);
     /* Scroll shadows: the "local" surface-coloured covers scroll with the
      * content and hide the fixed "scroll" shadows at the ends, so a shadow
      * shows on an edge only while more rows sit beyond it. Independent of
