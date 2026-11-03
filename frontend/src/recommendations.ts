@@ -1585,7 +1585,6 @@ function groupsInSortOrder(
 export function formatSavingsRange(min: number, max: number): string {
   const lo = formatCurrency(min);
   const hi = formatCurrency(max);
-  if (!lo || !hi) return lo || hi || NO_VALUE;
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -1603,6 +1602,7 @@ function formatPaybackRange(min: number, max: number): string {
 function formatTermRange(min: number, max: number): string {
   const lo = formatTermShort(min);
   const hi = formatTermShort(max);
+  if (!lo || !hi) return lo || hi || NO_VALUE;
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
