@@ -10,6 +10,8 @@ const ALL: IconName[] = [
   'alert-triangle', 'check', 'check-circle', 'chevron-down', 'chevron-right',
   'chevron-up', 'chevrons-up-down', 'copy', 'download', 'edit', 'filter', 'info',
   'pause', 'play', 'rotate-cw', 'settings', 'slash', 'trash-2', 'x', 'x-circle',
+  // Admin account / registration row actions.
+  'sliders', 'zap',
 ];
 
 function parse(markup: string): SVGSVGElement {

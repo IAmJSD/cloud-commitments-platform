@@ -7,7 +7,7 @@ import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
 import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
-import { iconSvg } from './icons';
+import { createIcon, iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -1287,13 +1287,23 @@ function renderPlanAccountChips(): void {
   if (!container) return;
   container.textContent = '';
   planSelectedAccounts.forEach(acct => {
+    const label = `${acct.name} (${acct.external_id})`;
     const chip = document.createElement('span');
     chip.className = 'account-chip';
-    chip.textContent = `${acct.name} (${acct.external_id})`;
+    // A pill that never wraps mid-name: a long name is truncated with an
+    // ellipsis and shown in full on hover.
+    const name = document.createElement('span');
+    name.className = 'account-chip-name';
+    name.textContent = label;
+    name.title = label;
+    chip.appendChild(name);
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.textContent = '\u00d7';
+    removeBtn.className = 'account-chip-remove';
+    removeBtn.setAttribute('aria-label', `Remove ${label}`);
+    removeBtn.title = 'Remove';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.addEventListener('click', () => {
       planSelectedAccounts = planSelectedAccounts.filter(a => a.id !== acct.id);
       renderPlanAccountChips();
