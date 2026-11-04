@@ -1437,7 +1437,7 @@ describe('Recommendations Module', () => {
       // real estate for the dollar figures they're authorising.
       expect(summary?.textContent).toMatch(/\$100\/mo/);
       expect(summary?.textContent).toMatch(/\$500 upfront/);
-      expect(summary?.textContent).toMatch(/1 cell\b/);
+      expect(summary?.textContent).toMatch(/1 row\b/);
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
@@ -1468,7 +1468,7 @@ describe('Recommendations Module', () => {
       // assertion doesn't couple to that separator choice.
       expect(summary?.textContent).toMatch(/\$300\s*[–\-]\s*\$500\/mo/);
       expect(summary?.textContent).toMatch(/\$1,?100\s*[–\-]\s*\$1,?800 upfront/);
-      expect(summary?.textContent).toMatch(/2 cells\b/);
+      expect(summary?.textContent).toMatch(/2 rows\b/);
     });
 
     test('action-box summary collapses to single value when all per-cell variant ranges are identical (#281)', async () => {
@@ -1488,7 +1488,7 @@ describe('Recommendations Module', () => {
       // savingsMin==savingsMax==$400; formatSavingsRange collapses to "$400".
       expect(summary?.textContent).toMatch(/\$400\/mo/);
       expect(summary?.textContent).not.toMatch(/[–\-]\s*\$400/);
-      expect(summary?.textContent).toMatch(/2 cells\b/);
+      expect(summary?.textContent).toMatch(/2 rows\b/);
     });
 
     test('bottom action box prompts for selection when no row is selected (#273)', async () => {
@@ -1499,7 +1499,7 @@ describe('Recommendations Module', () => {
       // #273: action buttons require an explicit selection. Summary
       // prompts the user instead of advertising a default-target count
       // that would fire on misclick.
-      expect(summary?.textContent).toContain('Select cells to act on');
+      expect(summary?.textContent).toContain('Select rows to act on');
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
@@ -3366,6 +3366,77 @@ describe('Bundle B: column header filter triggers', () => {
     });
   });
 
+  // Issue #1684: Opportunities group rows, payback card and action-bar wording.
+  describe('Issue #1684: Opportunities group rows, payback and wording', () => {
+    const base = { provider: 'aws', cloud_account_id: 'a1684', service: 'rds', resource_type: 'db.t4g.micro', engine: 'postgresql', region: 'eu-west-1', count: 1 };
+    const variants = [
+      { ...base, id: 'v1684-nu', term: 1, payment: 'no-upfront', savings: 10, upfront_cost: 0 },
+      { ...base, id: 'v1684-au', term: 1, payment: 'all-upfront', savings: 20, upfront_cost: 120 },
+    ];
+
+    async function load(recs: Array<Record<string, unknown>>, selected: string[] = []): Promise<void> {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(selected));
+      await loadRecommendations();
+    }
+
+    const paybackText = (): string =>
+      document.querySelector('#recommendations-summary [data-kpi="payback"]')?.textContent ?? '';
+
+    test('expanded variant rows leave the group identity cells blank', async () => {
+      await load(variants);
+      const chevron = document.querySelector<HTMLButtonElement>('tr.rec-cell-summary-row .rec-cell-chevron');
+      if (chevron?.getAttribute('aria-expanded') !== 'true') chevron!.click();
+      const row = document.querySelector<HTMLTableRowElement>('tr.rec-variant-row[data-rec-id="v1684-au"]')!;
+      const cells = Array.from(row.cells).slice(1, 5).map((td) => td.textContent?.trim());
+      expect(cells).toEqual(['', '', '', '']);
+      expect(row.textContent).not.toContain('eu-west-1');
+      // The row is still named in full for assistive tech.
+      expect(row.querySelector('input[type="checkbox"]')?.getAttribute('aria-label')).toContain('db.t4g.micro (postgresql)');
+      expect(row.textContent).toContain('All Upfront');
+    });
+
+    test('collapsed group summary puts no space inside the period unit', async () => {
+      await load(variants);
+      const range = document.querySelector('tr.rec-cell-summary-row .rec-cell-range')?.textContent ?? '';
+      expect(range).toMatch(/\$20\/mo/);
+      expect(range).not.toContain('/ mo');
+    });
+
+    test('group summary skips blank resource type and region', async () => {
+      const sp = { provider: 'azure', cloud_account_id: 'sub1684', service: 'savingsplans', resource_type: '', region: '', count: 1, upfront_cost: 0 };
+      await load([
+        { ...sp, id: 'sp1684-1', term: 1, payment: 'monthly', savings: 30 },
+        { ...sp, id: 'sp1684-3', term: 3, payment: 'monthly', savings: 50 },
+      ]);
+      const identity = document.querySelector('tr.rec-cell-summary-row .rec-cell-identity')?.textContent ?? '';
+      expect(identity.trim()).toBe('2 variants');
+    });
+
+    test('payback card never shows a 0.0-month lower bound', async () => {
+      await load(variants);
+      // no-upfront has no payback; all-upfront pays back in 120 / 20 = 6 months.
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('0.0');
+    });
+
+    test('payback card shows the no-value dash when nothing is paid upfront', async () => {
+      await load(variants, ['v1684-nu']);
+      expect(paybackText()).toContain('—');
+      expect(paybackText()).not.toContain('months');
+    });
+
+    test('action bar talks about rows, not cells', async () => {
+      await load(variants);
+      expect(document.getElementById('recommendations-action-summary')?.textContent).toBe('(Select rows to act on)');
+      await load(variants, ['v1684-au']);
+      expect(document.getElementById('recommendations-action-summary')?.textContent).toMatch(/across 1 row\)$/);
+    });
+  });
+
   // Issue #164: cross-column-aware (cascading) distinct values.
   // Each column popover must show only values from rows that pass all
   // OTHER active filters -- values that produce non-empty results when
@@ -3542,7 +3613,7 @@ describe('Bundle B: sticky bottom action box', () => {
     expect(planBtn.hasAttribute('title')).toBe(false);
     expect(planBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
     expect(hint.hidden).toBe(false);
-    expect(hint.textContent).toContain('Select at least one cell to enable');
+    expect(hint.textContent).toContain('Select at least one row to enable');
     expect(hint.getAttribute('aria-live')).toBe('polite');
 
     // Selection populated → buttons enabled, label shows the selection

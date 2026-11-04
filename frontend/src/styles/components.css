@@ -317,9 +317,17 @@ button.secondary:hover {
     border: 1px solid var(--cudly-primary);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: var(--cudly-primary-hover);
     border-color: var(--cudly-primary-hover);
+}
+
+/* A faded primary fill still reads as enabled (issue #1684). */
+.btn-primary:disabled {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-border-strong);
+    color: var(--cudly-text-subtle);
+    opacity: 1;
 }
 
 .btn-destructive {
@@ -961,7 +969,7 @@ tr.recommendation-row:hover {
     box-shadow: 0 4px 16px rgba(0,0,0,0.13);
     padding: 0.6rem 0.75rem;
     min-width: 180px;
-    max-height: 360px;
+    max-height: calc(100vh - 2rem);
     overflow-y: auto;
 }
 .column-visibility-popover .column-visibility-title {
@@ -1018,8 +1026,10 @@ tr.rec-cell-summary-row:hover {
     background: #eaf0fb;
 }
 
-/* Summary row content cell: chevron + identity + range inline */
-.rec-cell-summary-content {
+/* Summary row content: identity + range inline. The flex box is an inner
+ * wrapper because a flex <td> stops being a table cell and drops its
+ * colspan, leaving the spanned columns empty (issue #1684). */
+.rec-cell-summary-inner {
     display: flex;
     align-items: center;
     gap: 0.75rem;
@@ -1063,11 +1073,15 @@ tr.rec-cell-summary-row:hover {
     font-size: 0.85em;
 }
 
-/* Variant rows nested under a cell summary (expanded state) */
+/* Variant rows nested under a cell summary (expanded state). Only the first
+ * data cell is indented: padding every cell widened the table enough to
+ * scroll sideways (issue #1684). */
 tr.rec-variant-row td:not(.checkbox-col) {
-    padding-left: 2rem;
     background: #fafbfe;
     font-size: 0.88em;
+}
+tr.rec-variant-row > td.checkbox-col + td {
+    padding-left: 2rem;
 }
 tr.rec-variant-row:hover td:not(.checkbox-col) {
     background: #f0f4fc;

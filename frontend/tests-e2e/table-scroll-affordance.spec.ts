@@ -69,8 +69,10 @@ for (const width of [1280, 390]) {
     expect(barBox.y).toBeGreaterThan(0);
 
     // Scrolling the strip scrolls the table, and both edges fade mid-way.
-    await bar.evaluate((el) => { el.scrollLeft = 120; });
-    await expect.poll(() => tbl.evaluate((el) => el.scrollLeft)).toBe(120);
+    const mid = await tbl.evaluate((el) => Math.floor((el.scrollWidth - el.clientWidth) / 2));
+    expect(mid).toBeGreaterThan(0);
+    await bar.evaluate((el, x) => { el.scrollLeft = x; }, mid);
+    await expect.poll(() => tbl.evaluate((el) => el.scrollLeft)).toBe(mid);
     await expect(tbl).toHaveClass(/scroll-hint-left/);
     await expect(tbl).toHaveClass(/scroll-hint-right/);
 

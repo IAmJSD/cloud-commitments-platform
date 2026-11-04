@@ -1595,11 +1595,14 @@ export function formatSavingsRange(min: number, max: number): string {
 
 /** Format a payback-months range, collapsing identical endpoints to a
  * single value and rounding to 1 decimal. Used by the Payback Period
- * summary card after #279 broadened it to a range. */
+ * summary card after #279 broadened it to a range. A 0 lower bound is a
+ * no-upfront choice, which has no payback (shown as NO_VALUE on its own),
+ * so the range reads "Up to X months" instead of "0.0 – X" (issue #1684). */
 function formatPaybackRange(min: number, max: number): string {
   const lo = min.toFixed(1);
   const hi = max.toFixed(1);
-  return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
+  if (lo === hi) return `${lo} months`;
+  return min > 0 ? `${lo} – ${hi} months` : `Up to ${hi} months`;
 }
 
 /** Format a term range, collapsing "1 yr – 1 yr" to "1 yr". */
@@ -1807,6 +1810,11 @@ export function periodSuffix(period: CostPeriod): string {
     case 'monthly': return '/ mo';
     case 'yearly':  return '/ yr';
   }
+}
+
+/** Suffix appended directly to a value ("$20/mo"); periodSuffix spaces it for labels. */
+function periodUnit(period: CostPeriod): string {
+  return periodSuffix(period).replace('/ ', '/');
 }
 
 /**
@@ -3323,6 +3331,16 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
   }
 }
 
+// 'flat' is a single-variant cell, 'sp-child' a single-variant cell under a
+// Savings Plans group row, and 'variant' one of several variants of a cell
+// whose summary row already shows its identity (issue #1684).
+type VariantRowNesting = 'flat' | 'sp-child' | 'variant';
+
+// Columns every variant of a cell shares (cellKey), left blank on 'variant' rows.
+const CELL_IDENTITY_KEYS: ReadonlySet<state.RecommendationsColumnId> = new Set(
+  ['provider', 'account', 'service', 'resource_type', 'region'] as state.RecommendationsColumnId[],
+);
+
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
 //
@@ -3331,7 +3349,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
 function buildVariantRowMarkup(
   rec: LocalRecommendation,
   selectedRecs: ReadonlySet<string>,
-  isNested: boolean,
+  nesting: VariantRowNesting,
   cols: readonly ColumnDef[] = COLUMN_DEFS,
   showCheckboxes = true,
 ): string {
@@ -3347,7 +3365,7 @@ function buildVariantRowMarkup(
   const pct = displaySavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="num effective-pct-negative"' : ' class="num"';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-  const nestedClass = isNested ? ' rec-variant-row' : '';
+  const nestedClass = nesting === 'flat' ? '' : ' rec-variant-row';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
   // Issue #869: viewer (readonly) sessions get no checkbox or action buttons
   // in the leading column; the cell is still emitted so column widths align
@@ -3375,10 +3393,19 @@ function buildVariantRowMarkup(
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
     ${checkboxCell}
-    ${cols.map((c) => renderColumnCell(c.key, rec, cellCtx)).join('')}
+    ${cols.map((c) => (nesting === 'variant' && CELL_IDENTITY_KEYS.has(c.key)
+      ? '<td class="rec-variant-identity"></td>'
+      : renderColumnCell(c.key, rec, cellCtx))).join('')}
   </tr>`;
 }
 
+
+// Escaped "resource type (engine)" for a group summary row; empty when the
+// provider sends no resource type (e.g. Azure savings plans).
+function cellIdentityLabel(rec: LocalRecommendation): string {
+  if (!rec.resource_type) return '';
+  return `${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}`;
+}
 
 function buildListMarkup(
   recommendations: LocalRecommendation[],
@@ -3475,7 +3502,7 @@ function buildListMarkup(
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
       // Aggregate savings: sum the best-variant savings across all child cells.
-      const sfxLabel = periodSuffix(period);
+      const sfxLabel = periodUnit(period);
       let spSavingsTotal = 0;
       for (const ck of childCellKeys) {
         const cv = groups.get(ck)!;
@@ -3506,7 +3533,7 @@ function buildListMarkup(
       for (const ck of childCellKeys) {
         const childVariants = groups.get(ck)!;
         if (childVariants.length === 1) {
-          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, true, visibleCols, showCheckboxes));
+          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, 'sp-child', visibleCols, showCheckboxes));
           continue;
         }
 
@@ -3530,9 +3557,7 @@ function buildListMarkup(
           ? formatTermShort(selectedChildVariant.term) || NO_VALUE
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
-        const childIdentityParts = [
-          `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
-        ];
+        const childIdentityParts = [cellIdentityLabel(childRep)];
         if (visibleKeys.has('region')) childIdentityParts.push(escapeHtml(childRep.region));
         childIdentityParts.push(`${childVariants.length} variants`);
         const childRangeParts: string[] = [];
@@ -3551,14 +3576,16 @@ function buildListMarkup(
     <td>${escapeHtml(childAccountName)}</td>
     <td><span class="service-badge">${escapeHtml(childRep.service)}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${childIdentityParts.join(' &mdash; ')}</span>
-      ${childRangeParts.length > 0 ? `<span class="rec-cell-range">${childRangeParts.join(' &middot; ')}</span>` : ''}
+      <div class="rec-cell-summary-inner">
+        <span class="rec-cell-identity">${childIdentityParts.filter(Boolean).join(' &mdash; ')}</span>
+        ${childRangeParts.length > 0 ? `<span class="rec-cell-range">${childRangeParts.join(' &middot; ')}</span>` : ''}
+      </div>
     </td>
   </tr>`);
         if (isCellExpanded) {
           const sortedChildVariants = sortVariantsInCell(childVariants);
           for (const v of sortedChildVariants) {
-            rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
+            rows.push(buildVariantRowMarkup(v, selectedRecs, 'variant', visibleCols, showCheckboxes));
           }
         }
       }
@@ -3568,7 +3595,7 @@ function buildListMarkup(
     // Non-SP cell (or SP singleton scope -- only one plan type in scope).
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
-      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols, showCheckboxes));
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, 'flat', visibleCols, showCheckboxes));
       continue;
     }
 
@@ -3584,7 +3611,7 @@ function buildListMarkup(
     // Summary row savings display: selected variant value if one is selected;
     // otherwise the range across all variants.
     // issue #319: scale savings by the active period.
-    const sfxLabel = periodSuffix(period);
+    const sfxLabel = periodUnit(period);
     const scaledSavingsMin = scaleCost(summary.savingsMin, period) ?? summary.savingsMin;
     const scaledSavingsMax = scaleCost(summary.savingsMax, period) ?? summary.savingsMax;
     const savingsDisplay = selectedVariant
@@ -3600,9 +3627,7 @@ function buildListMarkup(
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
-    const identityParts = [
-      `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
-    ];
+    const identityParts = [cellIdentityLabel(rep)];
     if (visibleKeys.has('region')) {
       identityParts.push(escapeHtml(rep.region));
     }
@@ -3635,15 +3660,17 @@ function buildListMarkup(
     <td>${escapeHtml(accountName)}</td>
     <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
-      ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
+      <div class="rec-cell-summary-inner">
+        <span class="rec-cell-identity">${identityParts.filter(Boolean).join(' &mdash; ')}</span>
+        ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
+      </div>
     </td>
   </tr>`);
 
     if (isExpanded) {
       const sortedVariants = sortVariantsInCell(variants);
       for (const v of sortedVariants) {
-        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
+        rows.push(buildVariantRowMarkup(v, selectedRecs, 'variant', visibleCols, showCheckboxes));
       }
     }
   }
@@ -4226,7 +4253,7 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
     } else if (selectedVisibleCount === 0) {
-      summary.textContent = '(Select cells to act on)';
+      summary.textContent = '(Select rows to act on)';
     } else if (targetRange.cellCount > 0) {
       const savingsText = targetRange.savingsMax > 0
         ? formatSavingsRange(targetRange.savingsMin, targetRange.savingsMax)
@@ -4234,8 +4261,8 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
       const upfrontText = targetRange.upfrontMax > 0
         ? formatSavingsRange(targetRange.upfrontMin, targetRange.upfrontMax)
         : formatCurrency(0);
-      const cellWord = targetRange.cellCount === 1 ? 'cell' : 'cells';
-      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${cellWord})`;
+      const rowWord = targetRange.cellCount === 1 ? 'row' : 'rows';
+      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${rowWord})`;
     } else {
       // Shouldn't happen given the gating above, but defensive.
       summary.textContent = `(${selectedVisibleCount} selected)`;
@@ -4250,7 +4277,7 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     ? 'No recommendations loaded'
     : visibleCount === 0
       ? 'No rows visible — adjust filters'
-      : 'Select at least one cell to enable';
+      : 'Select at least one row to enable';
 
   // Compute the selected-visible slice once; both the plan-button gating and
   // the hint span need it.
