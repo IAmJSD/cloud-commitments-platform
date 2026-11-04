@@ -33,9 +33,9 @@ var executionProjectionCols = []string{
 // TestPGXMock_ExecutionProjectionsReadCoalescedActor pins the read half of the
 // 000089 contract while old builds can still write the legacy column: every
 // statement that projects a purchase_executions row must read
-// COALESCE(canceled_by, cancelled_by), so an actor stored in either column
+// COALESCE(canceled_by, <legacy column>), so an actor stored in either column
 // scans back. A bare canceled_by projection loses the attribution of legacy
-// rows (written to cancelled_by only) until the follow-up drain runs.
+// rows (written to the legacy column only) until the follow-up drain runs.
 func TestPGXMock_ExecutionProjectionsReadCoalescedActor(t *testing.T) {
 	var mu sync.Mutex
 	var projections, bare []string

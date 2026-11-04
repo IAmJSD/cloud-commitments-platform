@@ -169,8 +169,10 @@ func TestMigration_000158_ContractCanceledSpelling(t *testing.T) {
 
 // Write statements copied from origin/main (internal/config/store_postgres.go
 // at the time of #1253): the build that is live when this migration lands
-// writes cancelled_by, so none of them may hit the narrowed CHECKs and the
-// actor must read back through COALESCE(canceled_by, cancelled_by).
+// writes the legacy actor column, so none of them may hit the narrowed CHECKs
+// and the actor must read back through COALESCE over both columns.
+//
+//nolint:misspell // the SQL deliberately names the legacy British column under test
 const (
 	oldSaveExecution158 = `
 		INSERT INTO purchase_executions (

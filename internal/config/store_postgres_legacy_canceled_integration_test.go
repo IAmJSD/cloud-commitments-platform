@@ -42,7 +42,7 @@ func versionBeforeCanceledContract(t *testing.T) uint {
 
 // TestPostgresStore_NewCodeAgainstPreContractSchema runs the new store code on
 // the schema before 000158 with rows an older build wrote: the legacy status
-// spelling and an actor only in cancelled_by. Every reader must treat them as
+// spelling and an actor only in the legacy column. Every reader must treat them as
 // canceled with their actor, and the new writers must not lose them.
 func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -82,7 +82,7 @@ func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {
 		got, err := store.GetExecutionByID(ctx, legacy)
 		require.NoError(t, err)
 		assert.Equal(t, LegacyStatusCanceled, got.Status)
-		require.NotNil(t, got.CancelledBy, "a cancelled_by-only actor must scan back")
+		require.NotNil(t, got.CancelledBy, "a legacy-column-only actor must scan back")
 		assert.Equal(t, "legacy@example.com", *got.CancelledBy)
 	})
 
@@ -152,5 +152,4 @@ func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {
 		_, err = store.GetExecutionByID(ctx, legacy)
 		assert.NoError(t, err, "a fresh legacy row survives")
 	})
-
 }
