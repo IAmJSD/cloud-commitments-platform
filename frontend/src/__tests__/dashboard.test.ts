@@ -759,6 +759,13 @@ describe('Dashboard Module', () => {
         expect(document.activeElement).toBe(viewBtn);
       });
 
+      // #1653: opening the dialog must not put focus on the destructive action.
+      test('initial focus lands on Close, not Cancel Purchase', async () => {
+        const { modal } = await openDetails();
+        expect(modal.querySelector('#cancel-purchase-detail-btn')).not.toBeNull();
+        expect(document.activeElement?.id).toBe('close-purchase-details-btn');
+      });
+
       test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
         const { modal } = await openDetails();
         let finishDelete: () => void = () => {};

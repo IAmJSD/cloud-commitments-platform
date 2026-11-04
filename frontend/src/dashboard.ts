@@ -690,7 +690,8 @@ function viewPurchaseDetails(executionId: string): void {
   document.body.appendChild(modal);
   // Focus moves into the dialog, Tab is trapped, Escape closes it and focus
   // returns to View Details (#731). Every close path removes the element.
-  openModal(modal, { onClose: () => modal.remove() });
+  // Initial focus goes to Close, not the destructive Cancel Purchase (#1653).
+  openModal(modal, { initialFocus: '#close-purchase-details-btn', onClose: () => modal.remove() });
 }
 
 // buildUpcomingDetailsModal constructs the dialog via DOM-API, not
