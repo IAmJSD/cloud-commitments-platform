@@ -684,7 +684,7 @@ func (s *Service) firstUnheldCarvedOut(group *Group, held []Permission) *Permiss
 		if !coversCarvedOut(perm) {
 			continue
 		}
-		if permissionsAllow(held, perm.Action, perm.Resource, nil) {
+		if carvedOutHeld(held, perm) {
 			continue
 		}
 		return &group.Permissions[i]

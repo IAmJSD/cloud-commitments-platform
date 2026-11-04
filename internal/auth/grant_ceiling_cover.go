@@ -75,3 +75,18 @@ func amountCovers(heldMax, reqMax float64) bool {
 	}
 	return reqMax > 0 && reqMax <= heldMax
 }
+
+// carvedOutHeld reports whether held contains an explicit (non-admin:*)
+// permission matching req's action and resource at constraints that cover
+// req's. admin:* never counts for a carved-out verb (#923).
+func carvedOutHeld(held []Permission, req Permission) bool {
+	for _, h := range held {
+		if checkAdminPermission(h) || !checkPermissionMatch(h, req.Action, req.Resource) {
+			continue
+		}
+		if constraintsCover(h.Constraints, req.Constraints) {
+			return true
+		}
+	}
+	return false
+}
