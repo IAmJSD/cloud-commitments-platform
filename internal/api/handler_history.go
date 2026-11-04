@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -909,7 +910,9 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //     An execution whose effective account ID is "" (nil exec field AND recs
 //     disagree or have no account) is excluded once account_ids is non-empty.
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
-//     both sides; End is the end-of-day for YYYY-MM-DD inputs.
+//     both sides; End is the end-of-day for YYYY-MM-DD inputs. Actionable
+//     statuses skip this check so a pending approval scheduled after the
+//     range end still reaches the approval queue (#1685).
 func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if !f.matchesExecutionProviderAndAccount(exec) {
 		return false
@@ -917,7 +920,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if f.PlanID != "" && exec.PlanID != f.PlanID {
 		return false
 	}
-	if f.HasDate {
+	if f.HasDate && !slices.Contains(actionableExecutionStatuses, exec.Status) {
 		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
 			return false
 		}

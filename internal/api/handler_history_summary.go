@@ -165,7 +165,8 @@ func (h *Handler) aggregateHistorySummary(ctx context.Context, filters historyFi
 
 // historySummaryFilter maps the parsed filters onto the aggregate's filter:
 // the purchase_history half gets the row fetch's filter, the executions half
-// gets every listed status and the date bound the row path checks in Go.
+// gets every listed status and the date bound the row path checks in Go,
+// except for actionable statuses, which the row path never date-filters.
 func historySummaryFilter(filters historyFilters) config.HistorySummaryFilter {
 	out := config.HistorySummaryFilter{
 		History:           filters.purchaseHistoryFilter(),
@@ -174,6 +175,7 @@ func historySummaryFilter(filters historyFilters) config.HistorySummaryFilter {
 	if filters.HasDate {
 		out.ExecutionStart = out.History.Start
 		out.ExecutionEnd = out.History.End
+		out.ExecutionDateExemptStatuses = actionableExecutionStatuses
 	}
 	return out
 }

@@ -101,6 +101,8 @@ func TestGetHistory_SummaryFilterMatchesRowFetchFilter(t *testing.T) {
 	require.NotNil(t, aggFilter.ExecutionStart)
 	assert.Equal(t, *rowFilter.Start, *aggFilter.ExecutionStart)
 	assert.Equal(t, *rowFilter.End, *aggFilter.ExecutionEnd)
+	assert.ElementsMatch(t, actionableExecutionStatuses, aggFilter.ExecutionDateExemptStatuses,
+		"actionable executions are exempt from the date bound (#1685)")
 }
 
 // TestGetHistory_SummaryFallsBackToPageWhenAggregateFails keeps History

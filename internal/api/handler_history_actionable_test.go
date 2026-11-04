@@ -108,7 +108,7 @@ func TestHandleRequest_History_ScopedPendingNotCrowdedOutByOtherAccounts(t *test
 	assert.False(t, body.Truncated, "the caller's class is not capped")
 }
 
-// The request's provider and date filters reach the actionable SQL read, and
+// The request's provider filter reaches the actionable SQL read, and
 // an unrestricted caller sends no scope.
 func TestHandleRequest_History_ActionableQueryCarriesFilters(t *testing.T) {
 	var got config.ExecutionsByStatusesQuery
@@ -123,10 +123,8 @@ func TestHandleRequest_History_ActionableQueryCarriesFilters(t *testing.T) {
 	assert.Equal(t, "aws", got.Provider)
 	assert.Nil(t, got.Scope, "an unrestricted caller is not scoped in SQL")
 	assert.Equal(t, config.MaxListLimit, got.Limit)
-	require.NotNil(t, got.Start)
-	require.NotNil(t, got.End)
-	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), *got.Start)
-	assert.Equal(t, time.Date(2026, 1, 31, 23, 59, 59, 0, time.UTC), *got.End)
+	assert.Nil(t, got.Start, "actionable rows are not date-bounded (#1685)")
+	assert.Nil(t, got.End)
 	assert.Empty(t, got.AccountIDs)
 	store.AssertExpectations(t)
 }
@@ -262,4 +260,55 @@ func TestHistoryScope_ExecutionScope(t *testing.T) {
 			assert.Equal(t, tt.want, s.executionScope())
 		})
 	}
+}
+
+// Issue #1685: the default 7-day range ends today, so a pending approval
+// scheduled later (a plan step) must still reach the queue, while terminal
+// rows keep the range.
+func TestHandleRequest_History_PendingOutsideDateRangeStillListed(t *testing.T) {
+	now := time.Now().UTC()
+	future := pendingForAccount("future-pending", actionableDevUUID, now.Add(72*time.Hour))
+	old := config.PurchaseExecution{
+		ExecutionID: "old-failed", Status: "failed", Error: "boom", ScheduledDate: now.AddDate(0, 0, -30),
+		CloudAccountID: &[]string{actionableDevUUID}[0],
+	}
+
+	store := new(MockConfigStore)
+	var actionable config.ExecutionsByStatusesQuery
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isActionableQuery)).
+		Run(func(args mock.Arguments) { actionable = args.Get(1).(config.ExecutionsByStatusesQuery) }).
+		Return([]config.PurchaseExecution{future}, nil)
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isStaleSweepQuery)).Return([]config.PurchaseExecution{}, nil).Maybe()
+	// Registered before the helper's empty default so this one is served.
+	store.On("ListHistoryExecutionsPage", mock.Anything, mock.Anything).Return([]config.PurchaseExecution{old}, nil).Once()
+
+	body := actionableHistoryRequest(t, store, []string{"*"}, map[string]string{
+		"start": now.AddDate(0, 0, -6).Format("2006-01-02"), "end": now.Format("2006-01-02"),
+	})
+
+	ids := make([]string, 0, len(body.Purchases))
+	for _, p := range body.Purchases {
+		ids = append(ids, p.PurchaseID)
+	}
+	assert.Equal(t, []string{"future-pending"}, ids, "pending listed, out-of-range terminal row dropped")
+	assert.Nil(t, actionable.Start)
+	assert.Nil(t, actionable.End)
+}
+
+func TestActionableExecutionsQuery_NeverDateBounded(t *testing.T) {
+	f := historyFilters{HasDate: true, Start: time.Now().AddDate(0, 0, -7), End: time.Now()}
+	q := actionableExecutionsQuery(&f, &historyScope{allowed: auth.UnrestrictedScope()})
+	assert.Nil(t, q.Start)
+	assert.Nil(t, q.End)
+	assert.False(t, isNarrowed(&q), "a date range alone does not narrow the actionable read")
+}
+
+func TestMatchesExecution_DateRangeSkipsActionableStatuses(t *testing.T) {
+	now := time.Now()
+	f := historyFilters{HasDate: true, Start: now.AddDate(0, 0, -7), End: now}
+	later := now.Add(72 * time.Hour)
+	for _, status := range actionableExecutionStatuses {
+		assert.True(t, f.matchesExecution(config.PurchaseExecution{Status: status, ScheduledDate: later}), status)
+	}
+	assert.False(t, f.matchesExecution(config.PurchaseExecution{Status: "failed", ScheduledDate: later}))
 }

@@ -1153,7 +1153,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("start/end date filter is pushed to SQL and prunes executions", func(t *testing.T) {
+	t.Run("start/end date filter is pushed to SQL but never prunes actionable executions", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -1196,10 +1196,8 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		require.NoError(t, err)
 		resp := result.(HistoryResponse)
 
-		require.Len(t, resp.Purchases, 2, "1 DB row + 1 in-range exec")
-		for _, p := range resp.Purchases {
-			assert.NotEqual(t, "exec-out-of-range", p.PurchaseID, "out-of-range execution must be filtered out")
-		}
+		// #1685: approved is actionable, so the out-of-range one stays listed.
+		require.Len(t, resp.Purchases, 3, "1 DB row + 2 actionable execs")
 	})
 
 	t.Run("combined provider+account_ids+date filter is applied on both halves", func(t *testing.T) {
