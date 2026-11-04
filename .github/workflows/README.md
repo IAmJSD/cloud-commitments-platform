@@ -475,8 +475,8 @@ This repository has GitHub's immutable OIDC subject enabled, so every `sub` clai
 `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743`, not
 `repo:LeanerCloud/cloud-commitments-platform`. Check the current prefix with
 `gh api repos/LeanerCloud/cloud-commitments-platform/actions/oidc/customization/sub`. The AWS and
-Azure modules build each subject as `repo:<github_repo>:...`, so their `github_repo` input must be
-that `owner@id/repo@id` form; the plain-name default produces subjects no token presents. GCP does
+Azure modules take a plain `owner/name` `github_repo` plus `github_owner_id` and `github_repo_id`, and
+build that immutable prefix themselves; a plain-name subject is never produced. GCP does
 not match on `sub` and is unaffected.
 
 **AWS:**

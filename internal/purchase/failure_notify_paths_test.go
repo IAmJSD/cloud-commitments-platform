@@ -170,10 +170,17 @@ func TestTerminalFailureWritersAlertOncePerWonRow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureMarkers(t)
 			store := new(MockConfigStore)
-			store.On("GetGlobalConfig", mock.Anything).Return(failureNotifyCfg(), nil)
+			cfgRead := store.On("GetGlobalConfig", mock.Anything).Return(failureNotifyCfg(), nil)
 			sender := new(MockEmailSender)
+			assertMocksOnCleanup(t, store, sender)
 			rec := &failedEmailRecorder{}
-			rec.expect(sender)
+			send := rec.expect(sender)
+			if !tc.alerts {
+				// A writer that lost the row must not alert (Len 0 below); the
+				// stubs only keep such a regression from panicking the mock.
+				cfgRead.Maybe()
+				send.Maybe()
+			}
 			m := &Manager{config: store, email: sender}
 
 			tc.run(t, m, store)

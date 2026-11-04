@@ -225,7 +225,7 @@ func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
 	}
 	recordPartial := func() {
 		t.Helper()
-		require.NoError(t, store.SetRecommendationsCollectionPartial(ctx, partial))
+		require.NoError(t, store.UpsertRecommendationsWithPartial(ctx, time.Now().UTC(), nil, nil, partial))
 		got, getErr := store.GetRecommendationsFreshness(ctx)
 		require.NoError(t, getErr)
 		require.Equal(t, partial, got.LastCollectionPartial)
@@ -243,12 +243,6 @@ func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, fr.LastCollectionPartial, "the next persisted collection must clear the marker")
 	assert.Nil(t, fr.LastCollectionError)
-
-	recordPartial()
-	require.NoError(t, store.SetRecommendationsCollectionPartial(ctx, nil))
-	fr, err = store.GetRecommendationsFreshness(ctx)
-	require.NoError(t, err)
-	assert.Nil(t, fr.LastCollectionPartial, "a nil partial clears the column")
 }
 
 // TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins

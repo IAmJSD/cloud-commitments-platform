@@ -88,6 +88,7 @@ func assertNoBackgroundCollect(t *testing.T, mark goroutines.Mark, store *MockCo
 func TestListRecommendations_MarkedStaleCache_KicksRefresh(t *testing.T) {
 	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	old := time.Now().Add(-72 * time.Hour)
 	collected := make(chan struct{})

@@ -13,6 +13,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/smithy-go"
@@ -50,10 +51,15 @@ func (hostSTSTransport) Do(*http.Request) (*http.Response, error) {
 func marketplaceAccountHandler(t *testing.T, account *config.CloudAccount, row *config.PurchaseHistoryRecord) (*Handler, *aws.Config) {
 	t.Helper()
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
-	cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, nil)
+	// A nil account is a row with no cloud account, which is never looked up;
+	// an unexpected lookup then hits an unregistered method.
+	if account != nil {
+		cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, nil)
+	}
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).Return(&config.MarketplaceListingClaim{ClientToken: "tok"}, nil).Maybe()
 	cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).Return(nil).Maybe()
 	cfgStore.On("ReleaseMarketplaceListingClaim", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -217,8 +223,9 @@ func (d deniedCancelEC2) CancelMarketplaceListing(ctx context.Context, id string
 
 func TestMarketplaceList_CompensationAssumeRoleDeniedReturnsFixedMessage(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	row := standardRow()
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)
 	cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(roleAccount(), nil)
@@ -242,7 +249,8 @@ func TestMarketplaceList_CompensationAssumeRoleDeniedReturnsFixedMessage(t *test
 	require.True(t, ok, "expected a client error, got %v", err)
 	assert.Equal(t, 502, ce.code)
 	assert.Contains(t, ce.message, marketplaceRoleAssumptionMessage)
-	assert.NotContains(t, ce.message, marketplaceHostAccount)
+	// The purchase ID in the reference is a test UUID whose last segment equals the fake host account.
+	assert.NotContains(t, strings.ReplaceAll(ce.message, validMarketplacePurchaseID, ""), marketplaceHostAccount)
 	assert.NotContains(t, ce.message, "arn:aws:")
 }
 
@@ -270,8 +278,9 @@ func TestMarketplaceCancel_RoleARNAccountAssumesRole(t *testing.T) {
 }
 
 func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
-	newHandler := func(account *config.CloudAccount, lookupErr error) *Handler {
+	newHandler := func(t *testing.T, account *config.CloudAccount, lookupErr error) *Handler {
 		cfgStore := &MockConfigStore{}
+		t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 		cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(account, lookupErr)
 		h := &Handler{config: cfgStore, credStore: &accountKeyStore{}}
 		h.awsCfgOnce.Do(func() {
@@ -285,7 +294,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 	}
 
 	t.Run("nil account is not host credentials", func(t *testing.T) {
-		cfg, err := newHandler(nil, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, nil, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "expected a client error, got %v", err)
@@ -295,7 +304,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 	})
 
 	t.Run("lookup error is not host credentials", func(t *testing.T) {
-		cfg, err := newHandler(nil, errors.New("db down")).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, nil, errors.New("db down")).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		require.Error(t, err)
 		_, isClient := IsClientError(err)
@@ -305,7 +314,7 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 
 	t.Run("non-aws provider", func(t *testing.T) {
 		account := &config.CloudAccount{ID: "acct-1", Provider: "azure"}
-		cfg, err := newHandler(account, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
+		cfg, err := newHandler(t, account, nil).loadMarketplaceAWSConfig(context.Background(), standardRow())
 
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "expected a client error, got %v", err)
@@ -461,7 +470,11 @@ func TestMarketplaceHandlers_NoCloudAccountRow(t *testing.T) {
 	}
 }
 
-func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnMessage(t *testing.T) {
+func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnCategory(t *testing.T) {
+	want := map[string]string{
+		"InvalidReservedInstancesId.NotFound": purchase.ErrCategoryMessage(purchase.ErrCategoryUnavailable),
+		"UnauthorizedOperation":               purchase.ErrCategoryMessage(purchase.ErrCategoryAccessDenied),
+	}
 	for _, code := range []string{"InvalidReservedInstancesId.NotFound", "UnauthorizedOperation"} {
 		t.Run(code, func(t *testing.T) {
 			const msg = "the ec2 service said no"
@@ -475,7 +488,7 @@ func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnMessage(t *testing.T
 
 			require.True(t, ok)
 			assert.Equal(t, 400, ce.code)
-			assert.Equal(t, msg, ce.message)
+			assert.Equal(t, want[code], ce.message, "a category message, not the provider text")
 			assert.NotEqual(t, marketplaceRoleAssumptionMessage, ce.message)
 		})
 	}
@@ -503,6 +516,7 @@ func TestLoadMarketplaceAWSConfig_ResolverErrorNeverFallsBackToHost(t *testing.T
 	for name, store := range stores {
 		t.Run(name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
+			t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 			cfgStore.On("GetCloudAccount", mock.Anything, "acct-1").Return(memberAccount(), nil)
 			h := &Handler{config: cfgStore, credStore: store}
 			h.awsCfgOnce.Do(func() {
@@ -520,4 +534,43 @@ func TestLoadMarketplaceAWSConfig_ResolverErrorNeverFallsBackToHost(t *testing.T
 			assert.Nil(t, cfg.Credentials)
 		})
 	}
+}
+
+// Issue #27: AWS's SellerNotRegistered text does not say what to do, so the
+// caller gets a fixed explanation (register as a seller with a US bank account,
+// linking the AWS guide) and a stable reason to branch on. The classification
+// keys on the code alone, whatever fault AWS reports.
+func TestMapAWSMarketplaceError_SellerNotRegistered(t *testing.T) {
+	for _, fault := range []smithy.ErrorFault{smithy.FaultClient, smithy.FaultUnknown} {
+		t.Run(fault.String(), func(t *testing.T) {
+			err := &smithy.OperationError{
+				ServiceID:     "EC2",
+				OperationName: "CreateReservedInstancesListing",
+				Err:           &smithy.GenericAPIError{Code: "SellerNotRegistered", Message: "raw aws text", Fault: fault},
+			}
+
+			ce, ok := IsClientError(mapAWSMarketplaceError("create listing", err))
+
+			require.True(t, ok)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, marketplaceSellerNotRegisteredMessage, ce.message)
+			assert.NotContains(t, ce.message, "raw aws text")
+			assert.Contains(t, ce.message, "US")
+			assert.Contains(t, ce.message, "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-market-general.html#ri-market-seller-profile")
+			assert.Equal(t, map[string]any{"reason": "seller_not_registered"}, ce.Details())
+		})
+	}
+}
+
+// Other AWS client faults keep their own text and carry no reason, so a client
+// branching on reason never mistakes them for the seller precondition.
+func TestMapAWSMarketplaceError_OtherClientFaultsHaveNoReason(t *testing.T) {
+	err := &smithy.GenericAPIError{Code: "InvalidParameterValue", Message: "bad price", Fault: smithy.FaultClient}
+
+	ce, ok := IsClientError(mapAWSMarketplaceError("create listing", err))
+
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Equal(t, marketplaceRejectedMessage, ce.message)
+	assert.Nil(t, ce.Details())
 }

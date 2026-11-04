@@ -67,8 +67,10 @@ func permsPtr(s string) *string { return &s }
 //     role-level permission gating (which is covered by other test files).
 //   - GetAllowedAccountsAPI returns [permsAccA] — i.e. the user is restricted
 //     to account A only.
-func scopedAuthMock(ctx context.Context) *MockAuthService {
+func scopedAuthMock(t *testing.T, ctx context.Context) *MockAuthService {
+	t.Helper()
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("ValidateSession", ctx, permsScopedToken).Return(&Session{
 		UserID: permsScopedUserID,
 		Email:  "scoped@example.com",
@@ -124,6 +126,7 @@ func TestPerAccountPerms_Recommendations_ListFilter(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -132,7 +135,7 @@ func TestPerAccountPerms_Recommendations_ListFilter(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -175,9 +178,10 @@ func TestPerAccountPerms_Recommendations_ListFilter_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx) // reuse adminDashboardReq: admin session
+	mockAuth, req := adminDashboardReq(t, ctx) // reuse adminDashboardReq: admin session
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockSched,
@@ -222,7 +226,7 @@ func TestPerAccountPerms_RecommendationDetail_CrossAccountRejected(t *testing.T)
 	}
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -254,6 +258,7 @@ func TestPerAccountPerms_RecommendationDetail_AllowedAccountReturns200(t *testin
 	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
@@ -261,7 +266,7 @@ func TestPerAccountPerms_RecommendationDetail_AllowedAccountReturns200(t *testin
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &now}, nil)
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -300,6 +305,7 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 	}
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseHistoryRecord{rowA, rowB}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
@@ -311,7 +317,7 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -349,7 +355,7 @@ func TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:            scopedAuthMock(ctx),
+		auth:            scopedAuthMock(t, ctx),
 		analyticsClient: mockClient,
 		config:          mockStore,
 	}
@@ -375,6 +381,7 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	start := now.Add(-7 * 24 * time.Hour)
 
 	mockClient := new(MockAnalyticsClient)
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
 	// permsAccA is a known account UUID (no external id in the fixture), so it
 	// is matched on cloud_account_id only — the uuid set carries it, externals
 	// is nil.
@@ -387,7 +394,7 @@ func TestPerAccountPerms_HistoryAnalytics_AllowedAccountSucceeds(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:            scopedAuthMock(ctx),
+		auth:            scopedAuthMock(t, ctx),
 		analyticsClient: mockClient,
 		config:          mockStore,
 	}
@@ -415,6 +422,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 		"ec2": {PurchaseCount: 3, TotalSavings: 150.0},
 	}
 	mockClient := new(MockAnalyticsClient)
+	t.Cleanup(func() { mockClient.AssertExpectations(t) })
 	mockClient.On("QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedData, nil)
 
@@ -424,7 +432,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:            scopedAuthMock(ctx),
+		auth:            scopedAuthMock(t, ctx),
 		analyticsClient: mockClient,
 		config:          mockStore,
 	}
@@ -451,7 +459,7 @@ func TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected(t *testing.T) {
 	}
 
 	handler := &Handler{
-		auth:            scopedAuthMock(ctx),
+		auth:            scopedAuthMock(t, ctx),
 		analyticsClient: mockClient,
 		config:          mockStore,
 	}
@@ -494,9 +502,11 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	}
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	// resolveCoverageByAccountKey calls config.ResolveAccountConfigsForRecs which
 	// calls GetServiceConfig for each unique (provider, service) pair in the
@@ -505,8 +515,9 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	// by resolveCoverageByAccountKey — see issue #201).
 	mockStore.On("GetServiceConfig", ctx, "aws", "ec2").Return((*config.ServiceConfig)(nil), nil)
 	// Guard against future code paths that resolve service configs before filtering:
-	// stub rds so an unexpected GetServiceConfig call doesn't panic the test.
-	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil)
+	// stub rds (Maybe: the filtered-out rec is never resolved today) so an
+	// unexpected GetServiceConfig call doesn't panic the test.
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return((*config.ServiceConfig)(nil), nil).Maybe()
 	// Issue #956: a restricted session with no explicit account filter scopes the
 	// commitment metrics to its allowed_accounts (permsAccA), so the handler calls
 	// GetActivePurchaseHistory scoped to account A — NOT an unscoped all-accounts read.
@@ -518,7 +529,7 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	}
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -551,6 +562,7 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 	ctx := context.Background()
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	purchaseTime := time.Now().AddDate(0, -2, 0) // active 1-year commitment
@@ -570,7 +582,7 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -599,13 +611,15 @@ func TestPerAccountPerms_ExecutePurchase_CrossAccountRejected403(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	// The scope check refuses before the global config is read, so no
+	// GetGlobalConfig expectation.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -652,13 +666,15 @@ func TestPerAccountPerms_ExecutePurchase_UnattributedRecRejected400(t *testing.T
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	// The scope check refuses before the global config is read, so no
+	// GetGlobalConfig expectation.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -704,6 +720,7 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	// #644 idempotency lookup: no prior pending row → proceed to create.
@@ -718,7 +735,7 @@ func TestPerAccountPerms_ExecutePurchase_AllowedAccountAccepted(t *testing.T) {
 	})
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -778,6 +795,7 @@ func TestPerAccountPerms_PlannedPurchase_CrossAccountPlanRejected404(t *testing.
 	planID := "ffffffff-ffff-4fff-ffff-ffffffffffff"
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetExecutionByID", ctx, executionID).Return(&config.PurchaseExecution{
 		ExecutionID: executionID,
 		PlanID:      planID,
@@ -792,7 +810,7 @@ func TestPerAccountPerms_PlannedPurchase_CrossAccountPlanRejected404(t *testing.
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: store,
 	}
 
@@ -854,6 +872,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 	}
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
@@ -869,7 +888,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	handler := &Handler{
-		auth:      scopedAuthMock(ctx),
+		auth:      scopedAuthMock(t, ctx),
 		scheduler: mockSched,
 		config:    mockStore,
 	}
@@ -929,17 +948,19 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
+	t.Cleanup(func() { mockSched.AssertExpectations(t) })
 	mockSched.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return([]config.PurchaseHistoryRecord{purchaseA}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockSched,
@@ -1008,7 +1029,7 @@ func TestPerAccountPerms_InventoryCommitments_ScopedSQLRead(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -1080,6 +1101,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 	}
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetExecutionByID", ctx, executionID).Return(&config.PurchaseExecution{
 		ExecutionID: executionID, PlanID: planID, Status: "pending",
 	}, nil)
@@ -1095,7 +1117,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: store,
 	}
 
@@ -1131,7 +1153,7 @@ func TestPerAccountPerms_ListConvertibleRIs_ScopedOutsideAllowedReturnsEmpty(t *
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 		// Inject the deployment CloudAccount UUID as permsAccB — outside
 		// the scoped user's allowed set ([permsAccA]).
@@ -1160,7 +1182,7 @@ func TestPerAccountPerms_ListConvertibleRIs_AdminSeesAll(t *testing.T) {
 
 	// Admin auth — ValidateSession returns Role:"admin" so getAllowedAccounts
 	// returns nil (unrestricted) and the scope filter is skipped entirely.
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 
 	// reshapeAccountResolver is NOT set: if the scope check incorrectly runs for
 	// admins it would call h.resolveAWSCloudAccountID which needs STS, causing a
@@ -1215,7 +1237,7 @@ func TestPerAccountPerms_GetRIUtilization_ScopedOutsideAllowedReturnsEmpty(t *te
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 		// Deployment account is permsAccB — outside the scoped user's allowed set.
 		reshapeAccountResolver: func(_ context.Context) (string, error) {
@@ -1250,7 +1272,7 @@ func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *te
 	recs := &countingUtilRecs{rows: []recommendations.RIUtilization{{ReservedInstanceID: "ri-own", UtilizationPercent: 40}}}
 	ec2Stub := &countingUtilEC2{instances: []ec2svc.ConvertibleRI{{ReservedInstanceID: "ri-own"}}}
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 		// Deployment account is permsAccA — WITHIN the scoped user's allowed set.
 		reshapeAccountResolver: func(_ context.Context) (string, error) {
@@ -1289,7 +1311,7 @@ func TestPerAccountPerms_GetReshapeRecommendations_ScopedOutsideAllowedReturnsEm
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 		// Deployment account is permsAccB — outside the scoped user's allowed set.
 		reshapeAccountResolver: func(_ context.Context) (string, error) {
@@ -1325,15 +1347,18 @@ func TestPerAccountPerms_GetReshapeRecommendations_AdminSeesAll(t *testing.T) {
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	// ListStoredRecommendations is called by the recs lookup closure inside
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	// ListStoredRecommendations backs the recs lookup closure inside
 	// AnalyzeReshapingWithRecs. Return empty so the test finishes without
-	// surfacing unrelated recs-lookup errors.
+	// surfacing unrelated recs-lookup errors. Maybe: plumbing only; whether
+	// the lookup runs depends on the reshape analysis, not on the scope check
+	// under test, and this fixture's analysis does not reach it.
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
-		Return([]config.RecommendationRecord(nil), nil)
+		Return([]config.RecommendationRecord(nil), nil).Maybe()
 	mockStore.On("GetRecommendationsFreshness", mock.Anything).
 		Return(&config.RecommendationsFreshness{}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 
 	handler := &Handler{
 		auth:   mockAuth,
@@ -1394,13 +1419,14 @@ func TestPerAccountPerms_GetLadderConfigs_ScopedUserSeesOnlyOwnAccount(t *testin
 	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
 
 	handler := &Handler{
-		auth:   scopedAuthMock(ctx),
+		auth:   scopedAuthMock(t, ctx),
 		config: mockStore,
 	}
 
@@ -1429,10 +1455,12 @@ func TestPerAccountPerms_GetLadderConfigs_AllowedAccountsLookupError(t *testing.
 	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
 
 	// Scoped auth mock, but GetAllowedAccountsAPI fails
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{
 		UserID: permsScopedUserID,
 		Email:  "scoped@example.com",
@@ -1463,9 +1491,10 @@ func TestPerAccountPerms_GetLadderConfigs_AdminSeesAll(t *testing.T) {
 	cfgB := config.LadderConfigDB{ID: "cfg-b", CloudAccountID: permsAccB, Provider: "aws"}
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetLadderConfigs", ctx).Return([]config.LadderConfigDB{cfgA, cfgB}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	resp, err := handler.getLadderConfigs(ctx, req)

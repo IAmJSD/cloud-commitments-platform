@@ -103,11 +103,17 @@ func (app *Application) handleLadderRun(ctx context.Context) (*LadderRunResult, 
 		return nil, fmt.Errorf("ladder_run: invalid default_payment in global config: %w", err)
 	}
 
-	// Load all ladder_config rows. GetLadderConfigs returns ALL rows; we
+	// Load the ladder_config rows. GetLadderConfigs returns at most
+	// config.MaxListLimit rows, newest first, disabled ones included; we
 	// filter Enabled=false here so the counter is visible (SkippedDisabled).
 	allConfigs, err := app.Config.GetLadderConfigs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ladder_run: failed to load ladder configs: %w", err)
+	}
+	if len(allConfigs) >= config.MaxListLimit {
+		// Rows past the cap were not read, so their configs are not run.
+		logging.Warnf("ladder_run: GetLadderConfigs returned %d rows, its %d-row cap; ladder configs may be truncated",
+			len(allConfigs), config.MaxListLimit)
 	}
 	if len(allConfigs) == 0 {
 		log.Println("ladder_run: no ladder_config rows found, nothing to do")
@@ -456,7 +462,7 @@ func (p *ladderRunPlanner) plan(rows []config.LadderInFlightRow) (*config.Ladder
 	if err != nil {
 		return nil, nil, err
 	}
-	plan := assembleLadderPlan(p.engineCfg.Scope, p.now, allocResult, immediate, p.layerStates, p.baseline, p.engineCfg.TargetCoveragePct, p.term, p.paymentOpt)
+	plan := assembleLadderPlan(p.engineCfg.Scope, p.now, allocResult, immediate, p.baseline, p.engineCfg.TargetCoveragePct, p.term, p.paymentOpt)
 	p.allocations, p.tranches, p.holds = len(allocResult.Allocations), len(trancheResult.Tranches), len(allocResult.Holds)
 	return p.buildRows(runID, plan, trancheResult)
 }
@@ -601,20 +607,22 @@ func ladderConfigToEngine(dbCfg *config.LadderConfigDB, accountID string) (pkgla
 // The monetary snapshot is derived to stay consistent with the authoritative
 // allocation rather than recomputed independently:
 //   - target = baseline low-water * targetCoveragePct/100 (the coverage goal),
-//   - existing = sum of per-layer ExistingUSDPerHour, already converted to
-//     on-demand-equivalent dollars by ladderLayerStatesOnDemand,
+//   - existing = Allocate's NetExistingUSDPerHour, the net (existing minus
+//     expiring) commitment over the configured layers that the gap was sized
+//     against, in the on-demand-equivalent dollars ladderLayerStatesOnDemand
+//     converted the layer states to. Reporting the gross per-layer sum instead
+//     would show a gap that does not reconcile with target - existing,
 //   - gap = sum of the planned allocations' on-demand-equivalent gaps (the unit
 //     of target and existing), NOT target - existing.
 //
 // When the baseline low-water is nil the run is a Hold-only no-op (Allocate
 // returns no allocations), so target and gap stay nil (never 0-coerced);
-// existing is still reported from the observed layer states.
+// existing is still reported, since Allocate sets it on every result.
 func assembleLadderPlan(
 	scope pkgladder.Scope,
 	now time.Time,
 	allocResult *pkgladder.AllocateResult,
 	immediate map[pkgladder.LayerType]*big.Rat,
-	layerStates map[pkgladder.LayerType]pkgladder.LayerState,
 	baseline pkgladder.UsageBaseline,
 	targetCoveragePct float64,
 	term pkgladder.Term,
@@ -646,15 +654,12 @@ func assembleLadderPlan(
 	// Holds are informational; append last.
 	actions = append(actions, allocResult.Holds...)
 
-	// existing = sum of per-layer on-demand-equivalent existing coverage
-	// (always reportable).
-	var existingTotal float64
-	for _, ls := range layerStates {
-		if ls.ExistingUSDPerHour != nil {
-			existingTotal += *ls.ExistingUSDPerHour
-		}
+	// existing is the net figure Allocate sized the gap against (#243), copied
+	// so the plan does not alias the result.
+	var existing *big.Rat
+	if allocResult.NetExistingUSDPerHour != nil {
+		existing = new(big.Rat).Set(allocResult.NetExistingUSDPerHour)
 	}
-	existing := ratFromFloat(existingTotal)
 
 	// target and gap are only meaningful when the baseline is available; nil
 	// stays nil (a Hold-only no-op has no purchase target/gap to report).

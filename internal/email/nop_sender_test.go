@@ -28,7 +28,6 @@ func TestNopSender_AllMethodsReturnNil(t *testing.T) {
 	assert.NoError(t, n.SendPurchaseConfirmation(ctx, NotificationData{}))
 	assert.NoError(t, n.SendPurchaseFailedNotification(ctx, NotificationData{}))
 	assert.NoError(t, n.SendPasswordResetEmail(ctx, "user@example.com", "https://example/reset"))
-	assert.NoError(t, n.SendWelcomeEmail(ctx, "user@example.com", "https://example/dashboard", "admin"))
 	assert.NoError(t, n.SendRIExchangePendingApproval(ctx, RIExchangeNotificationData{}))
 	assert.NoError(t, n.SendRIExchangeCompleted(ctx, RIExchangeNotificationData{}))
 	assert.NoError(t, n.SendPurchaseApprovalRequest(ctx, NotificationData{}))

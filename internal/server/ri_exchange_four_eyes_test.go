@@ -78,6 +78,7 @@ func newFourEyesExchangeFixture(globalCfg *config.GlobalConfig, globalCfgErr err
 				return "exch-unattended", quote(), nil
 			},
 		},
+		offeredInstanceTypes: noOfferedCatalog,
 		lookupOffering: func(context.Context, exchange.LookupOfferingParams) (string, error) {
 			return "offering-456", nil
 		},

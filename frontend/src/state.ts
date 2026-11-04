@@ -450,7 +450,7 @@ export function setHiddenColumns(hidden: ReadonlySet<RecommendationsColumnId>): 
 // ---------------------------------------------------------------------------
 
 export type PlansColumnId =
-  | 'provider' | 'service' | 'resource_type' | 'term' | 'payment' | 'status'
+  | 'plan_name' | 'scheduled_date' | 'provider' | 'service' | 'resource_type' | 'term' | 'payment' | 'status'
   | 'count' | 'upfront_cost' | 'estimated_savings';
 
 export type PlansColumnFilter =

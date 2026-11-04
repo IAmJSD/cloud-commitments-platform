@@ -31,7 +31,7 @@ func TestLegacyServiceB1S1Aliases(t *testing.T) {
 				requested := map[string]config.ServiceConfig{alias.provider + "/" + alias.canonical: req}
 				requestBefore, err := json.Marshal(requested)
 				require.NoError(t, err)
-				merged, err := mergeRequestedServices(existing, requested)
+				merged, err := mergeRequestedServices(existing, requested, omittedFields{})
 				require.NoError(t, err)
 				want := stored
 				want.Provider, want.Service, want.Term, want.Payment, want.Coverage = req.Provider, req.Service, req.Term, req.Payment, req.Coverage
@@ -57,9 +57,9 @@ func TestLegacyServiceB1S1ExistingMergeControls(t *testing.T) {
 		}
 		before, err := json.Marshal(existing)
 		require.NoError(t, err)
-		merged, err := mergeRequestedServices(existing, requested)
+		merged, err := mergeRequestedServices(existing, requested, omittedFields{})
 		require.NoError(t, err)
-		want := overlayServiceConfig(existing[keys[0]], req)
+		want := overlayServiceConfig(existing[keys[0]], req, omittedFields{})
 		require.Equal(t, want, merged[keys[0]], "key precedence wins over inconsistent stored AWS value")
 		require.True(t, merged[keys[0]].Enabled, "exact-key Enabled overlay is unchanged")
 		if len(keys) == 2 {
@@ -70,19 +70,19 @@ func TestLegacyServiceB1S1ExistingMergeControls(t *testing.T) {
 		require.Equal(t, before, after)
 	}
 	for _, existing := range []map[string]config.ServiceConfig{nil, {}, {"old": b1s1Service("azure", "vm", false)}} {
-		merged, err := mergeRequestedServices(existing, nil)
+		merged, err := mergeRequestedServices(existing, nil, omittedFields{})
 		require.NoError(t, err)
 		require.Equal(t, existing, merged)
-		merged, err = mergeRequestedServices(existing, map[string]config.ServiceConfig{})
+		merged, err = mergeRequestedServices(existing, map[string]config.ServiceConfig{}, omittedFields{})
 		require.NoError(t, err)
 		require.Equal(t, existing, merged)
 	}
 	for _, existing := range []map[string]config.ServiceConfig{nil, {}, {"plain": {Provider: "gcp", Service: "compute", Enabled: true}}} {
-		merged, err := mergeRequestedServices(existing, requested)
+		merged, err := mergeRequestedServices(existing, requested, omittedFields{})
 		require.NoError(t, err)
 		require.Equal(t, requested, merged, "empty map and genuinely different singleton retain replacement behavior")
 	}
-	_, err := mergeRequestedServices(map[string]config.ServiceConfig{"one": {}, "two": {}}, requested)
+	_, err := mergeRequestedServices(map[string]config.ServiceConfig{"one": {}, "two": {}}, requested, omittedFields{})
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	require.Equal(t, 400, ce.code)
@@ -103,7 +103,7 @@ func TestLegacyServiceB1S1IndependentReplacementControls(t *testing.T) {
 			require.NoError(t, err)
 			requestBefore, err := json.Marshal(requested)
 			require.NoError(t, err)
-			merged, err := mergeRequestedServices(existing, requested)
+			merged, err := mergeRequestedServices(existing, requested, omittedFields{})
 			require.NoError(t, err)
 			require.Equal(t, map[string]config.ServiceConfig{key: req}, merged, "replacement retains exactly requested key, Enabled and fields without hidden inheritance")
 			after, err := json.Marshal(existing)

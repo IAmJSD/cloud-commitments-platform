@@ -32,6 +32,7 @@ func TestUpdateConfigPropagatesOnlyChangedDefaults(t *testing.T) {
 	require.NoError(t, store.SaveServiceConfig(ctx, &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: true, Term: 1, Payment: "partial-upfront", Coverage: 60, RampSchedule: config.RampMonthly10Pct}))
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	mockAuth.grantAdmin()
 	handler := &Handler{config: store, auth: mockAuth}
@@ -124,6 +125,7 @@ func TestUpdateConfigPaymentDefaultSkipsAzureAndGCP(t *testing.T) {
 	}
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	mockAuth.grantAdmin()
 	handler := &Handler{config: store, auth: mockAuth}

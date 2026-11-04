@@ -234,7 +234,7 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_Empty(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{
 		"month", "account_id", "cloud_account_id", "provider", "service",
-		"total_savings", "avg_coverage", "snapshot_count",
+		"total_savings", "avg_coverage", "total_commitment", "total_usage", "snapshot_count",
 	})
 	mock.ExpectQuery(`SELECT month`).
 		WithArgs(anyArgs(2)...).
@@ -263,17 +263,34 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_WithRows(t *testing.T) {
 
 	rows := pgxmock.NewRows([]string{
 		"month", "account_id", "cloud_account_id", "provider", "service",
-		"total_savings", "avg_coverage", "snapshot_count",
-	}).AddRow(time.Now(), "acct1", strPtr("cloud-1"), "aws", "ec2", 500.0, f64ptr(85.0), 10)
+		"total_savings", "avg_coverage", "total_commitment", "total_usage", "snapshot_count",
+	}).
+		AddRow(time.Now(), "acct1", strPtr("cloud-1"), "aws", "ec2", 500.0, f64ptr(85.0), f64ptr(720.0), f64ptr(640.0), 10).
+		AddRow(time.Now(), "acct1", strPtr("cloud-1"), "aws", "rds", 50.0, nil, nil, nil, 3).
+		AddRow(time.Now(), "acct1", strPtr("cloud-1"), "aws", "elasticache", 0.0, nil, f64ptr(0), f64ptr(0), 1)
 
-	mock.ExpectQuery(`SELECT month`).
+	mock.ExpectQuery(`SELECT month, .*total_commitment, total_usage, snapshot_count\s+FROM monthly_savings_summary`).
 		WithArgs(anyArgs(2)...).
 		WillReturnRows(rows)
 
 	result, err := store.QueryMonthlyTotals(ctx, []string{"acct1"}, nil, 6)
 	require.NoError(t, err)
-	require.Len(t, result, 1)
+	require.Len(t, result, 3)
 	assert.Equal(t, "aws", result[0].Provider)
+	assert.Equal(t, 10, result[0].SnapshotCount)
+	// Issue #30: committed spend and usage are scanned, a NULL stays nil
+	// (unknown) and a known 0 stays a non-nil 0.
+	require.NotNil(t, result[0].TotalCommitment)
+	require.NotNil(t, result[0].TotalUsage)
+	assert.InDelta(t, 720.0, *result[0].TotalCommitment, 0.001)
+	assert.InDelta(t, 640.0, *result[0].TotalUsage, 0.001)
+	assert.Nil(t, result[1].TotalCommitment)
+	assert.Nil(t, result[1].TotalUsage)
+	assert.Equal(t, 3, result[1].SnapshotCount)
+	require.NotNil(t, result[2].TotalCommitment)
+	require.NotNil(t, result[2].TotalUsage)
+	assert.Zero(t, *result[2].TotalCommitment)
+	assert.Zero(t, *result[2].TotalUsage)
 }
 
 func TestPostgresAnalyticsStore_QueryMonthlyTotals_ScanError(t *testing.T) {

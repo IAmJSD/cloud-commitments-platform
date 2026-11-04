@@ -150,6 +150,7 @@ func TestLadderRecheck_EveryExecutorEntryRefuses(t *testing.T) {
 	off := ladderGlobal(true, false)
 	t.Run("approve", func(t *testing.T) {
 		mgr, store, rec, exec := ladderHarness(t, ladderTrancheKey, openGate(), nil, off, nil)
+		assertMocksOnCleanup(t, store)
 		exec.Status = "pending"
 		expectClaim(store, exec, []string{"pending", "notified"})
 		_, _, err := mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)

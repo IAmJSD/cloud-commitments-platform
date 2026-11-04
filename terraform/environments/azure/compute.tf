@@ -98,6 +98,7 @@ module "compute_container_apps" {
       SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
       CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD            = "azure"
+      CUDLY_TRUSTED_PROXY_HOPS      = tostring(var.trusted_proxy_hops)
     },
     var.additional_env_vars
   )
@@ -119,6 +120,20 @@ module "compute_container_apps" {
   # RI exchange automation
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
   ri_exchange_schedule        = var.ri_exchange_schedule
+
+  # Scheduled server sweeps (#712); see scheduled-sweeps.tf in the module.
+  enable_reap_stuck_purchases_schedule        = var.enable_reap_stuck_purchases_schedule
+  reap_stuck_purchases_schedule               = var.reap_stuck_purchases_schedule
+  enable_analytics_collect_schedule           = var.enable_analytics_collect_schedule
+  analytics_collect_schedule                  = var.analytics_collect_schedule
+  enable_fire_scheduled_purchases_schedule    = var.enable_fire_scheduled_purchases_schedule
+  fire_scheduled_purchases_schedule           = var.fire_scheduled_purchases_schedule
+  enable_process_scheduled_purchases_schedule = var.enable_process_scheduled_purchases_schedule
+  process_scheduled_purchases_schedule        = var.process_scheduled_purchases_schedule
+  enable_send_notifications_schedule          = var.enable_send_notifications_schedule
+  send_notifications_schedule                 = var.send_notifications_schedule
+  enable_finalize_revocations_schedule        = var.enable_finalize_revocations_schedule
+  finalize_revocations_schedule               = var.finalize_revocations_schedule
 
   tags = local.common_tags
 
@@ -186,6 +201,7 @@ module "compute_aks" {
       SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
       CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD            = "azure"
+      CUDLY_TRUSTED_PROXY_HOPS      = tostring(var.trusted_proxy_hops)
     },
     var.additional_env_vars
   )
@@ -205,6 +221,24 @@ module "compute_aks" {
   recommendation_schedule     = var.recommendation_schedule
   enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
   ri_exchange_schedule        = var.ri_exchange_schedule
+
+  # Scheduled server tasks (#712, #893); see scheduled-tasks.tf in the module.
+  enable_reap_stuck_purchases_schedule        = var.enable_reap_stuck_purchases_schedule
+  reap_stuck_purchases_schedule               = var.reap_stuck_purchases_schedule
+  enable_analytics_collect_schedule           = var.enable_analytics_collect_schedule
+  analytics_collect_schedule                  = var.analytics_collect_schedule
+  enable_fire_scheduled_purchases_schedule    = var.enable_fire_scheduled_purchases_schedule
+  fire_scheduled_purchases_schedule           = var.fire_scheduled_purchases_schedule
+  enable_process_scheduled_purchases_schedule = var.enable_process_scheduled_purchases_schedule
+  process_scheduled_purchases_schedule        = var.process_scheduled_purchases_schedule
+  enable_send_notifications_schedule          = var.enable_send_notifications_schedule
+  send_notifications_schedule                 = var.send_notifications_schedule
+  enable_finalize_revocations_schedule        = var.enable_finalize_revocations_schedule
+  finalize_revocations_schedule               = var.finalize_revocations_schedule
+  enable_cleanup_schedule                     = var.enable_cleanup_schedule
+  cleanup_schedule                            = var.cleanup_schedule
+  enable_ladder_run_schedule                  = var.enable_ladder_run_schedule
+  ladder_run_schedule                         = var.ladder_run_schedule
 
   tags = local.common_tags
 

@@ -54,12 +54,6 @@ func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr,
 	return args.Error(0)
 }
 
-// SendWelcomeEmail mocks the SendWelcomeEmail operation.
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
-	args := m.Called(ctx, emailAddr, dashboardURL, role)
-	return args.Error(0)
-}
-
 // SendPurchaseApprovalRequest mocks the SendPurchaseApprovalRequest operation.
 func (m *MockEmailSender) SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error {
 	args := m.Called(ctx, data)
@@ -91,7 +85,6 @@ type EmailSenderAPI interface {
 	SendPurchaseConfirmation(ctx context.Context, data email.NotificationData) error
 	SendPurchaseFailedNotification(ctx context.Context, data email.NotificationData) error
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
-	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
 	SendPurchaseApprovalRequest(ctx context.Context, data email.NotificationData) error
 	SendPurchaseExecutedNotification(ctx context.Context, data email.NotificationData) error
 }

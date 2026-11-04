@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,7 @@ func TestHandler_getDashboardSummary_RejectsUnknownProvider(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			mockScheduler := new(MockScheduler)
 			mockStore := new(MockConfigStore)
-			mockAuth, req := adminDashboardReq(ctx)
+			mockAuth, req := adminDashboardReq(t, ctx)
 			h := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
 
 			_, err := h.getDashboardSummary(ctx, req, map[string]string{"provider": provider})
@@ -49,6 +50,7 @@ func TestHandler_getDashboardSummary_AllProviderMeansNoFilter(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockScheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{Provider: ""}).
 		Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", ResourceType: "m5.large", Savings: 40}}, nil)
@@ -61,7 +63,7 @@ func TestHandler_getDashboardSummary_AllProviderMeansNoFilter(t *testing.T) {
 			UpfrontCost: new(float64),
 		}}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	h := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
 
 	result, err := h.getDashboardSummary(ctx, req, map[string]string{"provider": "all"})
@@ -84,14 +86,12 @@ func inventoryRowsForProviderTests() []config.PurchaseHistoryRecord {
 
 func TestHandler_inventory_RejectsUnknownProvider(t *testing.T) {
 	ctx := context.Background()
-	reads := map[string]func(*Handler, map[string]string) error{
-		"commitments": func(h *Handler, p map[string]string) error {
-			_, req := adminInventoryReq(ctx)
+	reads := map[string]func(*Handler, *events.LambdaFunctionURLRequest, map[string]string) error{
+		"commitments": func(h *Handler, req *events.LambdaFunctionURLRequest, p map[string]string) error {
 			_, err := h.listActiveCommitments(ctx, req, p)
 			return err
 		},
-		"coverage": func(h *Handler, p map[string]string) error {
-			_, req := adminInventoryReq(ctx)
+		"coverage": func(h *Handler, req *events.LambdaFunctionURLRequest, p map[string]string) error {
 			_, err := h.getCoverageBreakdown(ctx, req, p)
 			return err
 		},
@@ -99,10 +99,10 @@ func TestHandler_inventory_RejectsUnknownProvider(t *testing.T) {
 	for name, read := range reads {
 		t.Run(name, func(t *testing.T) {
 			mockStore := new(MockConfigStore)
-			mockAuth, _ := adminInventoryReq(ctx)
+			mockAuth, req := adminInventoryReq(t, ctx)
 			h := &Handler{auth: mockAuth, config: mockStore, scheduler: new(MockScheduler)}
 
-			err := read(h, map[string]string{"provider": "AWS"})
+			err := read(h, req, map[string]string{"provider": "AWS"})
 
 			requireBadRequest(t, err)
 			mockStore.AssertNotCalled(t, "GetActivePurchaseHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -113,12 +113,13 @@ func TestHandler_inventory_RejectsUnknownProvider(t *testing.T) {
 func TestHandler_listActiveCommitments_AllProviderMeansNoFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return(inventoryRowsForProviderTests(), nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := h.listActiveCommitments(ctx, req, map[string]string{"provider": "all"})
@@ -130,15 +131,17 @@ func TestHandler_listActiveCommitments_AllProviderMeansNoFilter(t *testing.T) {
 func TestHandler_getCoverageBreakdown_AllProviderMeansNoFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string(nil)).
 		Return(inventoryRowsForProviderTests(), nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-1", Name: "Account One"}}, nil
 	}
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Savings: 20}}, nil)
-	mockAuth, req := adminInventoryReq(ctx)
+	mockAuth, req := adminInventoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
 
 	result, err := h.getCoverageBreakdown(ctx, req, map[string]string{"provider": "all"})
@@ -178,6 +181,7 @@ func TestListAccounts_RejectsUnknownEnumParams(t *testing.T) {
 		for name, params := range cases {
 			t.Run(listName+" "+name, func(t *testing.T) {
 				mockAuth := new(MockAuthService)
+				t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 				setupAdminAuth(ctx, mockAuth)
 				store := new(MockConfigStore)
 				listed := false
@@ -200,6 +204,7 @@ func TestListAccounts_AcceptedFilterValues(t *testing.T) {
 	listWith := func(t *testing.T, params map[string]string) config.CloudAccountFilter {
 		t.Helper()
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		setupAdminAuth(ctx, mockAuth)
 		store := new(MockConfigStore)
 		var got config.CloudAccountFilter

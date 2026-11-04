@@ -86,7 +86,9 @@ func TestManagedPlanRefusalIsHTTP409WithCode(t *testing.T) {
 	ctx := context.Background()
 	f := newCreateConcurrencyFixture(ctx, t)
 	setPlanManaged(ctx, t, f, true)
-	f.handler.auth.(*MockAuthService).On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	fixtureAuth := f.handler.auth.(*MockAuthService)
+	t.Cleanup(func() { fixtureAuth.AssertExpectations(t) })
+	fixtureAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	req := managedGuardRequest(`{"notification_days_before":7}`)
 	req.Headers["X-CSRF-Token"] = "test-csrf"
 	req.RequestContext.HTTP.Method = "PATCH"

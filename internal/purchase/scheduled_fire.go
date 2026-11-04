@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -26,7 +27,25 @@ type FireResult struct {
 	// Errored is the number of rows where the fire attempt failed for a reason
 	// other than a CAS race (DB error, provider error). Worth alerting on.
 	Errored int `json:"errored"`
+	// Stale is the number of claimed rows refused, unbought, because they were
+	// due more than the due-row age cap ago (ErrDueRowTooOld, issue #712). They
+	// end failed with no_submission and are not counted in Errored.
+	Stale int `json:"stale"`
+	// Deferred is the number of due rows left untouched (still scheduled)
+	// because less than purchaseRunBudget remained on the context deadline.
+	// The next sweep picks them up (issue #1582).
+	Deferred int `json:"deferred"`
 }
+
+// fireOutcome is what fireOneDue did with one due row.
+type fireOutcome int
+
+const (
+	fireErrored  fireOutcome = iota // a real error (DB, provider)
+	fireFired                       // claimed and run through executeAndFinalize
+	fireRaceLost                    // another actor owned the row first
+	fireStale                       // claimed but refused by the due-row age cap
+)
 
 // FireScheduledDelayedPurchases runs a sweep that fires all purchase_executions
 // with status="scheduled" and scheduled_execution_at <= NOW(). For each row:
@@ -34,9 +53,14 @@ type FireResult struct {
 //  1. Atomically transition scheduled -> approved via TransitionExecutionStatus
 //     (CAS; skips the row if the revoke handler won the race and flipped it to
 //     canceled first).
-//  2. Stamp ApprovedBy = "scheduler" to preserve audit trail.
+//  2. Keep the ApprovedBy stored when the purchase was approved (the claim
+//     is transitioned_by NULL) and guard the claim with an audit save.
 //  3. Run executeAndFinalize to call the cloud SDK and flip the row to
 //     completed/failed.
+//
+// A claimed row whose scheduled_execution_at is more than the due-row age cap
+// in the past is failed unbought instead (issue #712), so the first tick after
+// the sweep is scheduled cannot fire a backlog of stale delayed purchases.
 //
 // Safety: idempotent across duplicate invocations (the CAS guard prevents
 // double-firing). Per-row error isolation: a failure on row N never blocks
@@ -55,27 +79,52 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 	logging.Infof("FireScheduledDelayedPurchases: found %d row(s) due for execution", len(due))
 
 	for i := range due {
-		exec := &due[i]
-		if fired, raceLost := m.fireOneDue(ctx, exec); fired {
+		// Checked before the claim: fireOneDue's purchase ignores the sweep
+		// deadline, so a row started without purchaseRunBudget left would be
+		// cut off by the Lambda timeout and strand in running. An unclaimed row
+		// stays scheduled for the next tick (issue #1582).
+		if !enoughTimeFor(ctx, purchaseRunBudget) {
+			result.Deferred = len(due) - i
+			logDeferred := logging.Warnf
+			if nothingCouldFire(result) {
+				logDeferred = logging.Errorf
+			}
+			logDeferred("FireScheduledDelayedPurchases: less than %s left, deferring %d of %d due row(s) to the next sweep (fired=%d)",
+				purchaseRunBudget, result.Deferred, len(due), result.Fired)
+			break
+		}
+		switch m.fireOneDue(ctx, &due[i]) {
+		case fireFired:
 			result.Fired++
-		} else if raceLost {
+		case fireRaceLost:
 			result.RaceLost++
-		} else {
+		case fireStale:
+			result.Stale++
+		default:
 			result.Errored++
 		}
 	}
 
-	logging.Infof("FireScheduledDelayedPurchases: found=%d fired=%d race_lost=%d errored=%d",
-		result.Found, result.Fired, result.RaceLost, result.Errored)
+	logging.Infof("FireScheduledDelayedPurchases: found=%d fired=%d race_lost=%d stale=%d errored=%d deferred=%d",
+		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored, result.Deferred)
 	return result, nil
 }
 
-// fireOneDue attempts to fire a single due scheduled execution. Returns
-// (true, false) on success, (false, true) when the CAS was lost to a
-// concurrent revoke or the claim was lost before the provider call (the
-// guarded audit stamp found the row no longer running), or (false, false) on
-// a real error.
-func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution) (fired, raceLost bool) {
+// nothingCouldFire reports a sweep that deferred every due row without firing
+// any: the task deadline is shorter than one purchase, so the same happens on
+// every sweep until the 24h cap fails the rows. That is a misconfiguration,
+// logged at Error rather than Warn.
+func nothingCouldFire(r *FireResult) bool {
+	return r.Found > 0 && r.Fired == 0 && r.Deferred == r.Found
+}
+
+// fireOneDue attempts to fire a single due scheduled execution. It returns
+// fireFired on success, fireRaceLost when the CAS was lost to a concurrent
+// revoke or the claim was lost before the provider call (the guarded audit
+// stamp found the row no longer running), fireStale when the claimed row was
+// past the due-row age cap and was failed unbought, or fireErrored on a real
+// error.
+func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution) fireOutcome {
 	// CAS: scheduled -> running (the executor claim). If this fails with ErrExecutionNotInExpectedStatus
 	// the revoke handler already transitioned the row to "canceled" — that is
 	// not an error, just a CAS race loss.
@@ -84,25 +133,37 @@ func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution
 	if err != nil {
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
 			logging.Infof("fireOneDue[%s]: CAS lost (execution already transitioned by another actor)", exec.ExecutionID)
-			return false, true
+			return fireRaceLost
 		}
 		logging.Errorf("fireOneDue[%s]: TransitionExecutionStatus failed: %v", exec.ExecutionID, err)
-		return false, false
+		return fireErrored
 	}
 
-	// Stamp ApprovedBy for the audit trail before executing.
-	actor := "scheduler"
-	updated.ApprovedBy = &actor
-	// Guarded on "running". A store error stays best-effort, but a lost guard
-	// means the claim is gone, so nothing is bought (issue #835).
-	if stampErr := m.stampClaimedAudit(ctx, updated, "approved_by"); stampErr != nil {
-		return false, true
+	// The age cap is checked on the claimed row (issue #712): this run now
+	// owns it, so no other sweep can buy or fail it, and the refusal fails it
+	// with no_submission and notifies operators exactly once.
+	if refusal := dueRowAgeRefusal(updated, m.dueRowMaxAge(), time.Now()); refusal != nil {
+		if failErr := m.failClaimedBeforeSubmission(ctx, updated, refusal); errors.Is(failErr, config.ErrAuditLoss) {
+			// Nothing was bought, but the failed status was not saved: the row
+			// stays running for the reaper, so this is a real error.
+			logging.Errorf("fireOneDue[%s]: %v", exec.ExecutionID, failErr)
+			return fireErrored
+		}
+		return fireStale
+	}
+
+	// ApprovedBy is the approver stored at schedule time; the scheduler's
+	// claim is transitioned_by NULL. The save is guarded on "running". A store
+	// error stays best-effort, but a lost guard means the claim is gone, so
+	// nothing is bought (issue #835).
+	if stampErr := m.stampClaimedAudit(ctx, updated, "fire claim"); stampErr != nil {
+		return fireRaceLost
 	}
 
 	if execErr := m.executeAndFinalize(ctx, updated); execErr != nil {
 		logging.Errorf("fireOneDue[%s]: executeAndFinalize failed: %v", exec.ExecutionID, execErr)
-		return false, false
+		return fireErrored
 	}
 
-	return true, false
+	return fireFired
 }

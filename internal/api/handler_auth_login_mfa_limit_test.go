@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -79,6 +81,7 @@ func TestHandler_login_NoMFACodeSkipsPerEmailBucket(t *testing.T) {
 
 func TestHandler_login_MFALegRateLimiterErrorFailsClosed(t *testing.T) {
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	rl := new(MockRateLimiter)
 	t.Cleanup(func() { rl.AssertExpectations(t) })
 	rl.On("AllowWithIP", mock.Anything, mock.Anything, "login").Return(true, nil).Once()
@@ -113,4 +116,131 @@ func TestHandler_mfaEndpoints_InvalidSessionDoesNotSpendIPBudget(t *testing.T) {
 	req.RequestContext.HTTP.SourceIP = "198.51.100.1"
 	_, err := h.mfaEnable(context.Background(), req)
 	require.NoError(t, err, "a valid session on the same IP must still have its budget")
+}
+
+// Issue #104: the strict, fail-closed limiter checks used to allow every
+// request when the handler had no rate limiter at all, silently dropping
+// brute-force protection on the credential endpoints. A nil limiter is now
+// refused with the same 503 as a limiter error.
+func TestHandler_credentialEndpoints_NilLimiterFailsClosed(t *testing.T) {
+	t.Run("checkRateLimitStrict", func(t *testing.T) {
+		h := &Handler{}
+		for _, endpoint := range []string{"login", "setup_admin", "reset_password", "change_password", "mfa"} {
+			err := h.checkRateLimitStrict(context.Background(), makeSourceIPReq("198.51.100.1"), endpoint)
+			requireClientCode(t, err, 503, "endpoint %s", endpoint)
+		}
+	})
+
+	t.Run("login never reaches the auth service", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		h := &Handler{auth: mockAuth}
+
+		_, err := h.login(context.Background(), loginReqFrom("198.51.100.1", "u@example.com", ""))
+		requireClientCode(t, err, 503)
+		mockAuth.AssertNotCalled(t, "Login", mock.Anything, mock.Anything)
+	})
+
+	t.Run("requireMFASession refuses a valid session", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "user-1"}, nil).Once()
+		h := &Handler{auth: mockAuth}
+
+		req := authedReq("tok", `{"code":"000000"}`)
+		req.RequestContext.HTTP.SourceIP = "198.51.100.1"
+		_, err := h.mfaEnable(context.Background(), req)
+		requireClientCode(t, err, 503)
+		mockAuth.AssertNotCalled(t, "MFAEnableAPI", mock.Anything, mock.Anything, mock.Anything)
+	})
+}
+
+// Issue #134: the mfa_required answer carries the continuation token and its
+// expiry at the top level of the JSON body, next to "error".
+func TestHandler_login_MFARequiredCarriesToken(t *testing.T) {
+	expires := time.Date(2026, 10, 27, 12, 5, 0, 0, time.UTC)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("Login", mock.Anything, mock.Anything).
+		Return((*LoginResponse)(nil), &auth.MFARequiredError{Token: "tok-123", ExpiresAt: expires}).Once()
+	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
+
+	_, err := h.login(context.Background(), loginReqFrom("198.51.100.1", "u@example.com", ""))
+	requireClientCode(t, err, 401)
+	status, body := h.handleRequestError(err)
+	assert.Equal(t, 401, status)
+	assert.Equal(t, map[string]any{
+		"error":                "mfa_required",
+		"mfa_token":            "tok-123",
+		"mfa_token_expires_at": "2026-10-27T12:05:00Z",
+	}, body)
+}
+
+func mfaTokenReq(ip, body string) *events.LambdaFunctionURLRequest {
+	req := &events.LambdaFunctionURLRequest{Body: body}
+	req.RequestContext.HTTP.SourceIP = ip
+	return req
+}
+
+// The token form reaches the service with the token and no password, and an
+// unusable token maps to its own code so the frontend can restart the login.
+func TestHandler_login_MFATokenFormForwardedAndMapped(t *testing.T) {
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("Login", mock.Anything, LoginRequest{Email: "u@example.com", MFAToken: "tok", MFACode: "123456"}).
+		Return((*LoginResponse)(nil), auth.ErrInvalidMFAToken).Once()
+	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
+
+	_, err := h.login(context.Background(), mfaTokenReq("198.51.100.1", `{"email":"u@example.com","mfa_token":"tok","mfa_code":"123456"}`))
+	requireClientCode(t, err, 401)
+	assert.Equal(t, "invalid_mfa_token", err.Error())
+}
+
+// A body that mixes the forms, or a token form missing its email or code, is
+// a 400 that never reaches the service or spends a rate-limit slot.
+func TestHandler_login_MFATokenFormValidation(t *testing.T) {
+	for name, body := range map[string]string{
+		"password-and-token": fmt.Sprintf(`{"email":"u@example.com","password":%q,"mfa_token":"tok","mfa_code":"123456"}`, b64("pw")),
+		"no-code":            `{"email":"u@example.com","mfa_token":"tok"}`,
+		"no-email":           `{"mfa_token":"tok","mfa_code":"123456"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+			rl := new(MockRateLimiter)
+			t.Cleanup(func() { rl.AssertExpectations(t) })
+			rl.On("AllowWithIP", mock.Anything, mock.Anything, "login").Return(true, nil).Once()
+			h := &Handler{auth: mockAuth, rateLimiter: rl}
+			_, err := h.login(context.Background(), mfaTokenReq("198.51.100.1", body))
+			requireClientCode(t, err, 400)
+			mockAuth.AssertNotCalled(t, "Login", mock.Anything, mock.Anything)
+			rl.AssertNotCalled(t, "AllowWithEmail", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// The token form spends the same per-account login_mfa budget as the
+// password + code form, so rotating IPs or minting tokens does not reset it.
+func TestHandler_login_MFATokenFormRateLimitedPerEmail(t *testing.T) {
+	limit := getDefaultRateLimits()["login_mfa"].MaxAttempts
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("Login", mock.Anything, mock.Anything).
+		Return((*LoginResponse)(nil), ErrInvalidMFACode_test()).Times(limit)
+	h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
+
+	for i := 0; i <= limit; i++ {
+		ip := fmt.Sprintf("198.51.100.%d", i+1)
+		// Alternate the two forms: they share one budget.
+		req := loginReqFrom(ip, "victim@example.com", "000000")
+		if i%2 == 0 {
+			req = mfaTokenReq(ip, fmt.Sprintf(`{"email":"victim@example.com","mfa_token":"tok-%d","mfa_code":"000000"}`, i))
+		}
+		_, err := h.login(context.Background(), req)
+		if i < limit {
+			requireClientCode(t, err, 401, "attempt %d", i+1)
+		} else {
+			requireClientCode(t, err, 429, "attempt %d must be throttled", i+1)
+		}
+	}
 }

@@ -5,10 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/accountpredicate"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -83,62 +82,18 @@ func dimensionToColumn(dimension string) (string, error) {
 // are appended after them and the returned clause references them by the right
 // positions.
 //
-// purchase_history carries two account identifiers, either of which may be the
-// only one populated on a row: account_id (the cloud-provider external number,
-// always populated) and cloud_account_id (the cloud_accounts UUID FK, NULL on
-// every direct-execute/ambient/pre-000011 row). The top-bar chip emits the
-// UUID, so matching only cloud_account_id silently dropped every NULL row
-// (issue #701/#498) and matching only account_id dropped UUID-only rows (#866).
-//
-// The external-id half is grouped per provider so each external number only
-// matches rows of its own provider:
-//
-//	(cloud_account_id = ANY($u)
-//	   OR (provider = $p AND account_id = ANY($extsForP)) OR ...)
-//
-// preserving the (provider, external_id) pairing so a filter for aws/123 never
-// pulls azure/123 rows. The "" provider key (legacy raw external number, unknown
-// provider) matches account_id with no provider gate. cloud_account_id is
-// compared directly (no ::text cast) so the plain cloud_account_id UUID index
-// (migration 000011) can back it. Providers are sorted for deterministic SQL.
-// Both empty -> "TRUE" (no account filter).
+// purchase_history carries two account identifiers (account_id, always
+// populated, and cloud_account_id, NULL on every direct-execute/ambient/
+// pre-000011 row), so the predicate ORs both with a per-provider gate on the
+// external-id half. It lives in internal/accountpredicate, shared with the
+// savings_snapshots reads in internal/analytics and the purchase_history reads
+// in internal/config (issue #120). Both empty -> "TRUE" (no account filter).
 func accountFilterClause(accountUUIDs []string, accountExternalIDsByProvider map[string][]string, baseArgs []any) (clause string, args []any) {
-	args = baseArgs
-	var ors []string
-	if len(accountUUIDs) > 0 {
-		args = append(args, accountUUIDs)
-		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
-	}
-	for _, provider := range sortedProviderKeys(accountExternalIDsByProvider) {
-		exts := accountExternalIDsByProvider[provider]
-		if len(exts) == 0 {
-			continue
-		}
-		if provider == "" {
-			args = append(args, exts)
-			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
-			continue
-		}
-		args = append(args, provider)
-		providerArg := len(args)
-		args = append(args, exts)
-		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
-	}
-	if len(ors) == 0 {
+	clause, args = accountpredicate.Build(baseArgs, accountUUIDs, accountExternalIDsByProvider, accountpredicate.ProviderExact)
+	if clause == "" {
 		return "TRUE", args
 	}
-	return "(" + strings.Join(ors, " OR ") + ")", args
-}
-
-// sortedProviderKeys returns the map keys in ascending order so the generated
-// SQL (and its bind-arg ordering) is deterministic across calls and testable.
-func sortedProviderKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return clause, args
 }
 
 // QueryHistory aggregates purchase_history rows bucketed by interval.

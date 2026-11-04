@@ -41,11 +41,7 @@ var _ StoreInterface = (*PostgresStore)(nil)
 // GetUserByID retrieves a user by ID.
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, group_ids, active,
-		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
-		       failed_login_attempts, locked_until, password_history,
-		       created_at, updated_at, last_login_at, deactivated_at, password_version
+		SELECT ` + userSelectColumns + `
 		FROM users
 		WHERE id = $1
 	`
@@ -56,11 +52,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, 
 // GetUserByEmail retrieves a user by email.
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, group_ids, active,
-		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
-		       failed_login_attempts, locked_until, password_history,
-		       created_at, updated_at, last_login_at, deactivated_at, password_version
+		SELECT ` + userSelectColumns + `
 		FROM users
 		WHERE email = $1
 	`
@@ -85,44 +77,11 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 	user.UpdatedAt = now
 
 	query := `
-		INSERT INTO users (
-			id, email, password_hash, group_ids, active,
-			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-			mfa_recovery_codes, password_reset_token, password_reset_expiry,
-			failed_login_attempts, locked_until, password_history,
-			created_at, updated_at, last_login_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		INSERT INTO users (` + userInsertColumns + `)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
-	// Substitute an empty slice for nil so the Postgres TEXT[] column
-	// stays at its default '{}' rather than NULL. The schema declares
-	// the column NOT NULL DEFAULT '{}' (migration 000052); passing a
-	// raw nil here triggers "violates not-null constraint" on insert.
-	recoveryCodes := user.MFARecoveryCodes
-	if recoveryCodes == nil {
-		recoveryCodes = []string{}
-	}
-
-	_, err := s.db.Exec(ctx, query,
-		user.ID,
-		user.Email,
-		user.PasswordHash,
-		user.GroupIDs,
-		user.Active,
-		user.MFAEnabled,
-		user.MFASecret,
-		user.MFAPendingSecret,
-		user.MFAPendingSecretExpiresAt,
-		recoveryCodes,
-		user.PasswordResetToken,
-		user.PasswordResetExpiry,
-		user.FailedLoginAttempts,
-		user.LockedUntil,
-		user.PasswordHistory,
-		user.CreatedAt,
-		user.UpdatedAt,
-		user.LastLoginAt,
-	)
+	_, err := s.db.Exec(ctx, query, userInsertArgs(user, user.GroupIDs)...)
 
 	if err != nil {
 		if isEmailDuplicateError(err) {
@@ -160,11 +119,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	// LIMIT provides a safety cap against unbounded memory allocation on large installations.
 	// Pagination support should be added if this limit proves insufficient.
 	query := `
-		SELECT id, email, password_hash, group_ids, active,
-		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
-		       failed_login_attempts, locked_until, password_history,
-		       created_at, updated_at, last_login_at, deactivated_at, password_version
+		SELECT ` + userSelectColumns + `
 		FROM users
 		ORDER BY created_at DESC
 		LIMIT 10000
@@ -199,11 +154,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 // as "used" instead of "expired" (QA bug 11.2).
 func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, group_ids, active,
-		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
-		       failed_login_attempts, locked_until, password_history,
-		       created_at, updated_at, last_login_at, deactivated_at, password_version
+		SELECT ` + userSelectColumns + `
 		FROM users
 		WHERE password_reset_token = $1
 	`
@@ -215,12 +166,61 @@ func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (
 // HELPER FUNCTIONS
 // ==========================================
 
+// userInsertColumns lists the users columns that CreateUser and
+// CreateAdminIfNone write, in the order userInsertArgs returns their values.
+// password_version and deactivated_at are left to their column defaults.
+const userInsertColumns = `id, email, password_hash, group_ids, active,
+	mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
+	mfa_recovery_codes, password_reset_token, password_reset_expiry,
+	failed_login_attempts, locked_until, password_history,
+	created_at, updated_at, last_login_at`
+
+// userSelectColumns lists the users columns every user SELECT reads, in the
+// order scanUser scans them. Every query that feeds scanUser must select
+// exactly this list: several neighbors share a Go type (mfa_secret and
+// mfa_pending_secret, or the timestamps), so a hand-copied list in a
+// different order would scan one into the other without any error (#313).
+const userSelectColumns = userInsertColumns + `, deactivated_at, password_version`
+
+// userInsertArgs returns the values for userInsertColumns, in the same order.
+// groupIDs is passed separately because CreateAdminIfNone forces the
+// Administrators group onto the row it writes.
+func userInsertArgs(user *User, groupIDs []string) []any {
+	// Substitute an empty slice for nil so the Postgres TEXT[] column
+	// stays at its default '{}' rather than NULL. The schema declares
+	// the column NOT NULL DEFAULT '{}' (migration 000052); passing a
+	// raw nil here triggers "violates not-null constraint" on insert.
+	recoveryCodes := user.MFARecoveryCodes
+	if recoveryCodes == nil {
+		recoveryCodes = []string{}
+	}
+	return []any{
+		user.ID,
+		user.Email,
+		user.PasswordHash,
+		groupIDs,
+		user.Active,
+		user.MFAEnabled,
+		user.MFASecret,
+		user.MFAPendingSecret,
+		user.MFAPendingSecretExpiresAt,
+		recoveryCodes,
+		user.PasswordResetToken,
+		user.PasswordResetExpiry,
+		user.FailedLoginAttempts,
+		user.LockedUntil,
+		user.PasswordHistory,
+		user.CreatedAt,
+		user.UpdatedAt,
+		user.LastLoginAt,
+	}
+}
+
 // Scanner interface for both Row and Rows.
 type Scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanUser scans a user from a database row.
 func nullTimePtr(t sql.NullTime) *time.Time {
 	if !t.Valid {
 		return nil
@@ -228,6 +228,7 @@ func nullTimePtr(t sql.NullTime) *time.Time {
 	return &t.Time
 }
 
+// scanUser scans a user from a row that selected userSelectColumns.
 func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 	var user User
 	var groupIDs []string

@@ -94,6 +94,32 @@ func (m *MockStore) ClaimTOTPCounter(ctx context.Context, userID string, counter
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockStore) CreateMFALoginToken(ctx context.Context, tokenHash, userID string, passwordVersion int64, ttl time.Duration) (time.Time, error) {
+	args := m.Called(ctx, tokenHash, userID, passwordVersion, ttl)
+	expiresAt, ok := args.Get(0).(time.Time)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.CreateMFALoginToken: expected time.Time, got %T", args.Get(0)))
+	}
+	return expiresAt, args.Error(1)
+}
+
+func (m *MockStore) ClaimMFALoginTokenAttempt(ctx context.Context, tokenHash string, maxAttempts int) (*MFALoginToken, error) {
+	args := m.Called(ctx, tokenHash, maxAttempts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	tok, ok := args.Get(0).(*MFALoginToken)
+	if !ok {
+		panic(fmt.Sprintf("MockStore.ClaimMFALoginTokenAttempt: expected *MFALoginToken, got %T", args.Get(0)))
+	}
+	return tok, args.Error(1)
+}
+
+func (m *MockStore) ConsumeMFALoginToken(ctx context.Context, tokenHash string) (bool, error) {
+	args := m.Called(ctx, tokenHash)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockStore) RecordFailedLogin(ctx context.Context, userID string) error {
 	return m.Called(ctx, userID).Error(0)
 }

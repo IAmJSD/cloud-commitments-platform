@@ -53,12 +53,22 @@ type MonthlySummary struct {
 	// AvgCoverage is the average reservation coverage for the month.
 	// A nil value means coverage data is absent for this period and must
 	// not be treated as zero coverage by consumers.
-	AvgCoverage   *float64 `json:"avg_coverage,omitempty"`
-	AccountID     string   `json:"account_id"`
-	Provider      string   `json:"provider"`
-	Service       string   `json:"service"`
-	TotalSavings  float64  `json:"total_savings"`
-	SnapshotCount int      `json:"snapshot_count"`
+	AvgCoverage *float64 `json:"avg_coverage,omitempty"`
+	// TotalCommitment is the upfront cost amortized per month (each active
+	// purchase's upfront payment spread evenly over its term) and TotalUsage
+	// the recurring monthly fees; committed spend is their sum. Both are
+	// monthly run-rates: the bucket's per-collection totals averaged over the
+	// month, as for TotalSavings. nil means unknown, because at least one
+	// snapshot in the bucket had no figure (monthly_savings_summary propagates
+	// that NULL, migration 000143), and must never be read as 0. A known zero
+	// (for example a no-upfront portfolio's TotalCommitment) is 0.
+	TotalCommitment *float64 `json:"total_commitment,omitempty"`
+	TotalUsage      *float64 `json:"total_usage,omitempty"`
+	AccountID       string   `json:"account_id"`
+	Provider        string   `json:"provider"`
+	Service         string   `json:"service"`
+	TotalSavings    float64  `json:"total_savings"`
+	SnapshotCount   int      `json:"snapshot_count"`
 }
 
 // ProviderBreakdown represents savings breakdown by provider.

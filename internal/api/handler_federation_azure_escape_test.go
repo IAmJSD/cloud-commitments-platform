@@ -138,6 +138,7 @@ func TestGetFederationIaC_AzureDeployScriptEscapesSessionEmail(t *testing.T) {
 		require.NoError(t, err, "fixture %q must be an address the auth service accepts", email)
 
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 			UserID: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
 			Email:  email,

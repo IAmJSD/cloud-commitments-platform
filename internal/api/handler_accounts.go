@@ -26,8 +26,12 @@ import (
 )
 
 // CloudAccountRequest is the request body for create/update account endpoints.
+// Enabled and AWSIsOrgRoot are pointers so an omitted (or null) key can be
+// told apart from an explicit false: create treats absent as false, update
+// keeps the stored value (issue #151, A02-013).
 type CloudAccountRequest struct {
 	Enabled                 *bool  `json:"enabled"`
+	AWSIsOrgRoot            *bool  `json:"aws_is_org_root"`
 	AWSWebIdentityTokenFile string `json:"aws_web_identity_token_file"`
 	AzureClientID           string `json:"azure_client_id"`
 	Provider                string `json:"provider"`
@@ -46,7 +50,6 @@ type CloudAccountRequest struct {
 	GCPProjectID            string `json:"gcp_project_id"`
 	GCPClientEmail          string `json:"gcp_client_email"`
 	GCPAuthMode             string `json:"gcp_auth_mode"`
-	AWSIsOrgRoot            bool   `json:"aws_is_org_root"`
 }
 
 // CredentialsRequest is the request body for the save-credentials endpoint.
@@ -544,7 +547,6 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 		AWSExternalID:           req.AWSExternalID,
 		AWSBastionID:            req.AWSBastionID,
 		AWSWebIdentityTokenFile: req.AWSWebIdentityTokenFile,
-		AWSIsOrgRoot:            req.AWSIsOrgRoot,
 		AzureSubscriptionID:     req.AzureSubscriptionID,
 		AzureTenantID:           req.AzureTenantID,
 		AzureClientID:           req.AzureClientID,
@@ -558,8 +560,25 @@ func cloudAccountFromRequest(req CloudAccountRequest) *config.CloudAccount {
 	if req.Enabled != nil {
 		a.Enabled = *req.Enabled
 	}
+	if req.AWSIsOrgRoot != nil {
+		a.AWSIsOrgRoot = *req.AWSIsOrgRoot
+	}
 
 	return a
+}
+
+// keepOmittedAccountFlags copies the stored enabled and aws_is_org_root
+// values onto an update built by cloudAccountFromRequest when the request
+// omitted them (or sent null), so a PUT that only renames an account or
+// rotates its role does not silently disable it or clear its org-root flag.
+// An explicit false in the request is still applied.
+func keepOmittedAccountFlags(account, existing *config.CloudAccount, req CloudAccountRequest) {
+	if req.Enabled == nil {
+		account.Enabled = existing.Enabled
+	}
+	if req.AWSIsOrgRoot == nil {
+		account.AWSIsOrgRoot = existing.AWSIsOrgRoot
+	}
 }
 
 // getAccount handles GET /api/accounts/:id.
@@ -614,7 +633,17 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
+	// The provider is fixed when the account is created: UpdateCloudAccount
+	// does not write it, and credentials, service overrides and plan
+	// memberships all depend on it. Refuse a change rather than echo back a
+	// provider that was never saved.
+	if req.Provider != existing.Provider {
+		return nil, NewClientError(400, fmt.Sprintf(
+			"provider cannot be changed (this account is %s); delete the account and add it again under the new provider", existing.Provider))
+	}
+
 	account := cloudAccountFromRequest(req)
+	keepOmittedAccountFlags(account, existing, req)
 	account.ID = id
 	account.CreatedAt = existing.CreatedAt
 	account.CreatedBy = existing.CreatedBy
@@ -1424,23 +1453,55 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, err
 	}
 
-	// Provider-match validation (issue #209). Extracted to keep
-	// setPlanAccounts under the gocyclo budget (10).
+	// Provider-match validation (issue #209), before the arming gate so a
+	// malformed request is a 400 whatever the plan's armed state. Extracted to
+	// keep setPlanAccounts under the gocyclo budget (10).
 	if err := h.validatePlanAccountProviders(ctx, id, body.AccountIDs); err != nil {
 		return nil, err
 	}
 
-	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, NewClientError(404, err.Error())
-		}
-		if errors.Is(err, config.ErrEditorReconciliationRequired) {
-			return nil, editorReconciliationError()
-		}
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
+	return nil, h.storePlanAccounts(ctx, httpReq, session, id, body.AccountIDs)
+}
 
-	return nil, nil
+// storePlanAccounts writes the plan's accounts. The retarget grant is decided
+// first, outside any transaction, against the plan as read then; the gate under
+// the plan's row lock only confirms the plan has not changed since (an arm via
+// updatePlan / patchPlan takes the same lock), and the decision is redone if it
+// has.
+func (h *Handler) storePlanAccounts(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, session *Session, id string, accountIDs []string) error {
+	for attempt := 0; attempt < planGateAttempts; attempt++ {
+		seen, err := h.requireRetargetOfArmedPlan(ctx, httpReq, session, id, accountIDs)
+		if err != nil {
+			return err
+		}
+		err = h.config.SetPlanAccountsGated(ctx, id, accountIDs, func(locked *config.PurchasePlan, _ []string) error {
+			if !locked.UpdatedAt.Equal(seen.UpdatedAt) {
+				return errPlanMovedUnderGate
+			}
+			return nil
+		})
+		if errors.Is(err, errPlanMovedUnderGate) {
+			continue
+		}
+		return mapSetPlanAccountsError(err)
+	}
+	return errPlanGateContended
+}
+
+func mapSetPlanAccountsError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if ce, ok := IsClientError(err); ok {
+		return ce
+	}
+	if errors.Is(err, config.ErrNotFound) {
+		return NewClientError(404, err.Error())
+	}
+	if errors.Is(err, config.ErrEditorReconciliationRequired) {
+		return editorReconciliationError()
+	}
+	return fmt.Errorf("accounts: %w", err)
 }
 
 // validatePlanAccountIDs rejects a missing/empty account_ids payload and
@@ -1645,7 +1706,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 		return aws.Config{}, fmt.Errorf("accounts: load base aws config: %w", err)
 	}
 	stsClient := sts.NewFromConfig(baseCfg)
-	credProvider, err := credentials.ResolveAWSCredentialProvider(ctx, root, h.credStore, stsClient)
+	credProvider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, root, h.credStore, stsClient, h.bastionResolveOptions(baseCfg))
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("accounts: resolve credentials for org root %s: %w", root.ID, err)
 	}

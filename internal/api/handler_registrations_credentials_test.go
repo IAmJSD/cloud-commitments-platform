@@ -158,14 +158,18 @@ func approveWithCredential(t *testing.T, credType, payload, approvalBody string)
 	t.Helper()
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetAccountRegistration", mock.Anything, regCredRegID).Return(&config.AccountRegistration{
 		ID: regCredRegID, Status: "pending", Provider: "gcp", ExternalID: "test-project",
 		RegCredentialType: credType, RegCredentialPayload: payload,
 	}, nil)
+	store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("TransitionRegistrationStatus", mock.Anything, mock.Anything, "pending", mock.Anything).Return(nil).Maybe()
 	store.On("UpdateAccountRegistration", mock.Anything, mock.Anything).Return(nil).Maybe()
+	// The router enforces the approve permission; called directly with no
+	// bearer token, approveRegistration resolves no session, so the auth mock
+	// carries no expectations (an unexpected auth call would panic).
 	mockAuth := new(MockAuthService)
-	setupAdminAuth(ctx, mockAuth)
 	creds := &recordingCredStore{}
 	h := &Handler{auth: mockAuth, config: store, credStore: creds}
 	result, err := h.approveRegistration(ctx, &events.LambdaFunctionURLRequest{Body: approvalBody}, regCredRegID)
@@ -179,7 +183,9 @@ func TestApproveRegistration_SavesCheckedCredential(t *testing.T) {
 	account, ok := result.(*config.CloudAccount)
 	require.True(t, ok)
 	assert.True(t, account.Enabled)
-	store.AssertCalled(t, "CreateCloudAccount", mock.Anything, mock.Anything)
+	store.AssertCalled(t, "ApproveAccountRegistration", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(a *config.CloudAccount) bool { return a.ID == account.ID }), mock.Anything)
+	assertNoPiecemealApproval(t, store)
 	require.Contains(t, creds.saved, account.ID+"/gcp_workload_identity_config")
 	assert.JSONEq(t, payload, string(creds.saved[account.ID+"/gcp_workload_identity_config"]))
 }
@@ -214,6 +220,7 @@ func TestApproveRegistration_RefusesInvalidStoredCredential(t *testing.T) {
 			assert.Nil(t, result)
 			require400(t, err, "the credentials submitted with this registration are not valid")
 			require400(t, err, tc.msg)
+			store.AssertNotCalled(t, "ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			store.AssertNotCalled(t, "TransitionRegistrationStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			store.AssertNotCalled(t, "CreateCloudAccount", mock.Anything, mock.Anything)
 			assert.Empty(t, creds.saved)

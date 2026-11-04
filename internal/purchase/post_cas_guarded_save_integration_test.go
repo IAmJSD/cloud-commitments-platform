@@ -178,10 +178,7 @@ func TestPostCASSave_ClaimLostBeforeStampBuysNothing(t *testing.T) {
 		before := f.purchaseCount()
 		reap(t, row)
 
-		fired, raceLost := f.manager.fireOneDue(ctx, rowStatusCopy(row))
-
-		assert.False(t, fired)
-		assert.True(t, raceLost)
+		assert.Equal(t, fireRaceLost, f.manager.fireOneDue(ctx, rowStatusCopy(row)))
 		assert.Equal(t, 0, f.purchaseCount()-before, "a run that lost its claim must not reach the provider")
 		assert.Equal(t, config.StatusFailed, rowStatus(ctx, t, f, row.ExecutionID).Status)
 	})

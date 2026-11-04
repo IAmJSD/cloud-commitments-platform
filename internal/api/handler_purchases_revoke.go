@@ -28,12 +28,14 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	armreservations "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -240,10 +242,11 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 	// Partial-success reconciliation (issue #290 Finding #6): if the
 	// revocation_in_flight flag is set but revoked_at is still NULL, Azure
 	// already issued the refund but our DB write failed, or another request
-	// holds the claim and is posting the Return now (issue #1518). Return 207
-	// so the frontend does not retry the Azure call (which would fail with
-	// "already returned"). The finalize_revocations sweep will reconcile the
-	// row.
+	// holds the claim and is posting the Return now (issue #1518), or an
+	// earlier Return failed without a definite answer and may have been
+	// accepted (issue #1529). Return 207 so the frontend does not retry the
+	// Azure call (which would fail with "already returned").
+	// The finalize_revocations sweep will reconcile the row.
 	if record.RevocationInFlight {
 		return revocationInFlightResult(), nil
 	}
@@ -595,7 +598,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return nil, NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return nil, azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return nil, fmt.Errorf("revoke/calculate: CalculateRefund failed: %w", err)
 	}
@@ -742,6 +745,13 @@ func (h *Handler) getAzureRevokeFactory() azureRevokeClientFactory {
 	if h.azureRevokeFactory != nil {
 		return *h.azureRevokeFactory
 	}
+	return defaultAzureRevokeFactory(nil)
+}
+
+// defaultAzureRevokeFactory builds the production clients. returnOpts is nil
+// in production; tests point it at a local server to exercise the real Return
+// client's pipeline, including returnAttemptPolicy.
+func defaultAzureRevokeFactory(returnOpts *arm.ClientOptions) azureRevokeClientFactory {
 	return azureRevokeClientFactory{
 		newCredential: func() (azcore.TokenCredential, error) {
 			return azidentity.NewDefaultAzureCredential(nil)
@@ -750,7 +760,7 @@ func (h *Handler) getAzureRevokeFactory() azureRevokeClientFactory {
 			return armreservations.NewCalculateRefundClient(cred, nil)
 		},
 		newReturnClient: func(cred azcore.TokenCredential) (azureReturnClient, error) {
-			return armreservations.NewReturnClient(cred, nil)
+			return newAzureReturnClient(cred, returnOpts)
 		},
 	}
 }
@@ -815,7 +825,7 @@ func (h *Handler) callAzureReturn(
 
 	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
 	quantity := int32(record.Count) // #nosec G115 -- Azure reservation count validated at purchase; bounded by API limits (<<math.MaxInt32) //nolint:gosec
-	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
+	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, record.PurchaseID, orderID, reservationID, quantity)
 	if err != nil {
 		return nil, err
 	}
@@ -831,8 +841,8 @@ func (h *Handler) callAzureReturn(
 	}
 
 	// Step 2: Return (post the actual refund request).
-	if err := postAzureReturn(ctx, returnClient, orderID, reservationID, sessionID, quantity); err != nil {
-		return nil, h.handleAzureReturnError(ctx, record, err)
+	if attempts, err := postAzureReturn(ctx, returnClient, orderID, reservationID, sessionID, quantity); err != nil {
+		return nil, h.handleAzureReturnError(ctx, record, attempts, err)
 	}
 
 	return h.persistAzureRevocation(ctx, record, calcRefundAmount, calcRefundCurrency)
@@ -845,9 +855,14 @@ func (h *Handler) callAzureReturn(
 // the RI exchange handler does once its claim is held (#790). A request
 // canceled mid-Return therefore still learns that Azure accepted it and
 // records it.
-func postAzureReturn(reqCtx context.Context, returnClient azureReturnClient, orderID, reservationID, sessionID string, quantity int32) error {
+//
+// It also reports how many HTTP requests the Return client sent, counted by
+// returnAttemptPolicy, so a failure can be judged definite or uncertain
+// (issue #1529).
+func postAzureReturn(reqCtx context.Context, returnClient azureReturnClient, orderID, reservationID, sessionID string, quantity int32) (int32, error) {
 	ctx, cancel := ctxutil.DetachedWithTimeout(reqCtx, revokeReturnTimeout)
 	defer cancel()
+	ctx, sends := withReturnAttemptCounter(ctx)
 	_, err := returnClient.Post(ctx, orderID, armreservations.RefundRequest{
 		Properties: &armreservations.RefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -859,7 +874,7 @@ func postAzureReturn(reqCtx context.Context, returnClient azureReturnClient, ord
 			Scope:        toPtr("Reservation"),
 		},
 	}, nil)
-	return err
+	return sends.Load(), err
 }
 
 // revocationInFlightResult is the answer for a row whose revocation another
@@ -893,7 +908,14 @@ func revocationInFlightResult() *revokeReconcilePendingResult {
 //
 // Because only the claim holder reaches the Return, the ClearRevocationInFlight
 // in handleAzureReturnError only ever clears this request's own flag.
+//
+// On Lambda the claim is not taken at all when too little invocation time is
+// left to post the Return and record its result (checkRevokeTimeLeft, issue
+// #1529).
 func (h *Handler) claimRevocationInFlight(ctx context.Context, record *config.PurchaseHistoryRecord) (any, error) {
+	if err := h.checkRevokeTimeLeft(ctx, record.PurchaseID); err != nil {
+		return nil, err
+	}
 	flipErr := h.config.FlipPurchaseRevocationInFlight(ctx, record.PurchaseID)
 	switch {
 	case flipErr == nil:
@@ -949,7 +971,7 @@ func checkConfirmedRefund(confirmed revokeConfirmBody, calcRefundAmount *float64
 // azureCalculateRefund runs the CalculateRefund step and parses out the session
 // ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
 // check). Errors are classified into 400 (client) vs 500 (transient).
-func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, purchaseID, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -961,7 +983,7 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return "", nil, "", NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return "", nil, "", azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return "", nil, "", fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
 	}
@@ -974,18 +996,26 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 	return sessionID, calcRefundAmount, calcRefundCurrency, nil
 }
 
-// handleAzureReturnError clears the in-flight flag (no refund was issued) and
-// maps the Return error to the right status: 422 on the 7-day window edge, 400
-// on other client errors, 500 otherwise. The caller holds the claim from
-// claimRevocationInFlight, so the flag it clears is its own (issue #1518).
+// handleAzureReturnError handles a failed Return. Only a definite refusal
+// (isAzureDefiniteRefusal) proves no refund was issued; any other failure
+// keeps the in-flight flag and answers that the outcome is uncertain
+// (azureReturnUncertain, issue #1529).
+//
+// After a definite refusal it clears the in-flight flag and maps the error to
+// the right status: 422 on the 7-day window edge, 400 on other client errors,
+// 500 otherwise. The caller holds the claim from claimRevocationInFlight, so
+// the flag it clears is its own (issue #1518).
 //
 // The Return ran detached, so by the time it fails the request may be gone;
 // the clear runs on its own detached revokePersistTimeout budget so it can
 // still land (issue #1527).
-func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.PurchaseHistoryRecord, err error) error {
+func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.PurchaseHistoryRecord, attempts int32, err error) error {
+	if !isAzureDefiniteRefusal(err, attempts) {
+		return azureReturnUncertain(record, attempts, err)
+	}
 	ctx, cancel := ctxutil.DetachedWithTimeout(reqCtx, revokePersistTimeout)
 	defer cancel()
-	// Azure Return failed. Clear the in-flight flag so the row is not left in
+	// Azure refused the Return. Clear the in-flight flag so the row is not left in
 	// a permanently sticky state that would mislead the finalize_revocations
 	// sweep into thinking Azure already issued a refund (Finding D, second-wave
 	// CR). Best-effort: log and continue even if the clear fails.
@@ -1001,7 +1031,7 @@ func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.
 		return NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
 	}
 	if isAzureClientError(err) {
-		return NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
+		return azureRefundRejected("Azure refund rejected", record.PurchaseID, err)
 	}
 	return fmt.Errorf("revoke azure: Return failed: %w", err)
 }
@@ -1160,6 +1190,15 @@ func isAzureClientError(err error) bool {
 		}
 	}
 	return false
+}
+
+// azureRefundRejected is the 400 for an Azure refund step the provider
+// refused: a category message and the purchase ID, never Azure's own text,
+// which carries subscription URLs and request IDs. The raw error is logged.
+func azureRefundRejected(step, purchaseID string, err error) error {
+	logging.Warnf("revoke azure: %s for purchase %s: %v", step, purchaseID, err)
+	_, msg := purchase.SummarizeProviderError(err)
+	return NewClientError(400, fmt.Sprintf("%s: %s (reference: purchase %s)", step, msg, purchaseID))
 }
 
 // isAzureWindowEdgeError reports whether err is an Azure RefundPolicyViolated

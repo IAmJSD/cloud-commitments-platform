@@ -443,6 +443,12 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	if fetchErr != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", fetchErr)
 	}
+	// An empty step has no constraint sets to evaluate (the auth check fails
+	// closed on them, which surfaced as a 500), and the executor refuses it
+	// anyway so it cannot complete and advance the ramp (issue #1695).
+	if len(execution.Recommendations) == 0 {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be started: %v", executionID, purchase.ErrPlanStepNoRecommendations))
+	}
 	if constraintErr := h.enforcePurchaseConstraints(ctx, session, "execute", execution.Recommendations); constraintErr != nil {
 		return nil, constraintErr
 	}
@@ -472,10 +478,43 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 // completed run does, before the 502 (issue #532). final is the row the
 // funnel returned, carrying the per-rec outcome and completed_at.
 func (h *Handler) executeFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID, action string, final *config.PurchaseExecution, revocationToken, executedBy string, err error) error {
+	h.emailCommittedPartialRun(ctx, req, final, revocationToken, executedBy, err)
+	return executeFailureError(executionID, action, final, err)
+}
+
+func (h *Handler) emailCommittedPartialRun(ctx context.Context, req *events.LambdaFunctionURLRequest, final *config.PurchaseExecution, revocationToken, executedBy string, err error) {
 	if purchase.IsCommittedPartialRun(final, err) {
 		h.sendPurchaseExecutedEmail(ctx, req, final, revocationToken, executedBy)
 	}
-	return executeFailureError(executionID, action, final, err)
+}
+
+// tokenFailureError is executeFailureError with fixed messages: a token
+// approver is not scoped to every account on the execution, so the run
+// error's text stays in the server log. Statuses and details are unchanged.
+func tokenFailureError(executionID string, final *config.PurchaseExecution, err error) error {
+	if final == nil || errors.Is(err, purchase.ErrFourEyesDenied) {
+		// No row, or a static policy denial: nothing from the run to hide.
+		return executeFailureError(executionID, "approved", final, err)
+	}
+	// Every branch below is fixed text; audit loss is first because it wraps
+	// whatever else the run failed with.
+	details := map[string]any{"execution_id": executionID, "status": final.Status}
+	switch {
+	case errors.Is(err, config.ErrAuditLoss):
+		return NewClientError(500, "purchase audit could not be completed")
+	case errors.Is(err, purchase.ErrStaleAzurePricing):
+		return NewClientErrorWithDetails(409, purchase.ErrStaleAzurePricing.Error(), details)
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		code := 500
+		if ce, ok := IsClientError(err); ok {
+			code = ce.code
+		}
+		return NewClientErrorWithDetails(code, "the purchase changed after it was authorized and no longer passes your permission checks, so nothing was bought and it is now marked failed", details)
+	case purchase.IsCommittedPartialRun(final, err):
+		return NewClientErrorWithDetails(502, "purchase partially completed: some commitments were purchased and can be revoked, others failed", details)
+	default:
+		return NewClientErrorWithDetails(502, "purchase execution failed", details)
+	}
 }
 
 // Stale Azure prices are refused before purchase, even after a successful claim.
@@ -488,18 +527,32 @@ func executeFailureError(executionID, action string, final *config.PurchaseExecu
 	}
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
-		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved: %v", executionID, err))
+		logRawExecuteFailure(executionID, err)
+		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved (reference: execution %s)", executionID, executionID))
 	case errors.Is(err, purchase.ErrClaimedRowRefused):
 		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
-		return NewClientError(409, err.Error())
+		return NewClientError(409, purchase.ErrStaleAzurePricing.Error())
 	case purchase.IsCommittedPartialRun(final, err):
-		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s partially completed: some commitments were purchased and can be revoked, others failed: %v", executionID, err),
-			map[string]any{"execution_id": executionID, "status": final.Status})
+		category, msg := summarizeExecuteFailure(executionID, err)
+		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s partially completed: some commitments were purchased and can be revoked, others failed: %s (reference: execution %s)", executionID, msg, executionID),
+			map[string]any{"execution_id": executionID, "status": final.Status, "category": category})
 	default:
-		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s failed: %v", executionID, err),
-			map[string]any{"execution_id": executionID, "status": final.Status})
+		category, msg := summarizeExecuteFailure(executionID, err)
+		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s failed: %s (reference: execution %s)", executionID, msg, executionID),
+			map[string]any{"execution_id": executionID, "status": final.Status, "category": category})
 	}
+}
+
+// logRawExecuteFailure keeps the provider's own error text in the server log
+// only; responses carry a category message and the execution ID.
+func logRawExecuteFailure(executionID string, err error) {
+	logging.Errorf("purchase[%s]: execution failed: %v", executionID, err)
+}
+
+func summarizeExecuteFailure(executionID string, err error) (category, message string) {
+	logRawExecuteFailure(executionID, err)
+	return purchase.SummarizeFailure(err)
 }
 
 // unclaimedExecuteError answers a failure where the funnel returned no row:
@@ -686,6 +739,11 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
+	err = h.requirePlanUpdateIfPlanBearing(ctx, req, executionID)
+	if err != nil {
+		return nil, err
+	}
+
 	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
@@ -744,6 +802,20 @@ func (h *Handler) requirePlannedCancelPlanScope(ctx context.Context, session *Se
 	if IsNotFoundError(err) {
 		return errPlannedCancelPlanOutOfScope
 	}
+	return err
+}
+
+// requirePlanUpdateIfPlanBearing requires update:plans when the execution has a
+// plan, because canceling it also disables that plan. Call before any write.
+func (h *Handler) requirePlanUpdateIfPlanBearing(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) error {
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if execution.PlanID == "" {
+		return nil
+	}
+	_, err = h.requirePermission(ctx, req, auth.ActionUpdate, auth.ResourcePlans)
 	return err
 }
 
@@ -1001,7 +1073,7 @@ func tokenActionError(err error) error {
 	case errors.Is(err, purchase.ErrClaimedRowRefused):
 		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
-		return NewClientError(409, err.Error())
+		return NewClientError(409, purchase.ErrStaleAzurePricing.Error())
 	case errors.Is(err, purchase.ErrInvalidApprovalToken), errors.Is(err, config.ErrApprovalTokenChanged):
 		return NewClientError(403, "invalid approval token")
 	case errors.Is(err, purchase.ErrApprovalTokenExpired):
@@ -1112,7 +1184,9 @@ func (h *Handler) tokenApproveFailure(ctx context.Context, req *events.LambdaFun
 	if final == nil && !errors.Is(err, purchase.ErrFourEyesDenied) {
 		return tokenActionError(err)
 	}
-	return h.executeFailure(ctx, req, executionID, "approved", final, revocationToken, actor, err)
+	logging.Errorf("purchase[%s]: token approve failed: %v", executionID, err)
+	h.emailCommittedPartialRun(ctx, req, final, revocationToken, actor, err)
+	return tokenFailureError(executionID, final, err)
 }
 
 // emailTokenApproveOutcome sends the executed email for a token approve that
@@ -1413,7 +1487,13 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 			// reload and not retry with the same payload.
 			return nil, NewClientError(409, "purchase no longer schedulable: state changed concurrently (concurrent cancel)")
 		}
-		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution %s: %v", execution.ExecutionID, err))
+		if approvalToken != "" {
+			// A token approver is not scoped to the store's error text.
+			logging.Errorf("purchase[%s]: token approve failed to schedule: %v", execution.ExecutionID, err)
+			return nil, NewClientError(500, "failed to schedule execution")
+		}
+		logging.Errorf("purchase[%s]: failed to schedule execution: %v", execution.ExecutionID, err)
+		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution (reference: execution %s)", execution.ExecutionID))
 	}
 	// Best-effort scheduled notification email.
 	h.sendPurchaseScheduledEmail(ctx, updated, actor)
@@ -2374,7 +2454,7 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// successor that fails the same way.
 	if failedExec.PlanID != "" && len(failedExec.Recommendations) == 0 {
 		return nil, NewClientError(409,
-			"this plan step has no recommendations attached, so retrying it would buy nothing (platform#631: plan steps cannot yet carry recommendations)")
+			"this plan step has no recommendations attached, so retrying it would buy nothing")
 	}
 
 	totalUpfront, totalSavings, err := validateAndTotalRecommendations(failedExec.Recommendations)
@@ -2573,7 +2653,7 @@ func checkRetryEligibilityGates(failedExec *config.PurchaseExecution, req *event
 	if hint := resolveOpsHint(failedExec.Error); hint != "" {
 		return NewClientErrorWithDetails(409,
 			"this failure is operator-fixable; retrying without changing configuration will fail again",
-			map[string]any{"ops_hint": hint, "failure_reason": failedExec.Error})
+			map[string]any{"ops_hint": hint, "failure_reason": purchase.SanitizeStoredError(failedExec.Error)})
 	}
 
 	// Threshold soft-block (Q2). force=true (set by the frontend
@@ -2711,7 +2791,11 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 		RetryAttemptN:          failedExec.RetryAttemptN + 1,
 	}
 
-	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, h.gracePeriodConfig(ctx), time.Now())
+	graceCfg, err := h.gracePeriodConfig(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, graceCfg, time.Now())
 
 	if err := h.persistRetrySuccessorTx(ctx, failedExec, newExecution, suppressions); err != nil {
 		return nil, "", err
@@ -3007,6 +3091,17 @@ func (h *Handler) tryGetSession(ctx context.Context, req *events.LambdaFunctionU
 	return session
 }
 
+// sanitizedRecommendationErrors copies recs with provider text in Error
+// replaced, leaving the stored slice untouched.
+func sanitizedRecommendationErrors(recs []config.RecommendationRecord) []config.RecommendationRecord {
+	out := make([]config.RecommendationRecord, len(recs))
+	copy(out, recs)
+	for i := range out {
+		out[i].Error = purchase.SanitizeStoredError(out[i].Error)
+	}
+	return out
+}
+
 // buildPurchaseDetailsResponse builds the response map for a purchase execution.
 func buildPurchaseDetailsResponse(execution *config.PurchaseExecution, planName string) map[string]any {
 	response := map[string]any{
@@ -3018,7 +3113,7 @@ func buildPurchaseDetailsResponse(execution *config.PurchaseExecution, planName 
 		"scheduled_date":     execution.ScheduledDate.Format("2006-01-02"),
 		"total_upfront_cost": execution.TotalUpfrontCost,
 		"estimated_savings":  execution.EstimatedSavings,
-		"recommendations":    execution.Recommendations,
+		"recommendations":    sanitizedRecommendationErrors(execution.Recommendations),
 	}
 
 	if execution.NotificationSent != nil {
@@ -3028,7 +3123,7 @@ func buildPurchaseDetailsResponse(execution *config.PurchaseExecution, planName 
 		response["completed_at"] = execution.CompletedAt.Format("2006-01-02T15:04:05Z")
 	}
 	if execution.Error != "" {
-		response["error"] = execution.Error
+		response["error"] = purchase.SanitizeStoredError(execution.Error)
 	}
 	return response
 }
@@ -3754,7 +3849,11 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	executionID := execution.ExecutionID
 
 	// Load the grace-period config once before entering the tx.
-	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, h.gracePeriodConfig(ctx), time.Now())
+	graceCfg, err := h.gracePeriodConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, graceCfg, time.Now())
 	dupExec, err := h.persistExecutionAndSuppressions(ctx, execution, suppressions, creatorID, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -3790,14 +3889,18 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 }
 
 // gracePeriodConfig loads the global config for BuildSuppressions' grace
-// periods, read before any tx opens. A read error does not block the
-// purchase: it returns nil and the grace period defaults per provider.
-func (h *Handler) gracePeriodConfig(ctx context.Context) *config.GlobalConfig {
+// periods, read before any tx opens. A read error is returned and fails the
+// purchase before anything is persisted (audit A01-016, issue #111): falling
+// back to the default grace period would write suppressions for a provider
+// the operator switched off (grace 0) or with the wrong expiry. This matches
+// internal/purchase (AttachResolvedRecommendations) and the other config
+// reads on these paths.
+func (h *Handler) gracePeriodConfig(ctx context.Context) (*config.GlobalConfig, error) {
 	g, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to read grace periods for suppressions: %w", err)
 	}
-	return g
+	return g, nil
 }
 
 // sendApprovalAndFinalize sends the approval email for a freshly persisted
@@ -4489,11 +4592,8 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 		// can proceed.
 		return "", NewClientError(403, "no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
-	actorLower := strings.ToLower(strings.TrimSpace(actor))
-	for _, addr := range approvers {
-		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
-			return actor, nil
-		}
+	if email.ContainsAddress(approvers, actor) {
+		return actor, nil
 	}
 	return "", NewClientError(403, "your session email is not the authorized approver for this purchase")
 }

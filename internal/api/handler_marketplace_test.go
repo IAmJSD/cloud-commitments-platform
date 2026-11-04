@@ -9,6 +9,7 @@ import (
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	smithy "github.com/aws/smithy-go"
@@ -124,7 +125,9 @@ func marketplaceReq() *events.LambdaFunctionURLRequest {
 	}
 }
 
-func adminSession(authSvc *MockAuthService) {
+func adminSession(t *testing.T, authSvc *MockAuthService) {
+	t.Helper()
+	t.Cleanup(func() { authSvc.AssertExpectations(t) })
 	authSvc.On("ValidateSession", mock.Anything, "test-token").
 		Return(&Session{UserID: "admin", Email: "admin@test.com"}, nil)
 	authSvc.On("HasPermissionAPI", mock.Anything, "admin", auth.ActionSellAny, auth.ResourcePurchases).
@@ -139,7 +142,7 @@ func adminSession(authSvc *MockAuthService) {
 func TestMarketplaceList_ConvertibleRejected(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.OfferingClass = "convertible"
@@ -196,6 +199,7 @@ func TestMarketplaceList_SellOwnAllowed(t *testing.T) {
 
 func TestMarketplaceList_SellOwnDeniedWrongAccount(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
 
 	authSvc.On("ValidateSession", mock.Anything, "test-token").
@@ -223,8 +227,9 @@ func TestMarketplaceList_SellOwnDeniedWrongAccount(t *testing.T) {
 
 func TestMarketplaceList_DuplicateActiveListing409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.ListingState = config.ListingStateActive
@@ -244,8 +249,9 @@ func TestMarketplaceList_DuplicateActiveListing409(t *testing.T) {
 
 func TestMarketplaceList_AWSClientFaultMapsTo400(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -269,13 +275,14 @@ func TestMarketplaceList_AWSClientFaultMapsTo400(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
-	assert.Contains(t, err.Error(), "bad RI")
+	assert.Contains(t, err.Error(), marketplaceRejectedMessage)
 }
 
 func TestMarketplaceList_AWSServerFaultMapsTo502(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -303,8 +310,9 @@ func TestMarketplaceList_AWSServerFaultMapsTo502(t *testing.T) {
 
 func TestMarketplaceList_UnknownErrorMapsTo502(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -331,7 +339,7 @@ func TestMarketplaceList_UnknownErrorMapsTo502(t *testing.T) {
 func TestMarketplaceList_DBFailureCompensatingRollback(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -368,7 +376,7 @@ func TestMarketplaceList_DBFailureAndCancelFailureKeepsListing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
 			authSvc := &MockAuthService{}
-			adminSession(authSvc)
+			adminSession(t, authSvc)
 			cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 				Return(standardRow(), nil)
 			cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -392,7 +400,7 @@ func TestMarketplaceList_DBFailureAndCancelFailureKeepsListing(t *testing.T) {
 			assert.Equal(t, 502, ce.code)
 			assert.NotContains(t, ce.message, "rolled back")
 			assert.Contains(t, ce.message, "ril-default")
-			assert.Contains(t, ce.message, "throttled")
+			assert.Contains(t, ce.message, purchase.ErrCategoryMessage(purchase.ErrCategoryUnknown))
 			assert.Contains(t, ce.message, tc.wantMsg)
 			assert.Equal(t, 1, ec2.cancelCallCount)
 			cfgStore.AssertNotCalled(t, "ReleaseMarketplaceListingClaim", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything, mock.Anything)
@@ -417,7 +425,7 @@ func TestMarketplaceList_CancelFailureRecordsNonActiveStateAsPending(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
 			authSvc := &MockAuthService{}
-			adminSession(authSvc)
+			adminSession(t, authSvc)
 			cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 				Return(standardRow(), nil)
 			cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -456,7 +464,7 @@ func TestMarketplaceList_CancelFailureAfterRequestContextCanceledStillRecords(t 
 	ctx, cancel := context.WithCancel(context.Background())
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
 	cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
@@ -515,7 +523,7 @@ func TestMarketplaceList_DefaultScheduleProrationMath(t *testing.T) {
 func TestMarketplaceCancel_HappyPath(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.ListingState = config.ListingStateActive
@@ -539,8 +547,9 @@ func TestMarketplaceCancel_HappyPath(t *testing.T) {
 
 func TestMarketplaceCancel_NoActiveListing409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
+	t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow() // ListingState empty -> not active
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
@@ -564,7 +573,7 @@ func TestMarketplaceCancel_NoActiveListing409(t *testing.T) {
 func TestMarketplaceList_ConcurrentClaimLoses409(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
@@ -591,7 +600,7 @@ func TestMarketplaceList_ConcurrentClaimLoses409(t *testing.T) {
 func TestMarketplaceList_ClaimErrorMapsToInternal(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	cfgStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).
 		Return(standardRow(), nil)
@@ -702,7 +711,7 @@ func TestResolveMarketplacePriceSchedule_TermExceedsRemainingRejected(t *testing
 func TestMarketplaceList_EmptyOfferingClassFetchedStandard(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	// Row has no offering_class (simulates pre-migration or externally-created RI).
 	row := standardRow()
@@ -740,7 +749,7 @@ func TestMarketplaceList_EmptyOfferingClassFetchedStandard(t *testing.T) {
 func TestMarketplaceList_EmptyOfferingClassFetchedConvertible(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.OfferingClass = ""
@@ -851,8 +860,9 @@ func TestMarketplaceListHTTP_UnlistableTermsReturn422(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
+			t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 			authSvc := &MockAuthService{}
-			adminSession(authSvc)
+			adminSession(t, authSvc)
 			authSvc.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			row := standardRow()
 			tc.mutate(row)
@@ -883,8 +893,9 @@ func TestMarketplaceListHTTP_ValidRIStillLists(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfgStore := &MockConfigStore{}
+			t.Cleanup(func() { cfgStore.AssertExpectations(t) })
 			authSvc := &MockAuthService{}
-			adminSession(authSvc)
+			adminSession(t, authSvc)
 			authSvc.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			row := standardRow()
 			row.Timestamp = tc.timestamp
@@ -918,7 +929,7 @@ func TestMarketplaceList_TermYearsConvertedToMonths(t *testing.T) {
 	t.Run("default schedule price reflects true remaining value", func(t *testing.T) {
 		cfgStore := &MockConfigStore{}
 		authSvc := &MockAuthService{}
-		adminSession(authSvc)
+		adminSession(t, authSvc)
 
 		row := standardRow()
 		row.Term = 3                                             // 3-year RI (stored in years)
@@ -998,7 +1009,7 @@ func TestMarketplaceList_TermYearsConvertedToMonths(t *testing.T) {
 func TestMarketplaceList_InvalidTermReturnsError(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.Term = 0 // invalid: purchase_history.term must be 1 or 3 (years)
@@ -1019,7 +1030,7 @@ func TestMarketplaceList_InvalidTermReturnsError(t *testing.T) {
 func TestMarketplaceList_ZeroTimestampReturnsError(t *testing.T) {
 	cfgStore := &MockConfigStore{}
 	authSvc := &MockAuthService{}
-	adminSession(authSvc)
+	adminSession(t, authSvc)
 
 	row := standardRow()
 	row.Timestamp = time.Time{}

@@ -44,7 +44,7 @@ func TestApplicationRateLimiter(t *testing.T) {
 		t.Run(fmt.Sprintf("lambda=%t", isLambda), func(t *testing.T) {
 			cfg := ApplicationConfig{
 				IsLambda: isLambda, DashboardURL: "https://rate-limit.example.test",
-				DefaultTerm: 3, DefaultCoverage: 80,
+				DefaultTerm: 3, DefaultCoverage: 80, TrustedProxyHops: 1,
 				// Each 401 login runs Login's timing-equalizing bcrypt
 				// compare, about 5s at cost 12 under -race. The limiter
 				// does not depend on the cost.

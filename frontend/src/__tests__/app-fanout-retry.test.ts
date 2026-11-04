@@ -27,6 +27,7 @@ jest.mock('../archera', () => ({ handleArcheraDeeplink: jest.fn(), openArcheraOf
 jest.mock('../modal', () => ({ closeModal: jest.fn() }));
 jest.mock('../recommendations', () => ({
   setupRecommendationsHandlers: jest.fn(),
+  getPurchaseModalSession: () => 1,
   getPurchaseModalRecommendations: () => [],
   clearPurchaseModalRecommendations: jest.fn(),
   getFanOutBuckets: () => (current ? current.map((b) => ({ ...b })) : null),

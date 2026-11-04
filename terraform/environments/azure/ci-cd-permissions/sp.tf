@@ -27,7 +27,7 @@ resource "azuread_service_principal" "cudly_deploy" {
 #
 # The `github_environment` entries below are what let an environment-bound job
 # authenticate at all. A job carrying `environment: staging` presents the
-# subject `repo:<org/repo>:environment:staging`, NOT the main-branch subject,
+# subject `repo:<owner>@<id>/<repo>@<id>:environment:staging`, NOT the main-branch subject,
 # so without a matching credential `azure/login` fails with AADSTS70021 even
 # though the workflow is running on main. Adding an `environment:` binding to
 # an Azure job and forgetting this is the exact breakage recorded in #1648.
@@ -35,6 +35,14 @@ resource "azuread_service_principal" "cudly_deploy" {
 # NOTE: this module is bootstrap-only (see CLAUDE.md) — it is applied manually
 # by a privileged human, not by the deploy workflow. The Azure destroy job in
 # cleanup-staging.yml cannot authenticate until that re-apply happens.
+
+# GitHub's immutable OIDC subject prefix (repo setting use_immutable_subject):
+# repo:<owner>@<owner_id>/<name>@<repo_id>. A renamed or delete-and-recreated
+# repo gets a new id, so a name squatter cannot match. Never reintroduce the
+# name-only form.
+locals {
+  github_subject_prefix = var.github_repo == "" ? "" : "repo:${split("/", var.github_repo)[0]}@${var.github_owner_id}/${split("/", var.github_repo)[1]}@${var.github_repo_id}"
+}
 
 resource "azuread_application_federated_identity_credential" "github_main" {
   count = var.github_repo != "" ? 1 : 0
@@ -44,7 +52,7 @@ resource "azuread_application_federated_identity_credential" "github_main" {
   description    = "GitHub Actions OIDC — ${var.github_repo} main branch deployments"
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_repo}:ref:refs/heads/main"
+  subject        = "${local.github_subject_prefix}:ref:refs/heads/main"
 }
 
 # No `pull_request`-subject credential: this service principal holds
@@ -74,5 +82,5 @@ resource "azuread_application_federated_identity_credential" "github_environment
   description    = "GitHub Actions OIDC — ${var.github_repo} ${each.value} environment"
   audiences      = ["api://AzureADTokenExchange"]
   issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_repo}:environment:${each.value}"
+  subject        = "${local.github_subject_prefix}:environment:${each.value}"
 }

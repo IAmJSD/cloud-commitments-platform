@@ -27,10 +27,14 @@ type STSClient interface {
 
 // ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
-	AmbientAWSCreds        aws.CredentialsProvider
-	EmailSender            email.SenderInterface
-	STSClient              STSClient
-	AssumeRoleSTS          credentials.STSClient
+	AmbientAWSCreds aws.CredentialsProvider
+	EmailSender     email.SenderInterface
+	STSClient       STSClient
+	AssumeRoleSTS   credentials.STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory      credentials.STSClientFactory
 	CredentialStore        credentials.CredentialStore
 	ProviderFactory        provider.FactoryInterface
 	ConfigStore            config.StoreInterface
@@ -42,6 +46,10 @@ type ManagerConfig struct {
 	NotificationDaysBefore int
 	DefaultCoverage        float64
 	DefaultTerm            int
+	// MaxDueRowAge caps how long after its due time the fire and process
+	// sweeps may still buy a row (issue #712); an older row is failed
+	// unbought instead. Zero means DefaultMaxDueRowAge.
+	MaxDueRowAge time.Duration
 }
 
 // Manager handles purchase workflow.
@@ -50,6 +58,7 @@ type Manager struct {
 	email           email.SenderInterface
 	stsClient       STSClient
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
 	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
@@ -59,6 +68,8 @@ type Manager struct {
 	oidcIssuerURL   string
 	notifyDays      int
 	resolver        stepResolver
+	// maxDueRowAge is ManagerConfig.MaxDueRowAge; read it via dueRowMaxAge.
+	maxDueRowAge time.Duration
 	// budgets lets tests shorten purchase deadlines. Production leaves it
 	// zero, which means the default durations below.
 	budgets purchaseBudgets
@@ -79,6 +90,10 @@ type ProcessResult struct {
 	Executed  int      `json:"executed"`
 	Failed    int      `json:"failed"`
 	Recovered int      `json:"recovered,omitempty"`
+	// Stale counts the Failed rows refused because they were due more than
+	// the due-row age cap ago (ErrDueRowTooOld, issue #712). Each one is
+	// also in Failed and Errors.
+	Stale int `json:"stale,omitempty"`
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
@@ -113,6 +128,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		email:           cfg.EmailSender,
 		stsClient:       cfg.STSClient,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
 		ambientAWSCreds: cfg.AmbientAWSCreds,
 		credStore:       cfg.CredentialStore,
 		providerFactory: factory,
@@ -126,6 +142,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		dashboardURL:  cfg.DashboardURL,
 		oidcSigner:    cfg.OIDCSigner,
 		oidcIssuerURL: cfg.OIDCIssuerURL,
+		maxDueRowAge:  cfg.MaxDueRowAge,
 	}
 }
 
@@ -189,6 +206,16 @@ func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr erro
 //
 // On a won claim it runs executeAndFinalize and returns (true, execErr).
 func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExecution) (claimed bool, err error) {
+	return m.claimAndExecuteWithin(ctx, exec, 0)
+}
+
+// claimAndExecuteWithin is claimAndExecute with a due-row age cap: when maxAge
+// is positive, a claimed row that was due more than maxAge ago is refused
+// before submission (ErrDueRowTooOld) instead of bought (issue #712). The
+// check runs on the claimed row, so a concurrent sweep that lost the claim
+// never reaches it and the row is failed and reported exactly once. Only the
+// process sweep passes a cap; the SQS execute_purchase path passes 0.
+func (m *Manager) claimAndExecuteWithin(ctx context.Context, exec *config.PurchaseExecution, maxAge time.Duration) (claimed bool, err error) {
 	gated := exec.Status == "pending" || exec.Status == "notified"
 	gateSawEmpty := len(exec.Recommendations) == 0
 	// System-initiated: SQS/cron executor passes nil so transitioned_by = NULL.
@@ -207,12 +234,25 @@ func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExec
 	// the RETURNING clause) onto the caller's struct so the rest of the run
 	// starts from the claimed row rather than the pre-claim snapshot.
 	*exec = *updated
-	if gated && len(exec.Recommendations) > 0 {
-		if capErr := m.recheckStepCap(ctx, exec); capErr != nil {
-			return true, m.failClaimedBeforeSubmission(ctx, exec, capErr)
-		}
+	if refusal := m.claimedRowRefusal(ctx, exec, gated, maxAge); refusal != nil {
+		return true, m.failClaimedBeforeSubmission(ctx, exec, refusal)
 	}
 	return true, m.executeAndFinalize(ctx, exec)
+}
+
+// claimedRowRefusal runs claimAndExecuteWithin's checks on the row its claim
+// returned: the due-row age cap when maxAge is positive, then the step cap for
+// a gated row with recommendations.
+func (m *Manager) claimedRowRefusal(ctx context.Context, exec *config.PurchaseExecution, gated bool, maxAge time.Duration) error {
+	if maxAge > 0 {
+		if refusal := dueRowAgeRefusal(exec, maxAge, time.Now()); refusal != nil {
+			return refusal
+		}
+	}
+	if gated && len(exec.Recommendations) > 0 {
+		return m.recheckStepCap(ctx, exec)
+	}
+	return nil
 }
 
 // isMultiAccountAckable reports whether a multi-account execErr should be ACKed
@@ -229,13 +269,18 @@ func isMultiAccountAckable(execErr error) bool {
 }
 
 const (
-	// The two budgets run back to back (270s), and on AWS Lambda the function
-	// timeout ends the invocation whatever these deadlines say, so the Lambda
-	// timeout must cover their sum plus a 30s margin (lambda_timeout >= 300,
-	// enforced by Terraform validation and TestLambdaTimeoutCoversPurchaseBudget,
-	// #913).
-	purchaseExecutionTimeout = 4 * time.Minute
+	// The two budgets run back to back, and for a failed or partial row the
+	// failure alert follows them with its own failureNotifyTimeout (30s), so a
+	// run can take 3m30s + 30s + 30s = 270s. On AWS Lambda the function timeout
+	// ends the invocation whatever these deadlines say, so the Lambda timeout
+	// must cover that sum plus a 30s margin (lambda_timeout >= 300, enforced by
+	// Terraform validation and TestLambdaTimeoutCoversPurchaseBudget, #913,
+	// #1434).
+	purchaseExecutionTimeout = 3*time.Minute + 30*time.Second
 	terminalSaveTimeout      = 30 * time.Second
+	// purchaseRunBudget is the longest one purchase can run end to end; the
+	// fire sweep starts a row only while this much time remains (#1582).
+	purchaseRunBudget = purchaseExecutionTimeout + terminalSaveTimeout + failureNotifyTimeout
 	// perRecPurchaseTimeout caps one recommendation's provider calls; see
 	// executeSinglePurchase.
 	perRecPurchaseTimeout = 30 * time.Second
@@ -542,6 +587,12 @@ func RedriveRefusalReason(exec *config.PurchaseExecution) string {
 	return ""
 }
 
+// Fixed refusal texts, shared with the stored-error allowlist (errnotes.go).
+const (
+	redriveReasonAWSNoGuard       = "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+	redriveReasonAzureSavingsPlan = "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+)
+
 // recRedriveRefusalReason returns the reason a single recommendation cannot be
 // safely re-driven, or "" when it can. Extracted from RedriveRefusalReason to
 // keep that function under the gocyclo budget and to make per-rec exclusions
@@ -556,7 +607,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// "purchase outcome unknown". The commitment may exist, so a second
 		// attempt must not be made until someone has checked the account.
 		if awsPurchaseHasNoDuplicateGuard(rec.Service) {
-			return "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+			return redriveReasonAWSNoGuard
 		}
 		return ""
 	case "azure":
@@ -565,7 +616,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// re-drive may create a duplicate. All other Azure services use
 		// DoIdempotentPurchaseTwoStep (#729).
 		if rec.Service == "savingsplans" || rec.Service == "savings-plans" {
-			return "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+			return redriveReasonAzureSavingsPlan
 		}
 		return ""
 	case "gcp":
@@ -938,7 +989,7 @@ func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseE
 	// otherwise both execute the same due row. claimAndExecute CASes the row
 	// to "running" and only the winner runs; a lost claim is skipped without
 	// re-executing.
-	claimed, execErr := m.claimAndExecute(ctx, &exec)
+	claimed, execErr := m.claimAndExecuteWithin(ctx, &exec, m.dueRowMaxAge())
 	if !claimed {
 		// execErr != nil here is a real DB error during the claim (count as
 		// failed); execErr == nil is a benign CAS race-loss (skip silently).
@@ -956,6 +1007,9 @@ func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseE
 	if isMultiAccountAckable(execErr) {
 		result.Executed++
 		return
+	}
+	if errors.Is(execErr, ErrDueRowTooOld) {
+		result.Stale++
 	}
 	result.Failed++
 	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))
@@ -1004,4 +1058,11 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	}
 
 	return result, nil
+}
+
+// enoughTimeFor reports whether ctx has at least budget left. A context
+// without a deadline always has enough.
+func enoughTimeFor(ctx context.Context, budget time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) >= budget
 }

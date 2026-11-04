@@ -119,13 +119,15 @@ func autoGateSessionRouter(t *testing.T, perms []auth.Permission, stored config.
 func autoGateKeyRouter(t *testing.T, keyPerms, userPerms []auth.Permission, stored config.GlobalConfig) (*Router, *mocks.MockConfigStore) {
 	t.Helper()
 	mockAuth := new(MockAuthService)
-	sets := []auth.PermissionConstraints{{StrictScope: true}}
-	keyAllowed, err := auth.PermissionsAllowForConstraintSets(keyPerms, auth.ActionUpdate, auth.ResourceConfig, sets)
-	require.NoError(t, err)
-	ownerAllowed, err := auth.PermissionsAllowForConstraintSets(userPerms, auth.ActionUpdate, auth.ResourceConfig, sets)
-	require.NoError(t, err)
-	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, autoGateKeyID, autoGateUserID,
-		auth.ActionUpdate, auth.ResourceConfig, sets).Return(keyAllowed && ownerAllowed, nil).Maybe()
+	sets := []auth.PermissionConstraints{auth.GlobalConstraints()}
+	for _, vr := range [][2]string{{auth.ActionUpdate, auth.ResourceConfig}, {auth.ActionExecute, auth.ResourceRIExchange}} {
+		keyAllowed, err := auth.PermissionsAllowForConstraintSets(keyPerms, vr[0], vr[1], sets)
+		require.NoError(t, err)
+		ownerAllowed, err := auth.PermissionsAllowForConstraintSets(userPerms, vr[0], vr[1], sets)
+		require.NoError(t, err)
+		mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, autoGateKeyID, autoGateUserID,
+			vr[0], vr[1], sets).Return(keyAllowed && ownerAllowed, nil).Maybe()
+	}
 
 	mockAuth.On("ValidateUserAPIKeyAPI", mock.Anything, autoGateAPIKey).
 		Return(&auth.UserAPIKey{ID: autoGateKeyID}, &auth.User{ID: autoGateUserID}, nil).Maybe()
@@ -369,21 +371,23 @@ func TestRIExchangeAutoModeGate_UserAPIKeyUsesKeyPermissions(t *testing.T) {
 //
 // pkg/exchange/auto.go's processRecommendation routes to processManualExchange
 // only on the literal "manual" and sends EVERY other value to
-// processAutoExchange. GlobalConfig.Validate never constrains RIExchangeMode,
-// and PUT /api/config unmarshals onto the struct wholesale -- so a mode of
-// "Auto", "automatic" or "" arms unattended execution just as effectively as
+// processAutoExchange. Both routes now refuse to WRITE such a mode (issue
+// #1196), but a row stored before that check can still hold "Auto",
+// "automatic" or "", and a partial PUT /api/config preserves it. Enabling
+// exchange on such a row arms unattended execution just as effectively as
 // "auto", while a gate written as `mode == "auto"` would wave it through.
 //
-// Only the generic route is exercised: the dedicated one's validate() restricts
-// mode to manual|auto, so this shape cannot reach it. That asymmetry is exactly
-// why the gate reads the field the scheduler reads.
+// The body therefore flips only ri_exchange_enabled and leaves the legacy mode
+// in place. That is exactly why the gate reads the field the scheduler reads.
 func TestRIExchangeAutoModeGate_NonManualModeIsArmed(t *testing.T) {
 	for _, mode := range []string{"Auto", "AUTO", "automatic", "", "enabled"} {
 		t.Run("mode="+mode, func(t *testing.T) {
-			r, store := autoGateSessionRouter(t, autoGateAdminOnly, disarmedConfig())
+			stored := disarmedConfig()
+			stored.RIExchangeMode = mode
+			r, store := autoGateSessionRouter(t, autoGateAdminOnly, stored)
 
 			_, err := r.Route(context.Background(), "PUT", genericPath,
-				autoGateTokenReq(genericBody(mode, true, 100, 500)))
+				autoGateTokenReq(`{"ri_exchange_enabled":true}`))
 
 			require.Error(t, err,
 				"mode %q is not \"manual\", so the scheduler runs it as auto; the gate must see the same", mode)

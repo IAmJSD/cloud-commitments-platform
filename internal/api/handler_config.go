@@ -68,19 +68,13 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, permErr
 	}
 
-	// Reject a malformed body before any DB work so a bad request fails fast
-	// (and never opens a transaction). Keeps the nil-store fast-fail contract.
-	if !json.Valid([]byte(req.Body)) {
-		return nil, NewClientError(400, "invalid request body")
-	}
-
-	// Presence map of the top-level keys the caller actually sent, used to
-	// replace (not merge) grace_period_days when present.
-	var present map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(req.Body), &present); err != nil {
-		return nil, NewClientError(400, "invalid request body")
+	present, parseErr := globalConfigWriteFields(req.Body)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	_, gracePresent := present["grace_period_days"]
+	modeSent := riExchangeModeSent(present)
+	providersSent := bodyHasKey(present, "enabled_providers")
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
@@ -121,8 +115,8 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
 			return NewClientError(400, "invalid request body")
 		}
-		if vErr := existing.Validate(); vErr != nil {
-			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
+		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode, providersSent); vErr != nil {
+			return vErr
 		}
 		if gErr := requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), grants.riExchange); gErr != nil {
 			return gErr
@@ -138,6 +132,67 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	return &StatusResponse{Status: "updated"}, nil
 }
 
+// globalConfigWriteFields validates the body before any DB work and returns
+// the supplied top-level fields, including explicit nulls. The write uses this
+// presence map to replace grace_period_days and validate ri_exchange_mode.
+func globalConfigWriteFields(body string) (map[string]json.RawMessage, error) {
+	if !json.Valid([]byte(body)) {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &present); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	return present, nil
+}
+
+// bodyHasKey reports whether the body carries the key under any casing, as
+// json.Unmarshal matches keys case-insensitively. An explicit null counts.
+func bodyHasKey(present map[string]json.RawMessage, name string) bool {
+	for key := range present {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
+// null does not: json.Unmarshal leaves the stored value in place for it.
+func riExchangeModeSent(present map[string]json.RawMessage) bool {
+	for key, raw := range present {
+		if strings.EqualFold(key, "ri_exchange_mode") && string(raw) != "null" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateGlobalConfigWrite validates the merged config as a 400.
+//
+// ri_exchange_mode is checked when explicitly set or changed by JSON decoding
+// (including duplicate keys followed by null), with
+// the same manual|auto rule PUT /api/ri-exchange/config applies. Checking the
+// merged value instead would refuse every partial save, including the
+// laddering kill-switch toggle, on a row stored before this check with a mode
+// such as "Auto". Such a row keeps its value until a caller sends a valid one,
+// and armed() keeps treating it as auto. Runs before the arming gates so a
+// malformed write never reveals grant state.
+func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent bool) error {
+	// Presence-based, not in Validate: a fresh install stores [] and partial
+	// saves that omit the key must keep working.
+	if providersSent && len(cfg.EnabledProviders) == 0 {
+		return NewClientError(400, "enabled_providers must list at least one provider")
+	}
+	if modeSent && !config.IsValidRIExchangeMode(cfg.RIExchangeMode) {
+		return NewClientError(400, "ri_exchange_mode must be 'manual' or 'auto'")
+	}
+	if err := cfg.Validate(); err != nil {
+		return NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+	return nil
+}
+
 // requireSwitchGrants chains the arming gates of the two money-spending
 // switches: auto-purchase, then ladder execution. purchasesGrant is the
 // pre-resolved execute:purchases outcome (armingGrants.purchases).
@@ -148,16 +203,36 @@ func requireSwitchGrants(ctx context.Context, session *Session, purchasesGrant e
 	return requireLadderExecutionSwitchGrant(ctx, session, purchasesGrant, ladderBefore, cfg)
 }
 
+const globalConfigScopeMsg = "permission denied: global configuration requires unrestricted account access"
+
 func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session) error {
+	return h.requireGlobalScope(ctx, session, auth.ActionUpdate, auth.ResourceConfig, globalConfigScopeMsg)
+}
+
+// requireGlobalScope gates a deployment-wide action for a session that already
+// holds action:resource (callers keep their own validation order by calling
+// requirePermission first). It needs an unrestricted account scope and a grant
+// with no constraints on any dimension, checked on the key and the owner for
+// user API keys. msg is the 403 text for a restricted account scope.
+func (h *Handler) requireGlobalScope(ctx context.Context, session *Session, action, resource, msg string) error {
 	scope, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return err
 	}
 	if !scope.AllowsAll() {
-		return NewClientError(403, "permission denied: global configuration requires unrestricted account access")
+		return NewClientError(403, msg)
 	}
-	return h.requirePermissionConstraints(ctx, session, auth.ActionUpdate, auth.ResourceConfig,
-		[]auth.PermissionConstraints{{StrictScope: true}})
+	return h.requirePermissionConstraints(ctx, session, action, resource,
+		[]auth.PermissionConstraints{auth.GlobalConstraints()})
+}
+
+// requireGlobalPermission is requirePermission followed by requireGlobalScope.
+func (h *Handler) requireGlobalPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource, msg string) error {
+	session, err := h.requirePermission(ctx, req, action, resource)
+	if err != nil {
+		return err
+	}
+	return h.requireGlobalScope(ctx, session, action, resource, msg)
 }
 
 // checkCommitmentOptionCombo rejects saves that carry a (term, payment)
@@ -406,6 +481,13 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
+	// created_at and updated_at are read-only row stamps (issue #8). The
+	// GET response carries them, so a client that echoes it back must not
+	// get them into the merged row; the store takes both from the database.
+	cfg.CreatedAt, cfg.UpdatedAt = nil, nil
+	// The plan-group fields (#1746) belong only to purchase plan entries; a
+	// global service setting never carries them, even on a first save.
+	cfg.GroupID, cfg.BoundIdentities, cfg.MaxStepCommitment = "", nil, nil
 
 	parts := strings.SplitN(service, "/", 2)
 	if len(parts) == 2 {

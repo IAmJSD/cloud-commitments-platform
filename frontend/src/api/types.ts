@@ -741,6 +741,9 @@ export interface ConvertibleRI {
   usage_price: number;
   state: string;
   normalization_factor: number;
+  // The AWS account the RI belongs to; absent when the API could not
+  // resolve it (issue #1692).
+  account_id?: string;
 }
 
 // ExchangeableAzureRI is one Azure VM reservation eligible for the

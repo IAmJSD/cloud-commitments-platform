@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/archera"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 )
 
 // InsuranceProvider is the Archera comparison surface. nil means not wired.
@@ -44,6 +45,13 @@ func (h *Handler) requireInsuranceAccess(ctx context.Context, req *events.Lambda
 	}
 	if !scope.AllowsAll() {
 		return errNotFound
+	}
+	if gErr := h.requirePermissionConstraints(ctx, session, auth.ActionView, auth.ResourceRecommendations,
+		[]auth.PermissionConstraints{auth.GlobalConstraints()}); gErr != nil {
+		if ce, ok := IsClientError(gErr); ok && ce.code == 403 {
+			return errNotFound
+		}
+		return gErr
 	}
 	return nil
 }

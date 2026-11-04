@@ -182,6 +182,25 @@ test('a non-conflict save error does not offer reload', async () => {
   expect(document.querySelector<HTMLButtonElement>('.ladder-event-editor [data-reload]')!.hidden).toBe(true);
 });
 
+test('the header close-X is disabled and inert while a save is pending, and re-enabled after', async () => {
+  let rejectSave!: (e: Error) => void;
+  jest.mocked(amendLadderEvent).mockReturnValue(new Promise((_, reject) => { rejectSave = reject; }));
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  document.querySelector<HTMLButtonElement>('[data-event]')!.click();
+  const closeX = document.querySelector<HTMLButtonElement>('.ladder-event-editor .modal-header .modal-close')!;
+  expect(closeX.disabled).toBe(false);
+  document.querySelector<HTMLFormElement>('.ladder-event-editor form')!.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(amendLadderEvent).toHaveBeenCalledTimes(1);
+  expect(closeX.disabled).toBe(true);
+  closeX.click();
+  expect(document.querySelector('.ladder-event-editor')).not.toBeNull();
+  rejectSave(new Error('Server error'));
+  await flush();
+  expect(closeX.disabled).toBe(false);
+  closeX.click();
+  expect(document.querySelector('.ladder-event-editor')).toBeNull();
+});
+
 test('focus returns to the edited purchase after a successful save and the canvas is not a tab stop', async () => {
   jest.mocked(amendLadderEvent).mockResolvedValue({ id: 'one', revision: 1, amount_usd_hr: '1.000000', scheduled_date: '2030-01-02T00:00:00.000Z', run_total_usd_hr: '1.000000' });
   await initLadderTimeline(document.getElementById('timeline')!, [], false);

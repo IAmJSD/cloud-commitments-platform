@@ -33,6 +33,7 @@ func newApproveManager(t *testing.T) (*Manager, *MockConfigStore, *MockEmailSend
 	prov := new(MockProvider)
 	svc := new(MockServiceClient)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, sender, prov, svc, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil).Maybe()
 	prov.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(svc, nil).Maybe()
 	svc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
@@ -454,6 +455,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
 	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 
@@ -479,6 +481,7 @@ func TestManager_ApproveExecution_ReturnsRowOnExecutionFailure(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
 	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 
@@ -1459,5 +1462,39 @@ func TestMaskActor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, maskActor(tc.in), "maskActor(%q)", tc.in)
+	}
+}
+
+// TestManager_ApproveExecution_FourEyesOn_ASCIICaseOnly pins that
+// the creator check and the approver match agree on which addresses are equal.
+func TestManager_ApproveExecution_FourEyesOn_ASCIICaseOnly(t *testing.T) {
+	cases := []struct {
+		name, creator, actor string
+		wantDenied           bool
+	}{
+		{"same address, different case and padding", "Admin@Example.com", "  admin@example.COM ", true},
+		{"non-ASCII letters are not folded", "Mus@Example.com", "mu\u017f@example.com", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			manager, store, _ := newApproveManager(t)
+			creatorID := "user-creator"
+			execution := &config.PurchaseExecution{
+				ExecutionID:     "exec-cmp",
+				PlanID:          "plan-fourEyes",
+				Status:          "pending",
+				ApprovalToken:   config.HashApprovalToken("valid-token"),
+				CreatedByUserID: &creatorID,
+			}
+			store.On("GetUserEmailByID", ctx, creatorID).Return(tc.creator, nil)
+
+			err := manager.checkDifferentApprover(ctx, "exec-cmp", execution, tc.actor, nil)
+			if tc.wantDenied {
+				require.ErrorIs(t, err, ErrFourEyesDenied)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }

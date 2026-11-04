@@ -131,18 +131,6 @@ func TestPasswordResetData(t *testing.T) {
 	assert.Equal(t, "https://dashboard.example.com/reset?token=abc123", data.ResetURL)
 }
 
-func TestWelcomeUserData(t *testing.T) {
-	data := WelcomeUserData{
-		Email:        "newuser@example.com",
-		DashboardURL: "https://dashboard.example.com",
-		Role:         "user",
-	}
-
-	assert.Equal(t, "newuser@example.com", data.Email)
-	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
-	assert.Equal(t, "user", data.Role)
-}
-
 func TestSender_SendNotification_NoTopic(t *testing.T) {
 	sender := &Sender{
 		topicARN: "",
@@ -209,11 +197,8 @@ func TestTemplates_NewRecommendations(t *testing.T) {
 		},
 	}
 
-	// Create sender with mock that expects the call
-	mockSNS := new(MockSNSClient)
-	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
-		Return(&sns.PublishOutput{MessageId: aws.String("msg-123")}, nil).Once()
-
+	// No SNS client is wired in: the send fails before publishing, which is
+	// all this test needs to reach the template rendering.
 	sender := &Sender{
 		snsClient: nil, // We'll test template rendering separately
 		topicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
@@ -325,19 +310,6 @@ func TestTemplates_PasswordReset(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestTemplates_WelcomeEmail(t *testing.T) {
-	sender := &Sender{
-		sesClient: nil,
-		fromEmail: "noreply@example.com",
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "newuser@example.com", "https://dashboard.example.com", "user")
-
-	// Will fail because sesClient is nil
-	require.Error(t, err)
-}
-
 func TestTemplateContents(t *testing.T) {
 	// Verify template constants are not empty
 	assert.NotEmpty(t, newRecommendationsTemplate)
@@ -345,7 +317,6 @@ func TestTemplateContents(t *testing.T) {
 	assert.NotEmpty(t, purchaseConfirmationTemplate)
 	assert.NotEmpty(t, purchaseFailedTemplate)
 	assert.NotEmpty(t, passwordResetTemplate)
-	assert.NotEmpty(t, welcomeUserTemplate)
 
 	// Verify templates contain expected placeholders
 	assert.Contains(t, newRecommendationsTemplate, "{{.DashboardURL}}")
@@ -364,10 +335,6 @@ func TestTemplateContents(t *testing.T) {
 
 	assert.Contains(t, passwordResetTemplate, "{{.ResetURL}}")
 	assert.Contains(t, passwordResetTemplate, "Password Reset")
-
-	assert.Contains(t, welcomeUserTemplate, "{{.Email}}")
-	assert.Contains(t, welcomeUserTemplate, "{{.Role}}")
-	assert.Contains(t, welcomeUserTemplate, "Welcome")
 }
 
 func TestSender_SendNotification_Success(t *testing.T) {
@@ -401,6 +368,7 @@ func TestSender_SendNotification_NilClient(t *testing.T) {
 
 func TestSender_SendNotification_Error(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	mockSNS.On("Publish", mock.Anything, mock.AnythingOfType("*sns.PublishInput")).
 		Return(nil, assert.AnError)
 
@@ -449,6 +417,7 @@ func TestSender_SendToEmail_NilClient(t *testing.T) {
 
 func TestSender_SendToEmail_Error(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	// GetAccount is called first - return production mode (not sandbox)
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
@@ -806,6 +775,7 @@ func TestNewSenderWithContext_Success(t *testing.T) {
 // the configured FROM_EMAIL (not a hardcoded literal).
 func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 
@@ -863,6 +833,7 @@ func TestSender_SendPurchaseApprovalRequest_Multipart_Issue287(t *testing.T) {
 // that haven't been upgraded.
 func TestSender_SendToEmailWithCCMultipart_FallsBackWhenHTMLEmpty_Issue287(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
 	var captured *sesv2.SendEmailInput

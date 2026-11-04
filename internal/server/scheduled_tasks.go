@@ -18,8 +18,8 @@ import (
 // runs with cpu_idle = true, so past that point the platform treats the
 // request as finished, throttles the instance's CPU and may scale it in, and
 // a longer bound would promise time the platform does not give. It also
-// covers the purchase manager's own detached budget (4m execution + 30s
-// terminal save). Azure Container Apps keeps CPU allocated after its ingress
+// covers the purchase manager's own detached budget (3m30s execution + 30s
+// terminal save + 30s failure alert). Azure Container Apps keeps CPU allocated after its ingress
 // gives up (240s), so the same bound applies there. Pinned against the
 // Terraform values by TestScheduledTaskTimeoutFitsCloudRunRequestTimeout.
 const scheduledTaskHTTPTimeout = 300 * time.Second

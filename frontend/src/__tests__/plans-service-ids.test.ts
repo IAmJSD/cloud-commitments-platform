@@ -44,6 +44,7 @@ jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn(() => Promise.reso
 import * as api from '../api';
 import { showToast } from '../toast';
 import { CANONICAL_PLAN_SERVICES } from '../lib/plan-service-ids';
+import { flushPromises } from './flush-promises';
 
 function loadRealIndexBody(): string {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -114,7 +115,7 @@ describe('plan modal service ids (#608)', () => {
 
     await loadPlans();
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
 
     const select = document.getElementById('plan-service') as HTMLSelectElement;
     expect((document.getElementById('plan-provider') as HTMLSelectElement).value).toBe('azure');
@@ -132,7 +133,7 @@ describe('plan modal service ids (#608)', () => {
     (api.getPlan as jest.Mock).mockResolvedValue(plan);
     await loadPlans();
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
   }
 
   test.each([
@@ -144,6 +145,21 @@ describe('plan modal service ids (#608)', () => {
     const select = document.getElementById('plan-service') as HTMLSelectElement;
     expect((document.getElementById('plan-provider') as HTMLSelectElement).value).toBe(provider);
     expect(select.selectedOptions[0]!.value).toBe(expected);
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
+  // The card shows display names (#1683); the edit flow must still select the
+  // option by slug. Before, the card's "Compute SP" label was also used as the
+  // id, so a Savings Plans plan opened with "no longer supported".
+  test.each([
+    ['aws', 'ec2'],
+    ['aws', 'rds'],
+    ['aws', 'savings-plans-compute'],
+  ])('edit flow of a saved %s plan with service %s selects its option without an error', async (provider, saved) => {
+    await editSavedPlan(provider, saved);
+
+    const select = document.getElementById('plan-service') as HTMLSelectElement;
+    expect(select.selectedOptions[0]!.value).toBe(saved);
     expect(showToast).not.toHaveBeenCalled();
   });
 

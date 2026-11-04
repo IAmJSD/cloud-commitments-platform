@@ -39,14 +39,16 @@ func TestFanOutChildQueuesBehindCommandAndIsAccepted(t *testing.T) {
 // W21: the prune DELETE rechecks the committed row after the wait. The
 // fixture ramp is finished (3 of 3): on an unfinished ramp the retention
 // trigger of migration 000124 already keeps every capacity-holding row, so
-// only the SQL predicate would be unexercised.
+// only the SQL predicate would be unexercised. The row is expired, the
+// status a lapsed approval lands in: since #120 a lapsed TTL deletes only a
+// settled row, so a pending one is no longer prunable at all.
 func TestPruneRechecksRowAfterCommandCancelsIt(t *testing.T) {
 	for _, commandWins := range []bool{true, false} {
 		name := map[bool]string{true: "command first", false: "prune first"}[commandWins]
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			f := newRampFixture(ctx, t, 0, 3, 3)
-			row := f.row(ctx, t, 2, nil, "pending")
+			row := f.row(ctx, t, 2, nil, StatusExpired)
 			_, err := f.store.db.Exec(ctx, `UPDATE purchase_executions SET expires_at = NOW() - INTERVAL '40 days' WHERE execution_id = $1`, row.ExecutionID)
 			require.NoError(t, err)
 			prune := func() error { _, pErr := f.store.CleanupOldExecutions(ctx, 30); return pErr }

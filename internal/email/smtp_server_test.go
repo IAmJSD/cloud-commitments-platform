@@ -273,28 +273,6 @@ func TestSMTPSender_SendPasswordResetEmail_WithMockServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendWelcomeEmail_WithMockServer tests welcome email.
-func TestSMTPSender_SendWelcomeEmail_WithMockServer(t *testing.T) {
-	server := newMockSMTPServer(t, false)
-	server.start(t)
-	defer server.stop()
-
-	sender := &SMTPSender{
-		host:      "127.0.0.1",
-		port:      server.port,
-		username:  "",
-		password:  "",
-		fromEmail: "noreply@cudly.io",
-		fromName:  "CUDly",
-		useTLS:    false,
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "newuser@example.com", "https://dashboard.example.com", "admin")
-
-	require.NoError(t, err)
-}
-
 // TestSMTPSender_SendNewRecommendationsNotification_WithMockServer tests recommendations email.
 func TestSMTPSender_SendNewRecommendationsNotification_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)
@@ -350,6 +328,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer(t *testing.
 		PurchaseDate:      "March 15, 2024",
 		DaysUntilPurchase: 7,
 		PlanName:          "Production Plan",
+		RecipientEmail:    "approver@example.com",
 		Recommendations: []RecommendationSummary{
 			{Service: "rds", ResourceType: "db.m5.large", Engine: "mysql", Region: "eu-west-1", Count: 5, MonthlySavings: 400.0},
 		},
@@ -359,6 +338,68 @@ func TestSMTPSender_SendScheduledPurchaseNotification_WithMockServer(t *testing.
 	err := sender.SendScheduledPurchaseNotification(ctx, data)
 
 	require.NoError(t, err)
+}
+
+// TestSMTPSender_SendScheduledPurchaseNotification_RoutesToRecipientNotNotifyInbox
+// proves the email, which embeds a live approval token, goes to
+// data.RecipientEmail (+ CC) and never to the shared notify inbox.
+func TestSMTPSender_SendScheduledPurchaseNotification_RoutesToRecipientNotNotifyInbox(t *testing.T) {
+	server := newMockSMTPServer(t, false)
+	server.start(t)
+
+	sender := &SMTPSender{
+		host:        "127.0.0.1",
+		port:        server.port,
+		fromEmail:   "notifications@cudly.io",
+		fromName:    "CUDly",
+		notifyEmail: "shared@example.com",
+	}
+
+	data := NotificationData{
+		DashboardURL:      "https://dashboard.example.com",
+		ApprovalToken:     "token-xyz",
+		PurchaseDate:      "March 15, 2024",
+		DaysUntilPurchase: 7,
+		PlanName:          "Production Plan",
+		RecipientEmail:    "approver@example.com",
+		CCEmails:          []string{"cc@example.com"},
+	}
+
+	require.NoError(t, sender.SendScheduledPurchaseNotification(context.Background(), data))
+	server.stop()
+
+	server.mu.Lock()
+	got := server.receivedMsg
+	server.mu.Unlock()
+
+	assert.Contains(t, got, "RCPT TO:<approver@example.com>")
+	assert.Contains(t, got, "RCPT TO:<cc@example.com>")
+	assert.Equal(t, 2, strings.Count(got, "RCPT TO"), "only the recipient and the cc may be addressed")
+	assert.NotContains(t, got, "shared@example.com")
+}
+
+func TestSMTPSender_SendScheduledPurchaseNotification_EmptyRecipientReturnsErrNoRecipient(t *testing.T) {
+	server := newMockSMTPServer(t, false)
+	server.start(t)
+
+	sender := &SMTPSender{
+		host:        "127.0.0.1",
+		port:        server.port,
+		fromEmail:   "notifications@cudly.io",
+		notifyEmail: "shared@example.com",
+	}
+
+	err := sender.SendScheduledPurchaseNotification(context.Background(), NotificationData{
+		DashboardURL:  "https://dashboard.example.com",
+		ApprovalToken: "token-xyz",
+		PlanName:      "Production Plan",
+	})
+	server.stop()
+
+	require.ErrorIs(t, err, ErrNoRecipient)
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Empty(t, server.receivedMsg, "no SMTP traffic expected without a recipient")
 }
 
 // TestSMTPSender_SendPurchaseConfirmation_WithMockServer tests purchase confirmation email.

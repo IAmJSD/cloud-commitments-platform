@@ -17,6 +17,7 @@ import (
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
@@ -28,10 +29,44 @@ import (
 type riExchangeClients struct {
 	listConvertibleRIs func(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
 	getRIUtilization   func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
-	exchangeClient     exchange.ExchangeClientInterface
-	lookupOffering     exchange.LookupOfferingFunc
-	accountID          string
-	region             string
+	// offeredInstanceTypes lists the region's offered EC2 instance types
+	// (DescribeInstanceTypeOfferings), which limit the reshape targets.
+	offeredInstanceTypes func(ctx context.Context) ([]string, error)
+	exchangeClient       exchange.ExchangeClientInterface
+	lookupOffering       exchange.LookupOfferingFunc
+	accountID            string
+	region               string
+}
+
+// riExchangeEC2 is the slice of the EC2 client the scheduled and ladder RI
+// exchange runs need. Satisfied by *ec2svc.Client.
+type riExchangeEC2 interface {
+	convertibleOfferingFinder
+	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	GetValidResourceTypes(ctx context.Context) ([]string, error)
+}
+
+// riUtilizationSource is the slice of the recommendations client the RI
+// exchange runs need. Satisfied by *awsprovider.RecommendationsClientAdapter.
+type riUtilizationSource interface {
+	GetRIUtilization(ctx context.Context, lookbackDays int, region string) ([]recommendations.RIUtilization, error)
+}
+
+// newRIExchangeClients wires the RI exchange dependencies for one region. Both
+// the standalone scheduled reshape and the ladder exchange runner use it, so
+// they read RIs, utilization and the instance type catalog the same way.
+func newRIExchangeClients(ec2Client riExchangeEC2, recs riUtilizationSource, exchangeClient exchange.ExchangeClientInterface, region, accountID string) riExchangeClients {
+	return riExchangeClients{
+		listConvertibleRIs: ec2Client.ListConvertibleReservedInstances,
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return recs.GetRIUtilization(ctx, lookbackDays, region)
+		},
+		offeredInstanceTypes: ec2Client.GetValidResourceTypes,
+		exchangeClient:       exchangeClient,
+		lookupOffering:       newConvertibleOfferingLookup(ec2Client),
+		accountID:            accountID,
+		region:               region,
+	}
 }
 
 // handleRIExchangeReshape runs the automated RI exchange analysis and execution.
@@ -59,20 +94,13 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 		return nil, fmt.Errorf("RI exchange reshape aborted: %w", err)
 	}
 
-	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
-	clients := riExchangeClients{
-		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
-			return ec2Client.ListConvertibleReservedInstances(ctx)
-		},
-		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
-			recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
-			return recsClient.GetRIUtilization(ctx, lookbackDays, awsCfg.Region)
-		},
-		exchangeClient: exchange.NewExchangeClient(awsCfg),
-		lookupOffering: newConvertibleOfferingLookup(ec2Client),
-		accountID:      accountID,
-		region:         awsCfg.Region,
-	}
+	clients := newRIExchangeClients(
+		awsprovider.NewEC2ClientDirect(awsCfg),
+		awsprovider.NewRecommendationsClientDirect(awsCfg),
+		exchange.NewExchangeClient(awsCfg),
+		awsCfg.Region,
+		accountID,
+	)
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
 }
@@ -153,11 +181,12 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 	store := newConfigExchangeStoreAdapter(app.Config)
 
 	result, err := exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
-		Store:          store,
-		ExchangeClient: clients.exchangeClient,
-		LookupOffering: clients.lookupOffering,
-		RIs:            riInfos,
-		Utilization:    utilInfos,
+		Store:                store,
+		ExchangeClient:       clients.exchangeClient,
+		LookupOffering:       clients.lookupOffering,
+		RIs:                  riInfos,
+		Utilization:          utilInfos,
+		OfferedInstanceTypes: api.OfferedInstanceTypes(ctx, clients.region, clients.offeredInstanceTypes),
 		Config: exchange.RIExchangeConfig{
 			Mode:                     fourEyesExchangeMode(cfg, cfg.RIExchangeMode),
 			UtilizationThreshold:     cfg.RIExchangeUtilizationThreshold,

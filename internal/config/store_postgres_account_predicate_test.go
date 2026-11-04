@@ -47,6 +47,11 @@ func TestAppendAccountPredicate_ProviderGate(t *testing.T) {
 			wantArgs: []any{[]string{"uuid-1"}, "aws", []string{"123"}, "azure", []string{"123"}},
 		},
 		{
+			name:     "providers with no ids leave conds and args unchanged",
+			ext:      map[string][]string{"aws": {}},
+			wantArgs: nil,
+		},
+		{
 			name:      "unknown-provider key has no provider gate",
 			ext:       map[string][]string{"": {"123"}},
 			wantConds: []string{"(account_id = ANY($1))"},

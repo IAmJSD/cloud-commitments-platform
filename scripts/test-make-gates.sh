@@ -13,6 +13,15 @@
 #      loop over terraform/environments/*/dev, which does not exist.
 #   4. Makefile.terraform's clean-locks refuses to delete the provider lock
 #      files without CONFIRM_CLEAN_LOCKS=yes.
+#   5. The Go targets' ./... (vet, test-unit, test-compile-integration,
+#      test-integration, test-coverage, fmt) skips frontend/node_modules
+#      (issue #177). Go's ./... used to pick up the Go source npm packages
+#      ship there (frontend/node_modules/flatted/golang) once deps were
+#      installed. Checked with the real go command and an -overlay probe, so
+#      no npm install is needed and nothing is written into the repo.
+#   6. complexity skips _test.go files, as CI's Lint Code job does, and tells
+#      a gocyclo failure apart from findings. It used to fold stderr into the
+#      findings with `2>&1 || true`, so a tool error read as complex functions.
 #
 # Tools are stubs on a PATH that holds nothing else, so the real tools are
 # never run and nothing leaves the machine. Exits 0 when all cases pass;
@@ -149,6 +158,89 @@ if [ ! -e "$lock" ]; then
 else
   note_fail "clean-locks kept the lock file despite confirmation"
 fi
+
+# 5. ./... skips frontend/node_modules (go.mod's ignore directive). A probe
+# package overlaid under frontend/node_modules must not be listed; a control
+# probe overlaid elsewhere under frontend/ must be, which proves the overlay
+# took effect and that the ignore covers node_modules only.
+probe_src="$WORK/probe.go"
+printf 'package probe\n\nfunc Probe() {}\n' > "$probe_src"
+ignored_dir="frontend/node_modules/zz-make-gates-probe"
+control_dir="frontend/zz-make-gates-control"
+printf '{"Replace":{"%s":"%s","%s":"%s"}}\n' \
+  "$REPO_ROOT/$ignored_dir/probe.go" "$probe_src" \
+  "$REPO_ROOT/$control_dir/probe.go" "$probe_src" > "$WORK/overlay.json"
+GO_BIN="$(command -v go || true)"
+if [ -z "$GO_BIN" ]; then
+  note_fail "go not found on PATH; cannot check that ./... skips node_modules"
+else
+  for tags in "" "integration"; do
+    label="go list ./...${tags:+ -tags=$tags}"
+    if ! (cd "$REPO_ROOT" && "$GO_BIN" list -e -tags="$tags" -overlay "$WORK/overlay.json" \
+          -f '{{.Dir}}' ./...) > "$WORK/pkgs.log" 2> "$WORK/out.log"; then
+      note_fail "$label failed"
+      sed 's/^/    /' "$WORK/out.log"
+      continue
+    fi
+    if grep -qxF "$REPO_ROOT/$control_dir" "$WORK/pkgs.log"; then
+      note_pass "$label lists the control probe under frontend/"
+    else
+      note_fail "$label did not list the control probe (overlay not applied?)"
+    fi
+    if grep -qF "$REPO_ROOT/frontend/node_modules/" "$WORK/pkgs.log"; then
+      note_fail "$label walks into frontend/node_modules"
+      grep -F "$REPO_ROOT/frontend/node_modules/" "$WORK/pkgs.log" | sed 's/^/    /'
+    else
+      note_pass "$label skips frontend/node_modules"
+    fi
+  done
+fi
+
+# 6. complexity. gocyclo_stub NAME STDOUT STDERR EXIT: a PATH dir whose only
+# command is a gocyclo that logs its argv to $WORK/gocyclo.log, prints STDOUT
+# and STDERR, and exits EXIT.
+gocyclo_stub() {
+  local dir="$WORK/bin-gocyclo-$1"
+  mkdir -p "$dir"
+  {
+    echo '#!/bin/sh'
+    echo "echo \"\$*\" >> '$WORK/gocyclo.log'"
+    [ -n "$2" ] && echo "echo '$2'"
+    [ -n "$3" ] && echo "echo \"$3\" >&2"
+    echo "exit $4"
+  } > "$dir/gocyclo"
+  chmod +x "$dir/gocyclo"
+  rm -f "$WORK/gocyclo.log"
+  echo "$dir"
+}
+expect_status 0 "complexity passes when gocyclo reports nothing" \
+  run_make "$(gocyclo_stub clean "" "" 0)" complexity
+if grep -qxF -- '-over 10 -ignore _test\.go|(^|/)(node_modules|vendor)/ .' "$WORK/gocyclo.log" 2>/dev/null; then
+  note_pass "complexity runs gocyclo with CI's -ignore (_test.go, node_modules, vendor)"
+else
+  note_fail "complexity does not pass CI's -ignore to gocyclo"
+  sed 's/^/    /' "$WORK/gocyclo.log" 2>/dev/null || true
+fi
+expect_status 1 "complexity fails on a reported function" \
+  run_make "$(gocyclo_stub findings "11 pkg f a.go:1:1" "" 1)" complexity
+if grep -q "Found functions with cyclomatic complexity over 10" "$WORK/out.log"; then
+  note_pass "complexity reports findings as findings"
+else
+  note_fail "complexity did not report the finding"; sed 's/^/    /' "$WORK/out.log"
+fi
+expect_status 1 "complexity fails when gocyclo errors out" \
+  run_make "$(gocyclo_stub broken "" "a.go:1:1: expected package, found EOF" 1)" complexity
+if grep -q "gocyclo failed (exit 1)" "$WORK/out.log" &&
+   ! grep -q "Found functions" "$WORK/out.log" &&
+   grep -q "expected package, found EOF" "$WORK/out.log"; then
+  note_pass "complexity reports a gocyclo error as a tool failure and shows its stderr"
+else
+  note_fail "complexity reported a gocyclo error as findings or hid it"; sed 's/^/    /' "$WORK/out.log"
+fi
+expect_status 1 "complexity fails on an unexpected gocyclo exit (2, usage)" \
+  run_make "$(gocyclo_stub usage "" "usage: gocyclo" 2)" complexity
+expect_status 1 "complexity fails when gocyclo is missing" \
+  run_make "$WORK/empty" complexity
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed"

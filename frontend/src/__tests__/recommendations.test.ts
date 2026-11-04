@@ -418,7 +418,8 @@ describe('Recommendations Module', () => {
         await loadRecommendations();
 
         expect(api.getRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ service: 'ec2' }));
-        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2)');
+        // #1683: the pushed-down service filter is named like the Service column.
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: EC2)');
 
         // A further client-side filter is counted, not named.
         (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
@@ -426,7 +427,7 @@ describe('Recommendations Module', () => {
           term: { kind: 'set', values: ['1'] },
         });
         document.querySelector<HTMLTableCellElement>('th[data-sort="service"]')?.click();
-        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2, +1 more filter)');
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: EC2, +1 more filter)');
       } finally {
         // Reload unfiltered so the pushed-down scope doesn't leak into later tests.
         (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
@@ -1437,7 +1438,7 @@ describe('Recommendations Module', () => {
       // real estate for the dollar figures they're authorising.
       expect(summary?.textContent).toMatch(/\$100\/mo/);
       expect(summary?.textContent).toMatch(/\$500 upfront/);
-      expect(summary?.textContent).toMatch(/1 cell\b/);
+      expect(summary?.textContent).toMatch(/1 row\b/);
       // Old bulk-toolbar surface is gone.
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
@@ -1468,7 +1469,7 @@ describe('Recommendations Module', () => {
       // assertion doesn't couple to that separator choice.
       expect(summary?.textContent).toMatch(/\$300\s*[–\-]\s*\$500\/mo/);
       expect(summary?.textContent).toMatch(/\$1,?100\s*[–\-]\s*\$1,?800 upfront/);
-      expect(summary?.textContent).toMatch(/2 cells\b/);
+      expect(summary?.textContent).toMatch(/2 rows\b/);
     });
 
     test('action-box summary collapses to single value when all per-cell variant ranges are identical (#281)', async () => {
@@ -1488,7 +1489,7 @@ describe('Recommendations Module', () => {
       // savingsMin==savingsMax==$400; formatSavingsRange collapses to "$400".
       expect(summary?.textContent).toMatch(/\$400\/mo/);
       expect(summary?.textContent).not.toMatch(/[–\-]\s*\$400/);
-      expect(summary?.textContent).toMatch(/2 cells\b/);
+      expect(summary?.textContent).toMatch(/2 rows\b/);
     });
 
     test('bottom action box prompts for selection when no row is selected (#273)', async () => {
@@ -1499,7 +1500,7 @@ describe('Recommendations Module', () => {
       // #273: action buttons require an explicit selection. Summary
       // prompts the user instead of advertising a default-target count
       // that would fire on misclick.
-      expect(summary?.textContent).toContain('Select cells to act on');
+      expect(summary?.textContent).toContain('Select rows to act on');
       expect(document.querySelector('.recommendations-bulk-toolbar')).toBeNull();
     });
 
@@ -1835,14 +1836,131 @@ describe('Recommendations Module', () => {
 
       expect(mockShowToast).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: 'Recommendations refresh failed: aws: cost explorer throttled',
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    // Issue #1679: in Lambda mode the refresh POST returns 202 as soon as the
+    // collection is started, so the outcome is only known once the in-flight
+    // marker clears. A failed new collection must not be reported as refreshed.
+    test('202 accepted — failure toast, not success, when the started collect failed', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: 'aws: cost explorer throttled',
+        last_collection_started_at: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — success toast only after the started collect finishes', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      let collecting = true;
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockImplementation(async () => ({
+        last_collected_at: collecting ? null : new Date().toISOString(),
+        last_collection_error: null,
+        last_collection_started_at: collecting ? new Date().toISOString() : null,
+      }));
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      // Marker still held: nothing announced and no reload yet.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
+
+      collecting = false;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed', kind: 'success' }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — explicit failure when the started collect outlasts the poll budget', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+        last_collection_started_at: new Date().toISOString(),
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(60 * 5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh is taking longer than expected; try again shortly',
           kind: 'error',
         }),
       );
       expect(mockShowToast).not.toHaveBeenCalledWith(
         expect.objectContaining({ message: 'Recommendations refreshed' }),
       );
-      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
     });
 
     test('dedup — concurrent stale loads fire refreshRecommendations only once', async () => {
@@ -2854,6 +2972,16 @@ describe('Bundle B: column header filter triggers', () => {
     expect(values.sort()).toEqual(['aws', 'azure']);
   });
 
+  // #1683: the Service filter lists display names but still filters on slugs.
+  test('service popover shows display names and keeps slug values', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]')?.click();
+    const items = Array.from(
+      document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
+    ).map((label) => [label.querySelector('input')?.dataset['value'], label.textContent]);
+    expect(items).toContainEqual(['ec2', 'EC2']);
+  });
+
   test('service popover includes SageMaker when the loaded rec set has it', async () => {
     const sagemakerRecs = [
       ...sampleRecs,
@@ -2900,16 +3028,74 @@ describe('Bundle B: column header filter triggers', () => {
       document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
     );
     const labels = items.map((l) => l.querySelector('span')?.textContent);
-    expect(labels.sort()).toEqual(['1 Year', '3 Years']);
+    expect(labels.sort()).toEqual(['1 yr', '3 yr']);
     // Both boxes start checked (no active filter → all included). Untick
     // "1 Year"; remaining checked = ["3"] → filter narrows to that.
-    const oneYearLabel = items.find((l) => l.textContent === '1 Year');
+    const oneYearLabel = items.find((l) => l.textContent === '1 yr');
     const cb = oneYearLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
     expect(cb?.dataset['value']).toBe('1');
     expect(cb?.checked).toBe(true);
     cb!.checked = false;
     cb!.dispatchEvent(new Event('change'));
     expect(state.setRecommendationsColumnFilter).toHaveBeenCalledWith('term', { kind: 'set', values: ['3'] });
+  });
+
+  test('a recommendation with term 0 shows a dash, not "0 yr", in the Term cell', async () => {
+    const zeroTermRecs = [
+      {
+        id: 'rec-zero-term',
+        provider: 'aws',
+        cloud_account_id: 'a3',
+        service: 'ec2',
+        resource_type: 'zero.term.type',
+        region: 'us-east-1',
+        count: 1,
+        term: 0,
+        savings: 300,
+        upfront_cost: 1200,
+      },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: zeroTermRecs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(zeroTermRecs);
+
+    await loadRecommendations();
+    const html = document.body.innerHTML;
+    expect(html).toContain('zero.term.type');
+    expect(html).not.toMatch(/0 yr/);
+    const termIdx = Array.from(document.querySelectorAll('thead th')).findIndex(
+      (th) => th.querySelector('.column-filter-btn[data-column="term"]'),
+    );
+    expect(termIdx).toBeGreaterThanOrEqual(0);
+    const row = Array.from(document.querySelectorAll('tbody tr')).find((r) => r.textContent?.includes('zero.term.type'));
+    expect(row?.children[termIdx]?.textContent).toBe('\u2014');
+  });
+
+  test.each([
+    ['mixed 0 and 3', [0, 3], /term: 3 yr(?!\s*\u2013)/],
+    ['all zero', [0, 0], /term: \u2014(?!\s*\u2013)/],
+  ])('group row term range with a missing term (%s) has no empty endpoint', async (_label, terms, expected) => {
+    const recs = terms.map((term, i) => ({
+      id: `rec-range-${i}`,
+      provider: 'aws',
+      cloud_account_id: 'a3',
+      service: 'ec2',
+      resource_type: 'range.term.type',
+      region: 'us-east-1',
+      count: 1,
+      term,
+      payment: i === 0 ? 'all-upfront' : 'no-upfront',
+      savings: 300,
+      upfront_cost: 1200,
+    }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+
+    await loadRecommendations();
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(expected);
+    expect(text).not.toMatch(/term:\s*(\u2013|$)/m);
   });
 
   test('numeric popover input validates expression on blur', async () => {
@@ -3236,11 +3422,12 @@ describe('Bundle B: column header filter triggers', () => {
 
     test('Azure SP rows (service="savingsplans") appear in the rendered table', async () => {
       await loadRecommendations();
-      // The table should contain a row with service badge "savingsplans".
+      // The row's service badge shows the display name (#1683), not the slug.
       const serviceBadges = Array.from(
         document.querySelectorAll<HTMLElement>('td .service-badge'),
       ).map((el) => el.textContent ?? '');
-      expect(serviceBadges).toContain('savingsplans');
+      expect(serviceBadges).toContain('Savings Plans');
+      expect(serviceBadges).not.toContain('savingsplans');
     });
 
     test('service popover renders All Savings Plans toggle when Azure SP + AWS SP slugs are present', async () => {
@@ -3305,6 +3492,125 @@ describe('Bundle B: column header filter triggers', () => {
       expect(values).toContain('savings-plans-compute');
       // ec2 remains in the selection.
       expect(values).toContain('ec2');
+    });
+  });
+
+  // Issue #1684: Opportunities group rows, payback card and action-bar wording.
+  describe('Issue #1684: Opportunities group rows, payback and wording', () => {
+    const base = { provider: 'aws', cloud_account_id: 'a1684', service: 'rds', resource_type: 'db.t4g.micro', engine: 'postgresql', region: 'eu-west-1', count: 1 };
+    const variants = [
+      { ...base, id: 'v1684-nu', term: 1, payment: 'no-upfront', savings: 10, upfront_cost: 0 },
+      { ...base, id: 'v1684-au', term: 1, payment: 'all-upfront', savings: 20, upfront_cost: 120 },
+    ];
+
+    async function load(recs: Array<Record<string, unknown>>, selected: string[] = []): Promise<void> {
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: recs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(selected));
+      await loadRecommendations();
+    }
+
+    const paybackText = (): string =>
+      document.querySelector('#recommendations-summary [data-kpi="payback"]')?.textContent ?? '';
+
+    test('expanded variant rows leave the group identity cells blank', async () => {
+      await load(variants);
+      const chevron = document.querySelector<HTMLButtonElement>('tr.rec-cell-summary-row .rec-cell-chevron');
+      if (chevron?.getAttribute('aria-expanded') !== 'true') chevron!.click();
+      const row = document.querySelector<HTMLTableRowElement>('tr.rec-variant-row[data-rec-id="v1684-au"]')!;
+      const cells = Array.from(row.cells).slice(1, 5).map((td) => td.textContent?.trim());
+      expect(cells).toEqual(['', '', '', '']);
+      expect(row.textContent).not.toContain('eu-west-1');
+      // The row is still named in full for assistive tech.
+      expect(row.querySelector('input[type="checkbox"]')?.getAttribute('aria-label')).toContain('db.t4g.micro (postgresql)');
+      expect(row.textContent).toContain('All Upfront');
+    });
+
+    test('collapsed group summary puts no space inside the period unit', async () => {
+      await load(variants);
+      const range = document.querySelector('tr.rec-cell-summary-row .rec-cell-range')?.textContent ?? '';
+      expect(range).toMatch(/\$20\/mo/);
+      expect(range).not.toContain('/ mo');
+    });
+
+    test('group summary skips blank resource type and region', async () => {
+      const sp = { provider: 'azure', cloud_account_id: 'sub1684', service: 'savingsplans', resource_type: '', region: '', count: 1, upfront_cost: 0 };
+      await load([
+        { ...sp, id: 'sp1684-1', term: 1, payment: 'monthly', savings: 30 },
+        { ...sp, id: 'sp1684-3', term: 3, payment: 'monthly', savings: 50 },
+      ]);
+      const identity = document.querySelector('tr.rec-cell-summary-row .rec-cell-identity')?.textContent ?? '';
+      expect(identity.trim()).toBe('2 variants');
+    });
+
+    test('payback card never shows a 0.0-month lower bound', async () => {
+      await load(variants);
+      // no-upfront has no payback; all-upfront pays back in 120 / 20 = 6 months.
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('0.0');
+    });
+
+    test('payback card shows the no-value dash when nothing is paid upfront', async () => {
+      await load(variants, ['v1684-nu']);
+      expect(paybackText()).toContain('—');
+      expect(paybackText()).not.toContain('months');
+    });
+
+    test('action bar talks about rows, not cells', async () => {
+      await load(variants);
+      expect(document.getElementById('recommendations-action-summary')?.textContent).toBe('(Select rows to act on)');
+      await load(variants, ['v1684-au']);
+      expect(document.getElementById('recommendations-action-summary')?.textContent).toMatch(/across 1 row\)$/);
+    });
+
+    // Issue #1705: the Savings Plans child rows use the same nesting rules.
+    test('Savings Plans children: a single plan keeps its type, variants of a multi-variant plan stay blank', async () => {
+      const sp = { provider: 'aws', cloud_account_id: 'a1705', region: 'us-east-1', count: 1, upfront_cost: 0 };
+      await load([
+        { ...sp, id: 'sp1705-compute', service: 'savings-plans-compute', resource_type: 'Compute SP', term: 1, payment: 'no-upfront', savings: 40 },
+        { ...sp, id: 'sp1705-ec2-1', service: 'savings-plans-ec2instance', resource_type: '', term: 1, payment: 'no-upfront', savings: 30 },
+        { ...sp, id: 'sp1705-ec2-3', service: 'savings-plans-ec2instance', resource_type: '', term: 3, payment: 'no-upfront', savings: 50 },
+      ]);
+      const spChevron = document.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
+      if (spChevron?.getAttribute('aria-expanded') !== 'true') spChevron!.click();
+
+      // The single-plan child is not a variant: it keeps its resource type.
+      const single = document.querySelector<HTMLTableRowElement>('tr.recommendation-row[data-rec-id="sp1705-compute"]')!;
+      expect(single.textContent).toContain('Compute SP');
+
+      // The multi-variant child's summary skips its blank resource type.
+      const childSummary = document.querySelector<HTMLTableRowElement>('tr.rec-sp-group-child')!;
+      expect(childSummary.querySelector('.rec-cell-identity')?.textContent?.trim()).toBe('us-east-1 \u2014 2 variants');
+
+      const childChevron = childSummary.querySelector<HTMLButtonElement>('.rec-cell-chevron')!;
+      if (childChevron.getAttribute('aria-expanded') !== 'true') childChevron.click();
+      const variant = document.querySelector<HTMLTableRowElement>('tr.rec-variant-row[data-rec-id="sp1705-ec2-3"]')!;
+      expect(Array.from(variant.cells).slice(1, 5).map((td) => td.textContent?.trim())).toEqual(['', '', '', '']);
+      expect(variant.textContent).not.toContain('us-east-1');
+    });
+
+    test('payback card treats a lower bound that rounds to 0.0 as no payback', async () => {
+      const tiny = { ...base, resource_type: 'db.r6g.large' };
+      // Best end: 1 / 100 = 0.01 months, which rounds to "0.0"; worst end: 600 / 100 = 6 months.
+      await load([
+        { ...tiny, id: 'v1705-tiny', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 1 },
+        { ...tiny, id: 'v1705-full', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('0.0 \u2013');
+    });
+
+    test('payback card treats a negative lower bound as no payback', async () => {
+      const credit = { ...base, resource_type: 'db.r6g.xlarge' };
+      // A negative upfront (a credit) gives -1 / 100 = -0.01 months, which rounds to "-0.0".
+      await load([
+        { ...credit, id: 'v1705-credit', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: -1 },
+        { ...credit, id: 'v1705-paid', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('-0.0');
     });
   });
 
@@ -3484,7 +3790,7 @@ describe('Bundle B: sticky bottom action box', () => {
     expect(planBtn.hasAttribute('title')).toBe(false);
     expect(planBtn.getAttribute('aria-describedby')).toBe('recommendations-action-disabled-hint');
     expect(hint.hidden).toBe(false);
-    expect(hint.textContent).toContain('Select at least one cell to enable');
+    expect(hint.textContent).toContain('Select at least one row to enable');
     expect(hint.getAttribute('aria-live')).toBe('polite');
 
     // Selection populated → buttons enabled, label shows the selection
@@ -6376,32 +6682,43 @@ describe('Column visibility (issue #318)', () => {
   // --- loadColumnVisibility ---
 
   describe('loadColumnVisibility', () => {
-    test('returns empty set when localStorage key is absent', () => {
+    // Nothing saved (or an unreadable entry): the default hidden set, which
+    // keeps Monthly Savings in view at a 1440px window.
+    const DEFAULTS = ['capacity', 'effective_savings_pct', 'monthly_cost', 'on_demand_monthly', 'usage_history'];
+
+    test('returns the default hidden columns when localStorage key is absent', () => {
       // Default mock: getItem returns null
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set on JSON parse error', () => {
+    test('returns the default hidden columns on JSON parse error', () => {
       localStorageMock.getItem.mockReturnValue('{not valid json}');
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when schemaVersion is wrong', () => {
+    test('returns the default hidden columns when schemaVersion is wrong', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 99, hidden: ['count'] }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
     });
 
-    test('returns empty set when hidden is not an array', () => {
+    test('returns the default hidden columns when hidden is not an array', () => {
       localStorageMock.getItem.mockReturnValue(
         JSON.stringify({ schemaVersion: 1, hidden: 'count' }),
       );
       const result = loadColumnVisibility();
-      expect(result.size).toBe(0);
+      expect([...result].sort()).toEqual(DEFAULTS);
+    });
+
+    test('a saved "show every column" choice beats the defaults', () => {
+      localStorageMock.getItem.mockReturnValue(
+        JSON.stringify({ schemaVersion: 1, hidden: [] }),
+      );
+      expect(loadColumnVisibility().size).toBe(0);
     });
 
     test('returns the correct hidden set for valid JSON', () => {
@@ -7623,6 +7940,40 @@ describe('Issue #483: popover stays open while user scrolls its contents', () =>
     const scrollEvt = new Event('scroll', { bubbles: true });
     document.body.dispatchEvent(scrollEvt);
     expect(document.querySelector('.column-filter-popover')).toBeNull();
+  });
+
+  test('a commit that re-renders the table keeps the new trigger expanded', async () => {
+    await loadRecommendations();
+    const oldTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    oldTrigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover')!;
+    const box = popover.querySelector<HTMLInputElement>('input[data-value="t3.medium"]')!;
+    box.checked = false;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+    const newTrigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    expect(newTrigger).not.toBe(oldTrigger);
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(newTrigger.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  test('a scroll while the trigger stays on screen keeps the popover open and re-anchors it', async () => {
+    // Clicking a funnel at the table scroller's clipped edge scrolls the
+    // table (and the mirrored strip a frame later); those scroll events
+    // must not close the popover the click just opened.
+    await loadRecommendations();
+    const trigger = document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="resource_type"]')!;
+    let left = 400;
+    trigger.getBoundingClientRect = () => ({
+      left, top: 300, width: 24, height: 24, right: left + 24, bottom: 324, x: left, y: 300, toJSON: () => ({}),
+    }) as DOMRect;
+    trigger.click();
+    const popover = document.querySelector<HTMLElement>('.column-filter-popover');
+    expect(popover).not.toBeNull();
+    expect(popover!.style.left).toBe('400px');
+    left = 250;
+    document.body.dispatchEvent(new Event('scroll', { bubbles: true }));
+    expect(document.querySelector('.column-filter-popover')).toBe(popover);
+    expect(popover!.style.left).toBe('250px');
   });
 });
 

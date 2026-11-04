@@ -27,6 +27,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -51,6 +52,13 @@ type SchedulerConfig struct { //nolint:revive // exported: doc comment style int
 	OIDCSigner      oidc.Signer
 	AssumeRoleSTS   credentials.STSClient
 	STSClient       STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory credentials.STSClientFactory
+	// AmbientAWSCreds are the host credentials. Only a bastion that is the
+	// host account itself (role_arn with no role ARN) uses them.
+	AmbientAWSCreds aws.CredentialsProvider
 	DashboardURL    string
 	OIDCIssuerURL   string
 	IsLambda        bool
@@ -88,6 +96,8 @@ type Scheduler struct {
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
+	ambientAWSCreds aws.CredentialsProvider
 	config          config.StoreInterface
 	dashboardURL    string
 	oidcIssuerURL   string
@@ -118,6 +128,8 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		oidcSigner:      cfg.OIDCSigner,
 		oidcIssuerURL:   cfg.OIDCIssuerURL,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
+		ambientAWSCreds: cfg.AmbientAWSCreds,
 		stsClient:       cfg.STSClient,
 		isLambda:        cfg.IsLambda,
 		cacheTTL:        cacheTTLFromEnv(),
@@ -191,6 +203,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	// Get global config
 	globalCfg, err := s.config.GetGlobalConfig(ctx)
 	if err != nil {
+		s.recordCollectionStoppedBestEffort(collectionStoppedLoadingSettings, err)
 		return nil, err
 	}
 
@@ -226,6 +239,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	// most 3 providers.
 	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, partial, err := s.collectAllProviders(ctx, globalCfg)
 	if err != nil {
+		s.recordCollectionStoppedBestEffort(collectionStoppedIncomplete, err)
 		return nil, err
 	}
 
@@ -358,7 +372,7 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		}
 		if out.err != nil {
 			logging.Errorf("Failed to collect %s recommendations: %v", providerName, out.err)
-			failedProviders[providerName] = out.err.Error()
+			_, failedProviders[providerName] = purchase.SummarizeFailure(out.err)
 			continue
 		}
 		successfulProviders = append(successfulProviders, providerName)
@@ -421,15 +435,20 @@ func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerT
 // recorded in recommendations_state so the frontend banner renders while
 // the user still sees the valid rows we managed to upsert.
 //
-// UpsertRecommendations also resets last_collection_partial, so a complete
-// collection clears the previous run's partial marker; a non-nil partial
-// re-records it straight after (issue #87). The two writes mirror the
-// existing error-column pattern and are not atomic: if the second write
-// fails, the run is logged and reads as complete until the next collection.
+// The rows and last_collection_partial commit in one transaction: a complete
+// collection clears the previous run's marker, a non-nil partial replaces it
+// (issue #87). A failed marker write rolls the rows back too, so the Azure
+// pricing hold cannot be lost while the held rows stay.
+//
+// After a successful write it prunes the rows of (provider, account) pairs
+// that have not collected for CUDLY_STALE_RECOMMENDATION_RETENTION_DAYS
+// (default 30), best-effort, so a removed provider or a disabled account
+// stops showing instead of staying forever (issue #120). A failed write skips
+// the prune.
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string, partial *config.RecommendationsCollectionPartial) {
-	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
+	if err := s.upsertWithMarker(ctx, recs, successfulCollects, partial); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
-		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
+		if setErr := s.config.SetRecommendationsCollectionError(ctx, collectionStoppedSaving); setErr != nil {
 			logging.Errorf("Failed to record write error: %v", setErr)
 		}
 		return
@@ -441,11 +460,40 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 		}
 	}
 
-	if partial != nil {
-		if err := s.config.SetRecommendationsCollectionPartial(ctx, partial); err != nil {
-			logging.Errorf("Failed to record partial collection: %v", err)
-		}
+	s.pruneStaleRecommendationsBestEffort(ctx)
+}
+
+// Messages recorded when a collection ends before persistCollection runs. They
+// are shown to users as the refresh outcome, so they carry no internal detail;
+// the cause is logged.
+const (
+	collectionStoppedLoadingSettings = "recommendations collection stopped before saving: could not load settings"
+	collectionStoppedIncomplete      = "recommendations collection stopped before saving: it was canceled or ran out of time"
+	collectionStoppedSaving          = "recommendations collection stopped before saving: could not save the collected recommendations"
+)
+
+// recordCollectionStoppedBestEffort records why a collection ended without
+// persisting, before the deferred marker clear runs (#1679). Without it the
+// in-flight marker clears with the previous run's (usually empty) error and a
+// refresh that collected nothing reads as a success. It uses its own context
+// because the run's context may already be done.
+func (s *Scheduler) recordCollectionStoppedBestEffort(msg string, cause error) {
+	logging.Errorf("Recommendations collection stopped before saving: %v", cause)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.config.SetRecommendationsCollectionError(ctx, msg); err != nil {
+		logging.Errorf("Failed to record collection error: %v", err)
 	}
+}
+
+// upsertWithMarker writes the rows and the collection's partial marker in one
+// transaction. Both store methods merge the previous Azure pricing hold under
+// the state row lock, so a complete collection (nil partial) keeps it too.
+func (s *Scheduler) upsertWithMarker(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, partial *config.RecommendationsCollectionPartial) error {
+	if partial == nil {
+		return s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects)
+	}
+	return s.config.UpsertRecommendationsWithPartial(ctx, time.Now().UTC(), recs, successfulCollects, partial)
 }
 
 // joinProviderErrors formats a "provider: err; provider: err" string for
@@ -547,7 +595,7 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		// in those cases.
 		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -658,7 +706,7 @@ func fanOutPerAccount(
 			} else {
 				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			}
-			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
+			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount().withHeld(acct.ID))
 			mu.Unlock()
 			return nil
 		})
@@ -847,7 +895,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &acct, s.credStore, s.assumeRoleSTS, s.awsResolveOptions())
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
@@ -857,6 +905,18 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
+}
+
+// awsResolveOptions returns the resolver options for per-account AWS
+// collection: the config-store bastion lookup and bastion STS factory, plus
+// the host credentials for a bastion that is the host account itself.
+func (s *Scheduler) awsResolveOptions() credentials.AWSResolveOptions {
+	return credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(s.config),
+		STSClientFactory: s.bastionSTS,
+		AmbientProvider:  s.ambientAWSCreds,
+		AmbientSTS:       s.stsClient,
+	}
 }
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,
@@ -886,7 +946,7 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -961,7 +1021,7 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -1082,11 +1142,15 @@ func tolerateIncompleteSweep(providerName string, err error) (*sweepGap, error) 
 	if partial == nil {
 		return tolerateSkippedRecommendations(providerName, err)
 	}
+	skipped := 0
+	if sk := partial.Skips(); sk != nil {
+		skipped = sk.SkippedCount()
+	}
 	logging.Warnf(
-		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did, "+
-			"and holding back stale-row eviction so the un-queried subscriptions' previous rows survive)",
+		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s; %d recommendation(s) skipped "+
+			"(keeping the %d that did, and holding back stale-row eviction so the un-queried subscriptions' previous rows survive)",
 		providerName, partial.Succeeded, partial.Attempted,
-		strings.Join(partial.FailedSubscriptionIDs(), ", "), partial.Succeeded)
+		strings.Join(partial.FailedSubscriptionIDs(), ", "), skipped, partial.Succeeded)
 	return gapFromPartialSubscriptions(partial), nil
 }
 
@@ -1220,18 +1284,19 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 
 	recs, err = s.applySuppressions(ctx, recs)
 	if err != nil {
-		// A suppression read failure shouldn't block the recs list —
-		// the user-facing cost of that is an empty page; we'd rather
-		// over-show than under-show. Log and continue.
-		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)
+		// Fail closed (issue #111). Suppressions are the duplicate-purchase
+		// guard: without them a just-bought commitment shows at its full
+		// pre-purchase count with no "recently purchased" badge, inviting
+		// the same purchase a second time. A failed page is the safe side.
+		return nil, fmt.Errorf("apply suppressions: %w", err)
 	}
 
 	recs, err = s.applyAccountOverrides(ctx, recs)
 	if err != nil {
-		// Same over-show-vs-under-show trade-off as applySuppressions.
-		// A missing global ServiceConfig or override-table read failure
-		// should leave the user looking at un-overridden recs, not a
-		// blank page. Issue #196.
+		// Overrides are a display filter, not a spend guard, so they keep
+		// the over-show trade-off: a missing global ServiceConfig or an
+		// override-table read failure leaves the user looking at
+		// un-overridden recs, not a blank page. Issue #196.
 		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
 	}
 
@@ -1270,9 +1335,10 @@ func (s *Scheduler) finishCacheRead(ctx context.Context, freshness *config.Recom
 }
 
 // ListRecommendationsStrict is ListRecommendations for the money path: the
-// same stored rows, suppressions and account overrides, but a suppression or
-// override read failure is returned instead of logged. Over-showing is fine
-// for a page; on a purchase it would re-buy what a prior step already bought.
+// same stored rows, suppressions and account overrides, but an override read
+// failure is returned instead of logged (a suppression read failure fails
+// both). Over-showing an override-hidden rec is fine for a page; on a
+// purchase it would buy what the operator excluded.
 // It has no cold-start or background-refresh side effects: an empty cache
 // reads as empty and the caller retries on a later tick.
 func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
@@ -1298,6 +1364,8 @@ func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config
 // Suppressions are still applied: a rec whose remaining count has been
 // suppressed to zero is treated as gone (returns nil, nil, nil) so the caller
 // can render a 404 rather than a "hidden" banner for actively-dismissed recs.
+// A suppression read failure is returned (issue #111) rather than serving the
+// rec at its un-suppressed count.
 //
 // hiddenBy is non-nil (one or more reason strings) when the rec exists and
 // passes the suppression check, but would be dropped by the account-override
@@ -1319,8 +1387,8 @@ func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *
 	// the caller's perspective (the suppression is intentional user action).
 	recs, err = s.applySuppressions(ctx, recs)
 	if err != nil {
-		// Over-show: on suppression read failure treat the rec as un-suppressed.
-		logging.Errorf("GetRecommendationByID: suppression check failed; treating rec as un-suppressed: %v", err)
+		// Fail closed, as ListRecommendations does (issue #111).
+		return nil, nil, fmt.Errorf("GetRecommendationByID: suppression check: %w", err)
 	}
 	if len(recs) == 0 {
 		return nil, nil, nil
@@ -1412,10 +1480,14 @@ func (a *suppressionAgg) add(sup *config.PurchaseSuppression) {
 // SuppressionExpiresAt / PrimarySuppressionExecutionID fields that
 // drive the "recently purchased" badge on the frontend. Recs whose
 // remaining count hits 0 are dropped entirely.
+//
+// A read failure returns no recs alongside the error, so a caller that
+// dropped the error would still show nothing rather than the un-suppressed
+// list (issue #111).
 func (s *Scheduler) applySuppressions(ctx context.Context, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
 	sups, err := s.config.ListActiveSuppressions(ctx)
 	if err != nil {
-		return recs, err
+		return nil, err
 	}
 	if len(sups) == 0 {
 		return recs, nil

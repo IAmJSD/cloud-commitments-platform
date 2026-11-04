@@ -99,7 +99,7 @@ export const SAVINGS_PLANS_BUCKET_KEY = 'savings-plans';
 
 // Pretty short label per SP plan type used inside the mixed-bucket
 // label (e.g. "Savings Plans (Compute + SageMaker)"). Mirrors the
-// abbreviations in plans.ts:planServiceLabel without coupling to it.
+// compact names in lib/service-labels.ts:serviceLabel without coupling to it.
 const SP_SHORT_LABEL: Record<string, string> = {
   'savings-plans-compute':     'Compute',
   'savings-plans-ec2instance': 'EC2 Instance',

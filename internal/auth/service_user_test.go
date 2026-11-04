@@ -256,10 +256,10 @@ func TestService_CreateUser(t *testing.T) {
 		require.NotNil(t, captured)
 
 		// Invited users land inactive and only flip to active after they
-		// set their password through the welcome-link flow.
+		// set their password through the invite-link flow.
 		assert.False(t, captured.Active)
 
-		// A setup token must be stored so the welcome-link flow can find
+		// A setup token must be stored so the invite-link flow can find
 		// the user; the placeholder hash must not be empty so the
 		// password_hash NOT NULL constraint is satisfied and no client
 		// input can match it.

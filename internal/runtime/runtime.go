@@ -7,14 +7,22 @@ import "os"
 
 // IsLambda reports whether the current process is running inside an
 // AWS Lambda execution environment. Detection is based on
-// AWS_LAMBDA_RUNTIME_API, which the Lambda runtime always sets; it's
-// absent on container images, local dev runs, and the long-running
-// server deploys (Cloud Run / Container Apps).
+// AWS_LAMBDA_RUNTIME_API, which the Lambda service sets for every
+// function, zip or container image alike (the runtime interface client
+// in a Lambda container image needs it). It is absent on non-Lambda
+// deployments: local dev runs and the long-running servers (Fargate,
+// Cloud Run, Container Apps).
 //
-// Callers that need to gate non-Lambda-only behavior (e.g.
-// background goroutines for stale-while-revalidate) should use this
-// helper rather than reading the env var directly so the detection
-// rule stays consistent across call sites.
+// The flag answers one question only: is the process frozen between
+// invocations, so that background goroutines (e.g. the
+// stale-while-revalidate refresh) cannot be relied on to finish? It
+// says nothing about whether the deployment runs a single instance or
+// many, so do not use it to decide whether process-local state is
+// shared across requests.
+//
+// Callers asking the freeze question should use this helper rather
+// than reading the env var directly so the detection rule stays
+// consistent across call sites.
 func IsLambda() bool {
 	return os.Getenv("AWS_LAMBDA_RUNTIME_API") != ""
 }

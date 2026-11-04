@@ -65,11 +65,6 @@ func (n *NopSender) SendPasswordResetEmail(_ context.Context, _, _ string) error
 	return nil
 }
 
-func (n *NopSender) SendWelcomeEmail(_ context.Context, _, _, role string) error {
-	logging.Debugf("email/nop: SendWelcomeEmail suppressed (role=%q)", role)
-	return nil
-}
-
 func (n *NopSender) SendUserInviteEmail(_ context.Context, _, _ string) error {
 	logging.Debugf("email/nop: SendUserInviteEmail suppressed")
 	return nil

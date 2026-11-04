@@ -15,7 +15,7 @@
 
 locals {
   # Keyed by server task name. `job` is the CronJob name suffix. Default-on
-  # tasks match the other platforms; fire_scheduled_purchases,
+  # tasks match the other platforms, including fire_scheduled_purchases;
   # process_scheduled_purchases, send_notifications and cleanup are opt-in
   # (default off, as decided for #712). ri_exchange_reshape (as on Container
   # Apps, Cloud Run and Fargate) and ladder_run (as on Fargate and Lambda) are

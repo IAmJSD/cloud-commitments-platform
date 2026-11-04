@@ -90,11 +90,13 @@ func TestGetAPIKeyEffectivePermissionsAPI_FailsClosed(t *testing.T) {
 	}{
 		{name: "key lookup error", store: func(t *testing.T) *MockStore {
 			s := new(MockStore)
+			t.Cleanup(func() { s.AssertExpectations(t) })
 			s.On("GetAPIKeyByID", mock.Anything, effKeyID).Return((*UserAPIKey)(nil), errors.New("db down"))
 			return s
 		}},
 		{name: "key not found", store: func(t *testing.T) *MockStore {
 			s := new(MockStore)
+			t.Cleanup(func() { s.AssertExpectations(t) })
 			s.On("GetAPIKeyByID", mock.Anything, effKeyID).Return((*UserAPIKey)(nil), nil)
 			return s
 		}},
@@ -125,6 +127,7 @@ func TestGetAPIKeyEffectivePermissionsAPI_FailsClosed(t *testing.T) {
 		}},
 		{name: "owner group lookup error", store: func(t *testing.T) *MockStore {
 			s := new(MockStore)
+			t.Cleanup(func() { s.AssertExpectations(t) })
 			s.On("GetAPIKeyByID", mock.Anything, effKeyID).Return(effKey(view), nil)
 			s.On("GetUserByID", mock.Anything, effOwnerID).Return(effOwner(), nil)
 			s.On("GetGroup", mock.Anything, effGroupID).Return((*Group)(nil), errors.New("db down"))

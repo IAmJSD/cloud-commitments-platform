@@ -133,6 +133,7 @@ func TestGroupOnlyAuthz_LookupErrorDenies(t *testing.T) {
 func TestCreateUser_RejectsZeroGroups(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	svc := createTestService(mockStore, mockEmail)
 
@@ -154,6 +155,7 @@ func TestCreateUser_RejectsZeroGroups(t *testing.T) {
 func TestUpdateUser_RejectsZeroGroups(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	svc := createTestService(mockStore, mockEmail)
 

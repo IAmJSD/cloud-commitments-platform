@@ -303,6 +303,7 @@ func TestUpsertLadderConfig_OutOfScopeAccountRefused(t *testing.T) {
 func TestUpsertLadderConfig_InScopeAccountStillAllowed(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore := ladderScopedHandler(t)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("UpsertLadderConfig", mock.Anything, mock.AnythingOfType("*config.LadderConfigDB")).
 		Return(&config.LadderConfigDB{ID: "written-row", CloudAccountID: scopedInAccount}, nil)
 
@@ -319,6 +320,7 @@ func TestUpsertLadderConfig_InScopeAccountStillAllowed(t *testing.T) {
 func TestUpsertLadderConfig_UnrestrictedSessionUnaffected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore := scopedHandler(t) // no accounts => grantAdmin => unrestricted
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetCloudAccount", mock.Anything, scopedOutAccount).
 		Return(&config.CloudAccount{ID: scopedOutAccount, Name: "victim-account", Provider: "aws"}, nil)
 	mockStore.On("GetLadderConfig", mock.Anything, mock.Anything, mock.Anything).Return((*config.LadderConfigDB)(nil), nil)

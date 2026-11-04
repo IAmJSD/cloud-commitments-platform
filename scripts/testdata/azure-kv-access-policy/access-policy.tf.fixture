@@ -1,7 +1,7 @@
 # Fixture: the #1621 anti-pattern verbatim. Must exit 1.
 #
 # This is the exact shape that shipped in
-# terraform/modules/compute/azure/cleanup-function/main.tf and
+# terraform/modules/compute/azure/cleanup-function/main.tf (since deleted) and
 # terraform/modules/compute/azure/aks/main.tf: an access policy declared against
 # a vault that has enable_rbac_authorization = true, which Azure accepts and
 # then ignores.

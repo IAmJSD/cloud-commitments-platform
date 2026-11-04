@@ -164,6 +164,51 @@ func TestExecuteLadderRun_ExpiringCoverageIsOnDemandEquivalent(t *testing.T) {
 	assert.InDelta(t, 3.0, store.savedRun.TotalHourlyCommit, 1e-9)
 }
 
+// #243: the run reports the net existing coverage Allocate sized the gap
+// against, not the gross sum. Existing 4 and expiring 2 commitment at rate 0.5
+// is 8 OD gross, 4 OD net; target 10 - existing 4 = gap 6 must reconcile in
+// ladder_runs and in the plan JSON the approval email is built from, on an
+// allocating run and on a hold-only run alike.
+func TestExecuteLadderRun_ReportsNetExistingCoverage(t *testing.T) {
+	cases := []struct {
+		name     string
+		baseline pkgladder.UsageBaseline
+		wantGap  bool
+	}{
+		{"allocating run", testBaselineLowWater(12.5), true},
+		{"baseline-unavailable hold", pkgladder.UsageBaseline{LookbackDays: 30, Percentile: 5}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &ladderTestStore{}
+			cap := &fakeLadderCapability{t: t, baseline: tc.baseline,
+				rates: map[pkgladder.LayerType]float64{pkgladder.LayerConvertibleRI: 0.5, pkgladder.LayerEC2InstanceSP: 0.5},
+				layerStates: map[pkgladder.LayerType]pkgladder.LayerState{
+					pkgladder.LayerConvertibleRI: {Layer: pkgladder.LayerConvertibleRI, ExistingUSDPerHour: f64(0), ExpiringUSDPerHour: f64(0)},
+					pkgladder.LayerEC2InstanceSP: spState(f64(4), f64(2)),
+				}}
+			require.NoError(t, runWithRates(t, store, cap))
+
+			run := store.savedRun
+			require.NotNil(t, run)
+			require.NotNil(t, run.ExistingUSDHr)
+			assert.InDelta(t, 4.0, *run.ExistingUSDHr, 1e-9, "existing_usd_hr is net of expiring, not the gross 8")
+
+			var dto ladderPlanJSONDTO
+			require.NoError(t, json.Unmarshal(run.Plan, &dto))
+			require.NotNil(t, dto.ExistingUSDHr)
+			assert.InDelta(t, 4.0, *dto.ExistingUSDHr, 1e-9, "plan JSON existing is the net figure")
+			if !tc.wantGap {
+				assert.Nil(t, run.GapUSDHr)
+				return
+			}
+			require.NotNil(t, run.GapUSDHr)
+			require.NotNil(t, run.TargetUSDHr)
+			assert.InDelta(t, *run.TargetUSDHr-*run.ExistingUSDHr, *run.GapUSDHr, 1e-9, "gap reconciles with target - existing")
+		})
+	}
+}
+
 // Existing or expiring commitment on a layer with no rate cannot be
 // converted. Every such layer is reported, in layer order, with no partial
 // conversion for Allocate; layers that hold nothing still need no rate.

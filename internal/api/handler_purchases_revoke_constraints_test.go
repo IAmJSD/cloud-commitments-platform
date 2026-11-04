@@ -303,7 +303,9 @@ func TestRevokePurchase_ConstrainedGrantNeverReachesAzure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	r := armReservationRecord()
 	acct := "acct-uuid"
 	r.CloudAccountID = &acct
@@ -339,7 +341,9 @@ func TestRevokePurchase_ConstrainedGrantNeverCancelsScheduledExecution(t *testin
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: revokeConstraintsUser, Email: "u@example.com"}, nil)
 	mockAuth.grantPermissionsScoped([]auth.Permission{
 		revokePerm(auth.ActionRevokeAny, &auth.PermissionConstraints{Regions: []string{"eastus"}}),

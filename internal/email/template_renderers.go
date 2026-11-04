@@ -75,25 +75,6 @@ func RenderPasswordResetEmailHTML(email, resetURL string) (string, error) {
 	})
 }
 
-// RenderWelcomeEmail renders the plain-text welcome email template.
-func RenderWelcomeEmail(email, dashboardURL, role string) (string, error) {
-	return renderTextTemplate("welcome", welcomeUserTemplate, WelcomeUserData{
-		Email:        email,
-		DashboardURL: dashboardURL,
-		Role:         role,
-	})
-}
-
-// RenderWelcomeEmailHTML renders the HTML half of the welcome email.
-// Issue #355.
-func RenderWelcomeEmailHTML(email, dashboardURL, role string) (string, error) {
-	return renderTemplate("welcome-html", welcomeUserHTMLTemplate, WelcomeUserData{
-		Email:        email,
-		DashboardURL: dashboardURL,
-		Role:         role,
-	})
-}
-
 // RenderUserInviteEmail renders the plain-text user-invite email template.
 func RenderUserInviteEmail(email, setupURL string) (string, error) {
 	return renderTextTemplate("user-invite", userInviteTemplate, UserInviteData{

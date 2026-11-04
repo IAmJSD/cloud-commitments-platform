@@ -90,7 +90,7 @@ func (h *Handler) requireLadderConfigArmGrant(ctx context.Context, req *events.L
 	if !ladderConfigArmEscalates(before, after) {
 		return nil
 	}
-	if err := h.requireAutoPurchaseGrant(ctx, req, session); err != nil {
+	if err := h.requireAutoPurchaseGrantFor(ctx, req, session, []string{after.CloudAccountID}, []string{after.Provider}, nil); err != nil {
 		return err
 	}
 	var oldCap *float64

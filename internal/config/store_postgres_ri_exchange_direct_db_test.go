@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,16 +149,15 @@ func TestPostgresStoreDB_RIExchangeDirectExecution(t *testing.T) {
 			 WHERE id = $1 AND status = 'submitted'`, rec.ID)
 		require.NoError(t, err)
 		require.EqualValues(t, 1, tag.RowsAffected())
+		holderPID := testhelpers.BackendPID(ctx, t, tx)
 
 		done := make(chan error, 1)
 		go func() {
 			done <- store.FinalizeRIExchangeDirectExecution(ctx, rec.ID, RIExchangeDirectOutcome{Status: RIExchangeDirectStatusFailed, Error: "second"})
 		}()
-		select {
-		case err := <-done:
+		if err, answered := testhelpers.AwaitBlockedBy(ctx, t, conn.Pool(), holderPID, done); answered {
 			_ = tx.Rollback(ctx)
 			t.Fatalf("the second finalize answered (%v) while the first was uncommitted; it must contend for the row", err)
-		case <-time.After(300 * time.Millisecond):
 		}
 		require.NoError(t, tx.Commit(ctx))
 

@@ -397,7 +397,7 @@ variable "additional_env_vars" {
 }
 
 variable "enable_scheduled_tasks" {
-  description = "Enable scheduled tasks (Logic Apps on Container Apps; on AKS, the collect_recommendations CronJob)"
+  description = "Enable scheduled tasks (on Container Apps, the master switch for every Logic App workflow; on AKS, the collect_recommendations CronJob)"
   type        = bool
   default     = true
 }
@@ -413,6 +413,106 @@ variable "recommendation_schedule" {
   EOT
   type        = string
   default     = "0 2 * * *" # Daily at 02:00 UTC
+}
+
+# Scheduled server sweeps (#712). Passed to Container Apps and AKS; on
+# Container Apps each runs only when enable_scheduled_tasks is true. Schedules
+# are 5-field cron in UTC; Container Apps accepts only the shapes listed in
+# its module's variables.tf.
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Schedule the reap_stuck_purchases sweep (backstop for purchases stuck in approved/running, #678)."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "Cron schedule for reap_stuck_purchases. Keep it more frequent than PURCHASE_APPROVED_REAP_AFTER (default 10m)."
+  type        = string
+  default     = "*/5 * * * *"
+}
+
+variable "enable_analytics_collect_schedule" {
+  description = "Schedule the analytics_collect task (savings snapshot, partition maintenance, retention, view refresh)."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "Cron schedule for analytics_collect."
+  type        = string
+  default     = "0 4 * * *"
+}
+
+variable "enable_fire_scheduled_purchases_schedule" {
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
+  type        = bool
+  default     = true
+}
+
+variable "fire_scheduled_purchases_schedule" {
+  description = "Cron schedule for fire_scheduled_purchases."
+  type        = string
+  default     = "*/15 * * * *"
+}
+
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Schedule the process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "Cron schedule for process_scheduled_purchases."
+  type        = string
+  default     = "0 * * * *"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Schedule the send_notifications sweep. Opt-in: default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "Cron schedule for send_notifications."
+  type        = string
+  default     = "0 8 * * *"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Schedule the finalize_revocations sweep (idempotent audit repair of revoked purchases, plus the RI Marketplace listing poll, which has no schedule of its own: disabling this also stops recording listing sales and proceeds)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "Cron schedule for finalize_revocations."
+  type        = string
+  default     = "30 * * * *"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Schedule the server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first. AKS only: Container Apps runs cleanup daily at 03:00 UTC whenever enable_scheduled_tasks is true, as before #712."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "Cron schedule for cleanup."
+  type        = string
+  default     = "0 3 * * *"
+}
+
+variable "enable_ladder_run_schedule" {
+  description = "Schedule the ladder_run task (commitment-ladder planning run) on AKS. Opt-in: default false until laddering is promoted to GA, as on AWS."
+  type        = bool
+  default     = false
+}
+
+variable "ladder_run_schedule" {
+  description = "Cron schedule for ladder_run on AKS."
+  type        = string
+  default     = "0 2 * * *"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -611,5 +711,16 @@ variable "alert_emails" {
       trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
     ])
     error_message = "alert_emails must be a comma-separated list of email addresses."
+  }
+}
+
+variable "trusted_proxy_hops" {
+  description = "Number of trusted proxies that append to X-Forwarded-For before the app (CUDLY_TRUSTED_PROXY_HOPS). 1 = one appending proxy (Container Apps ingress, AKS ingress-nginx). 0 ignores X-Forwarded-For and keys on the peer address. 2 is safe only when the origin admits CDN traffic only; never set it while the origin is directly reachable."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.trusted_proxy_hops >= 0 && var.trusted_proxy_hops <= 8 && floor(var.trusted_proxy_hops) == var.trusted_proxy_hops
+    error_message = "trusted_proxy_hops must be an integer between 0 and 8."
   }
 }

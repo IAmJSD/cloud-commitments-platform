@@ -16,45 +16,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Cloud account UUIDs for the RI utilization cache tests (issue #120).
+const (
+	riUtilAccountA = "12000000-0000-4000-8000-00000000000a"
+	riUtilAccountB = "12000000-0000-4000-8000-00000000000b"
+)
+
+// usEast30 is the cache key most tests read and write.
+var usEast30 = config.RIUtilizationCacheKey{CloudAccountID: riUtilAccountA, Region: "us-east-1", LookbackDays: 30}
+
 // fakeRIUtilCacheStore is a minimal in-test implementation of
-// riUtilizationCacheStore. Keyed by (region, lookbackDays); stores the
-// raw JSON payload + fetched_at so the cache layer exercises the same
-// marshaling path as the real Postgres store.
+// riUtilizationCacheStore. Keyed by the full (account, region, lookback)
+// key like the real table; stores the raw JSON payload + fetched_at so the
+// cache layer exercises the same marshaling path as the real Postgres store.
 type fakeRIUtilCacheStore struct {
 	getErr  error
-	entries map[string]config.RIUtilizationCacheEntry
+	entries map[config.RIUtilizationCacheKey]config.RIUtilizationCacheEntry
 	mu      sync.Mutex
 }
 
 func newFakeRIUtilCacheStore() *fakeRIUtilCacheStore {
-	return &fakeRIUtilCacheStore{entries: map[string]config.RIUtilizationCacheEntry{}}
+	return &fakeRIUtilCacheStore{entries: map[config.RIUtilizationCacheKey]config.RIUtilizationCacheEntry{}}
 }
 
-func (f *fakeRIUtilCacheStore) key(region string, lookbackDays int) string {
-	return region + "#" + time.Duration(lookbackDays).String()
-}
-
-func (f *fakeRIUtilCacheStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
+func (f *fakeRIUtilCacheStore) GetRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey) (*config.RIUtilizationCacheEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	e, ok := f.entries[f.key(region, lookbackDays)]
+	e, ok := f.entries[key]
 	if !ok {
 		return nil, nil
 	}
 	return &e, nil
 }
 
-func (f *fakeRIUtilCacheStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
+func (f *fakeRIUtilCacheStore) UpsertRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.entries[f.key(region, lookbackDays)] = config.RIUtilizationCacheEntry{
-		Region:       region,
-		LookbackDays: lookbackDays,
-		Payload:      payload,
-		FetchedAt:    fetchedAt,
+	f.entries[key] = config.RIUtilizationCacheEntry{
+		CloudAccountID: key.CloudAccountID,
+		Region:         key.Region,
+		LookbackDays:   key.LookbackDays,
+		Payload:        payload,
+		FetchedAt:      fetchedAt,
 	}
 	return nil
 }
@@ -62,28 +68,19 @@ func (f *fakeRIUtilCacheStore) UpsertRIUtilizationCache(ctx context.Context, reg
 // seedStale writes a cache row with fetchedAt set in the past so the
 // caller can control exactly how "stale" the row is relative to soft
 // / hard TTLs.
-//
-//nolint:unparam // test helper: region fixed by design across current callers
-func (f *fakeRIUtilCacheStore) seedStale(t *testing.T, region string, lookbackDays int, data []recommendations.RIUtilization, age time.Duration) {
+func (f *fakeRIUtilCacheStore) seedStale(t *testing.T, key config.RIUtilizationCacheKey, data []recommendations.RIUtilization, age time.Duration) {
 	t.Helper()
 	payload, err := json.Marshal(data)
 	if err != nil {
 		t.Fatalf("seedStale marshal: %v", err)
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.entries[f.key(region, lookbackDays)] = config.RIUtilizationCacheEntry{
-		Region:       region,
-		LookbackDays: lookbackDays,
-		Payload:      payload,
-		FetchedAt:    time.Now().Add(-age),
-	}
+	require.NoError(t, f.UpsertRIUtilizationCache(context.Background(), key, payload, time.Now().Add(-age)))
 }
 
-func (f *fakeRIUtilCacheStore) latest(region string, lookbackDays int) ([]recommendations.RIUtilization, bool) {
+func (f *fakeRIUtilCacheStore) latest(key config.RIUtilizationCacheKey) ([]recommendations.RIUtilization, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	e, ok := f.entries[f.key(region, lookbackDays)]
+	e, ok := f.entries[key]
 	if !ok {
 		return nil, false
 	}
@@ -103,7 +100,7 @@ func TestRIUtilizationCache_HitReturnsCachedData(t *testing.T) {
 		return fetched, nil
 	}
 
-	got, err := c.getOrFetch(context.Background(), "us-east-1", 30, 10*time.Second, 30*time.Second, fetch)
+	got, err := c.getOrFetch(context.Background(), usEast30, 10*time.Second, 30*time.Second, fetch)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -115,7 +112,7 @@ func TestRIUtilizationCache_HitReturnsCachedData(t *testing.T) {
 	}
 
 	// Second call within soft TTL: cache hit, fetcher NOT invoked.
-	_, err = c.getOrFetch(context.Background(), "us-east-1", 30, 10*time.Second, 30*time.Second, fetch)
+	_, err = c.getOrFetch(context.Background(), usEast30, 10*time.Second, 30*time.Second, fetch)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -133,7 +130,7 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
 	// Seed a row whose age is between the soft TTL (50ms) and hard TTL (1h).
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, usEast30, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, false) // non-Lambda
 
@@ -150,7 +147,7 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	}
 
 	got := getOrFetchWithin(t, 10*time.Second, func() ([]recommendations.RIUtilization, error) {
-		return c.getOrFetch(context.Background(), "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+		return c.getOrFetch(context.Background(), usEast30, 50*time.Millisecond, time.Hour, fetch)
 	}, "getOrFetch waited for the fetcher; SWR must return the stale copy synchronously")
 	if len(got) != 1 || got[0].ReservedInstanceID != "ri-stale" {
 		t.Fatalf("expected stale copy, got %+v", got)
@@ -164,7 +161,7 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	releaseFetch()
 
 	require.Eventually(t, func() bool {
-		latest, ok := store.latest("us-east-1", 30)
+		latest, ok := store.latest(usEast30)
 		return ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh"
 	}, 10*time.Second, time.Millisecond, "background refresh did not update the stored row")
 }
@@ -197,7 +194,7 @@ func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
 	store := newFakeRIUtilCacheStore()
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, usEast30, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, true) // Lambda mode
 
@@ -205,7 +202,7 @@ func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
 		return freshData, nil
 	}
 
-	got, err := c.getOrFetch(context.Background(), "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+	got, err := c.getOrFetch(context.Background(), usEast30, 50*time.Millisecond, time.Hour, fetch)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +217,7 @@ func TestRIUtilizationCache_HardExpirySyncRefetch(t *testing.T) {
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
 	// Age (2h) exceeds both soft (15m) and hard (1h).
-	store.seedStale(t, "us-east-1", 30, staleData, 2*time.Hour)
+	store.seedStale(t, usEast30, staleData, 2*time.Hour)
 
 	c := newRIUtilizationCache(store, false) // non-Lambda, but hard-expired
 
@@ -228,7 +225,7 @@ func TestRIUtilizationCache_HardExpirySyncRefetch(t *testing.T) {
 		return freshData, nil
 	}
 
-	got, err := c.getOrFetch(context.Background(), "us-east-1", 30, 15*time.Minute, time.Hour, fetch)
+	got, err := c.getOrFetch(context.Background(), usEast30, 15*time.Minute, time.Hour, fetch)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -242,7 +239,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	store := newFakeRIUtilCacheStore()
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
-	store.seedStale(t, "us-east-1", 30, staleData, 100*time.Millisecond)
+	store.seedStale(t, usEast30, staleData, 100*time.Millisecond)
 
 	c := newRIUtilizationCache(store, false)
 
@@ -268,7 +265,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := c.getOrFetch(context.Background(), "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+			_, err := c.getOrFetch(context.Background(), usEast30, 50*time.Millisecond, time.Hour, fetch)
 			if err != nil {
 				t.Errorf("getOrFetch: %v", err)
 			}
@@ -295,7 +292,7 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// store the fresh row and every refresh goroutine to return.
 	releaseFetch()
 	require.Eventually(t, func() bool {
-		latest, ok := store.latest("us-east-1", 30)
+		latest, ok := store.latest(usEast30)
 		return ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh" &&
 			len(mark.Started("riUtilizationCache).kickBackgroundRefresh")) == 0
 	}, 10*time.Second, time.Millisecond, "the collapsed refresh did not store the fresh row and return")
@@ -321,13 +318,13 @@ func TestRIUtilizationCache_FetchErrorNotCached(t *testing.T) {
 		return nil, sentinel
 	}
 
-	_, err := c.getOrFetch(context.Background(), "us-east-1", 30, time.Hour, time.Hour, fetch)
+	_, err := c.getOrFetch(context.Background(), usEast30, time.Hour, time.Hour, fetch)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected sentinel error; got %v", err)
 	}
 	// Retry should hit the fetcher again — we don't want to cache
 	// failures and lock the dashboard out for the full TTL window.
-	_, err = c.getOrFetch(context.Background(), "us-east-1", 30, time.Hour, time.Hour, fetch)
+	_, err = c.getOrFetch(context.Background(), usEast30, time.Hour, time.Hour, fetch)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("second call: expected sentinel error; got %v", err)
 	}
@@ -341,12 +338,7 @@ func TestRIUtilizationCache_FetchErrorNotCached(t *testing.T) {
 
 func TestRIUtilizationCache_CorruptPayloadFallsThrough(t *testing.T) {
 	store := newFakeRIUtilCacheStore()
-	store.entries[store.key("us-east-1", 30)] = config.RIUtilizationCacheEntry{
-		Region:       "us-east-1",
-		LookbackDays: 30,
-		Payload:      []byte("not-json"),
-		FetchedAt:    time.Now(),
-	}
+	require.NoError(t, store.UpsertRIUtilizationCache(context.Background(), usEast30, []byte("not-json"), time.Now()))
 	c := newRIUtilizationCache(store, true)
 	fetched := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
 	var calls atomic.Int32
@@ -355,7 +347,7 @@ func TestRIUtilizationCache_CorruptPayloadFallsThrough(t *testing.T) {
 		return fetched, nil
 	}
 
-	got, err := c.getOrFetch(context.Background(), "us-east-1", 30, time.Hour, time.Hour, fetch)
+	got, err := c.getOrFetch(context.Background(), usEast30, time.Hour, time.Hour, fetch)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +358,7 @@ func TestRIUtilizationCache_CorruptPayloadFallsThrough(t *testing.T) {
 		t.Fatalf("got wrong data back: %+v", got)
 	}
 	// Corrupt row should have been overwritten.
-	entry := store.entries[store.key("us-east-1", 30)]
+	entry := store.entries[usEast30]
 	var round []recommendations.RIUtilization
 	if err := json.Unmarshal(entry.Payload, &round); err != nil {
 		t.Fatalf("stored payload still corrupt after upsert: %v", err)
@@ -395,4 +387,104 @@ func TestHandler_getRIUtilizationCache_FollowsHandlerLambdaMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRIUtilizationCache_AccountsInSameRegionDoNotShareRow pins issue #120:
+// the cache key carries the account, so account B's read of the same region
+// and lookback is a miss that fetches B's data instead of a hit on A's row.
+func TestRIUtilizationCache_AccountsInSameRegionDoNotShareRow(t *testing.T) {
+	store := newFakeRIUtilCacheStore()
+	c := newRIUtilizationCache(store, false)
+	keyA := usEast30
+	keyB := config.RIUtilizationCacheKey{CloudAccountID: riUtilAccountB, Region: "us-east-1", LookbackDays: 30}
+	fetchOf := func(id string, calls *atomic.Int32) riUtilizationFetcher {
+		return func(context.Context, int) ([]recommendations.RIUtilization, error) {
+			calls.Add(1)
+			return []recommendations.RIUtilization{{ReservedInstanceID: id}}, nil
+		}
+	}
+	var callsA, callsB atomic.Int32
+
+	gotA, err := c.getOrFetch(context.Background(), keyA, time.Hour, time.Hour, fetchOf("ri-a", &callsA))
+	require.NoError(t, err)
+	gotB, err := c.getOrFetch(context.Background(), keyB, time.Hour, time.Hour, fetchOf("ri-b", &callsB))
+	require.NoError(t, err)
+	gotA2, err := c.getOrFetch(context.Background(), keyA, time.Hour, time.Hour, fetchOf("ri-a", &callsA))
+	require.NoError(t, err)
+
+	require.Equal(t, "ri-a", gotA[0].ReservedInstanceID)
+	require.Equal(t, "ri-b", gotB[0].ReservedInstanceID, "account B was served account A's cached row")
+	require.Equal(t, "ri-a", gotA2[0].ReservedInstanceID)
+	require.Equal(t, int32(1), callsA.Load(), "account A's second read is a cache hit")
+	require.Equal(t, int32(1), callsB.Load(), "account B's first read is a miss")
+	require.Len(t, store.entries, 2)
+}
+
+// TestRIUtilizationCache_SingleflightKeyedByAccount pins issue #120 for the
+// background refresh: two accounts' stale rows for the same region and
+// lookback refresh concurrently, each with its own fetcher. With the old
+// region#lookback singleflight key, account B's refresh joined account A's
+// in-flight call, so B's fetcher never ran and B's row stayed stale.
+func TestRIUtilizationCache_SingleflightKeyedByAccount(t *testing.T) {
+	store := newFakeRIUtilCacheStore()
+	keyA := usEast30
+	keyB := config.RIUtilizationCacheKey{CloudAccountID: riUtilAccountB, Region: "us-east-1", LookbackDays: 30}
+	store.seedStale(t, keyA, []recommendations.RIUtilization{{ReservedInstanceID: "ri-a-stale"}}, time.Minute)
+	store.seedStale(t, keyB, []recommendations.RIUtilization{{ReservedInstanceID: "ri-b-stale"}}, time.Minute)
+	c := newRIUtilizationCache(store, false)
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseFetch)
+	var callsA, callsB atomic.Int32
+	blockingFetch := func(id string, calls *atomic.Int32) riUtilizationFetcher {
+		return func(context.Context, int) ([]recommendations.RIUtilization, error) {
+			calls.Add(1)
+			<-release
+			return []recommendations.RIUtilization{{ReservedInstanceID: id}}, nil
+		}
+	}
+
+	mark := goroutines.NewMark()
+	gotA := getOrFetchWithin(t, 5*time.Second, func() ([]recommendations.RIUtilization, error) {
+		return c.getOrFetch(context.Background(), keyA, time.Second, time.Hour, blockingFetch("ri-a-fresh", &callsA))
+	}, "account A's stale read waited for its refresh")
+	require.Equal(t, "ri-a-stale", gotA[0].ReservedInstanceID)
+	require.Eventually(t, func() bool { return callsA.Load() == 1 }, 10*time.Second, time.Millisecond,
+		"account A's background refresh never started")
+
+	// A's refresh is now in flight and blocked. B's refresh must start its
+	// own fetch rather than wait on A's.
+	gotB := getOrFetchWithin(t, 5*time.Second, func() ([]recommendations.RIUtilization, error) {
+		return c.getOrFetch(context.Background(), keyB, time.Second, time.Hour, blockingFetch("ri-b-fresh", &callsB))
+	}, "account B's stale read waited for a refresh")
+	require.Equal(t, "ri-b-stale", gotB[0].ReservedInstanceID)
+	require.Eventually(t, func() bool {
+		return callsB.Load() == 1 || len(sfDuplicatesWaiting(mark)) > 0
+	}, 10*time.Second, time.Millisecond, "account B's background refresh never reached singleflight")
+	require.Equal(t, int32(1), callsB.Load(), "account B's refresh joined account A's in-flight call")
+
+	releaseFetch()
+	require.Eventually(t, func() bool {
+		a, okA := store.latest(keyA)
+		b, okB := store.latest(keyB)
+		return okA && okB && a[0].ReservedInstanceID == "ri-a-fresh" && b[0].ReservedInstanceID == "ri-b-fresh" &&
+			len(mark.Started("riUtilizationCache).kickBackgroundRefresh")) == 0
+	}, 10*time.Second, time.Millisecond, "each account's row was not refreshed with its own data")
+}
+
+func TestRIUtilizationFlightKey_IncludesEveryKeyField(t *testing.T) {
+	base := usEast30
+	otherAccount, otherRegion, otherLookback := base, base, base
+	otherAccount.CloudAccountID = riUtilAccountB
+	otherRegion.Region = "us-west-2"
+	otherLookback.LookbackDays = 7
+	unattributed := base
+	unattributed.CloudAccountID = ""
+	keys := map[string]bool{}
+	for _, k := range []config.RIUtilizationCacheKey{base, otherAccount, otherRegion, otherLookback, unattributed} {
+		keys[riUtilizationFlightKey(k)] = true
+	}
+	require.Len(t, keys, 5)
 }

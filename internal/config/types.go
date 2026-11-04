@@ -226,6 +226,20 @@ type ServiceConfig struct {
 	// RecommendationRecord.Count. 0 (the default) disables the filter,
 	// matching the CLI flag's 0-no-floor semantics.
 	MinCount int `json:"min_count,omitempty" dynamodbav:"min_count,omitempty"`
+	// CreatedAt and UpdatedAt are the service_configs row's own timestamps
+	// (issue #8), read-only. The store fills them on every read and from the
+	// upsert's RETURNING clause; no write path stores a caller's value. Nil
+	// (omitted from JSON) on a config that is not a stored row, such as an
+	// entry of a purchase plan's services map.
+	CreatedAt *time.Time `json:"created_at,omitempty" dynamodbav:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty" dynamodbav:"updated_at,omitempty"`
+	// GroupID, BoundIdentities and MaxStepCommitment describe one config group
+	// of a bound plan (issue #1746). BoundIdentities holds RecIdentityKey values;
+	// MaxStepCommitment is the group's own per-step cap. All are empty on legacy
+	// entries and on the global and per-account service settings.
+	GroupID           string   `json:"group_id,omitempty" dynamodbav:"group_id,omitempty"`
+	BoundIdentities   []string `json:"bound_identities,omitempty" dynamodbav:"bound_identities,omitempty"`
+	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty" dynamodbav:"max_step_commitment,omitempty"`
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.
@@ -258,7 +272,18 @@ type PurchasePlan struct {
 
 type RampAllocationMode string
 
-const RampAllocationEqualCount RampAllocationMode = "equal_count"
+const (
+	RampAllocationEqualCount RampAllocationMode = "equal_count"
+	// RampAllocationBoundGroups marks a plan whose services entries are bound
+	// to selected recommendations (issue #1746). It sizes like the default
+	// mode; binaries that predate it refuse the plan (fail closed on rollback).
+	RampAllocationBoundGroups RampAllocationMode = "bound_groups"
+)
+
+// SizesByPercent reports whether the mode sizes each step by PercentPerStep.
+func (m RampAllocationMode) SizesByPercent() bool {
+	return m == "" || m == RampAllocationBoundGroups
+}
 
 // RampSchedule defines how purchases are spread over time.
 type RampSchedule struct {
@@ -905,11 +930,15 @@ type PurchasePlanFilter struct {
 // kept rows from a sweep that did not cover everything it was asked to (for
 // example 9 of 10 Azure subscriptions answered). It is cleared by the next
 // collection whose every sweep is complete.
+// NextCollectionAt is not stored: the API handler computes it from the
+// deployment's schedule (issue #756) and leaves it nil when scheduled
+// collection is off or its next run cannot be known.
 type RecommendationsFreshness struct {
 	LastCollectedAt         *time.Time                        `json:"last_collected_at"`
 	LastCollectionError     *string                           `json:"last_collection_error"`
 	LastCollectionStartedAt *time.Time                        `json:"last_collection_started_at"`
 	LastCollectionPartial   *RecommendationsCollectionPartial `json:"last_collection_partial"`
+	NextCollectionAt        *time.Time                        `json:"next_collection_at"`
 }
 
 // RecommendationsCollectionPartial records that the most recent collection
@@ -938,6 +967,11 @@ const (
 	PartialReasonNotFound            = "not_found"
 	PartialReasonProviderUnavailable = "provider_unavailable"
 	PartialReasonOther               = "other"
+	// PartialReasonPricingUnavailable marks accounts whose previous-cycle
+	// Advisor rows were kept because the Retail Prices catalog could not be
+	// reached. Those rows may carry an outdated price and must not be
+	// purchased until a good collection re-prices them.
+	PartialReasonPricingUnavailable = "pricing_unavailable"
 )
 
 // PartialProviderSweep summarizes one provider's incomplete sweeps in a
@@ -962,6 +996,12 @@ type PartialProviderSweep struct {
 	SkippedRecommendations int `json:"skipped_recommendations"`
 	// Reasons counts the failure causes by PartialReason* category.
 	Reasons map[string]int `json:"reasons"`
+	// HeldAccountIDs lists the platform cloud-account UUIDs (not cloud
+	// account numbers) whose previous-cycle rows are held through a pricing
+	// outage; the purchase path refuses their recommendations. It can contain
+	// the nil UUID (all zeros) for the ambient identity, which has no account;
+	// the API shows it only to callers with an unrestricted account scope.
+	HeldAccountIDs []string `json:"held_account_ids,omitempty"`
 }
 
 // SuccessfulCollect identifies a (provider, account) pair whose collection
@@ -981,17 +1021,30 @@ type SuccessfulCollect struct {
 	CloudAccountID *string
 }
 
+// RIUtilizationCacheKey identifies one cached Cost Explorer
+// GetReservationUtilization result. CloudAccountID is the cloud_accounts
+// UUID of the account whose credentials made the call, or "" when the
+// deployment's ambient identity is not registered in cloud_accounts. It is
+// part of the key so two accounts reading the same region never share a
+// row (issue #120).
+type RIUtilizationCacheKey struct {
+	CloudAccountID string
+	Region         string
+	LookbackDays   int
+}
+
 // RIUtilizationCacheEntry is a single cached Cost Explorer
-// GetReservationUtilization result keyed by (region, lookback_days).
+// GetReservationUtilization result keyed by RIUtilizationCacheKey.
 // Payload is the JSON encoding of the caller's utilization slice — kept
 // opaque here so the config package stays free of AWS-provider types.
 // TTL freshness is evaluated in the caller (api-layer cache wrapper)
 // based on FetchedAt vs. a caller-supplied TTL.
 type RIUtilizationCacheEntry struct {
-	Region       string
-	LookbackDays int
-	Payload      []byte
-	FetchedAt    time.Time
+	CloudAccountID string
+	Region         string
+	LookbackDays   int
+	Payload        []byte
+	FetchedAt      time.Time
 }
 
 // PurchaseHistoryFilter is the filter set consumed by
@@ -1261,6 +1314,24 @@ type MarketplaceListingSettlement struct {
 	// could not be determined; the row is then polled again.
 	ProceedsReceived *float64
 	FeePaid          *float64
+}
+
+// MarketplaceListingProceedsTotal is one RI's RI Marketplace sales summed over
+// every listing it has had (issue #1494), in one currency.
+type MarketplaceListingProceedsTotal struct {
+	// PurchaseID is the RI (reservation) id.
+	PurchaseID string
+	// Currency is the ISO code of the amounts; the poller records USD only.
+	Currency string
+	// ProceedsReceived is the seller's net proceeds and FeePaid the AWS fee,
+	// summed over the settled listings.
+	ProceedsReceived float64
+	FeePaid          float64
+	// SettledListings counts the listings whose amounts are recorded, and
+	// UnsettledListings those still without amounts (not ended yet, ended
+	// with an unknown price, or ended before the poller saw them).
+	SettledListings   int
+	UnsettledListings int
 }
 
 // AWS EC2 ReservedInstancesListing status values, mirroring the
@@ -1599,4 +1670,10 @@ type LadderTrancheDB struct {
 	AmountUSDHr   float64   `json:"amount_usd_hr"`
 	ScheduledDate time.Time `json:"scheduled_date"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// IsUSDCommitmentCurrency is the one rule for "this CommitmentCurrency is
+// USD": whitespace-trimmed and case-insensitive. Empty (unknown) is not USD.
+func IsUSDCommitmentCurrency(currency string) bool {
+	return strings.EqualFold(strings.TrimSpace(currency), "USD")
 }

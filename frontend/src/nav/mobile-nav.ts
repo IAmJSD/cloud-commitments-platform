@@ -18,6 +18,12 @@
 export const MOBILE_NAV_QUERY = '(max-width: 768px)';
 
 /**
+ * Up to this width the sidebar starts icon-only (issue #1682). Must stay in
+ * lockstep with the 1100px / 1101px blocks in styles/shell.css.
+ */
+export const SIDEBAR_ICON_QUERY = '(max-width: 1100px)';
+
+/**
  * Handle returned by setupMobileNav. open and close are the same transitions
  * the hamburger, overlay and Escape key drive, focus moves included.
  */
@@ -56,8 +62,38 @@ export function syncHeaderPlacement(isNarrow: boolean): void {
   // already in place would tear its subtree out and back in, dropping focus
   // and closing an open chip popover, so the whole pass is skipped instead.
   const misplaced = elements.some(el => el.parentElement !== target);
-  if (!misplaced) return;
-  for (const el of elements) target.appendChild(el);
+  if (misplaced) {
+    for (const el of elements) target.appendChild(el);
+  }
+  orderAccountCluster(isNarrow);
+}
+
+/**
+ * Keep the keyboard order of the account cluster equal to its visual order
+ * (WCAG 2.4.3) without CSS `order`: the drawer leads with who is signed in,
+ * the topbar ends with it (help links, divider, identity, Log out). Moves
+ * only when the order is wrong, so a settled layout keeps focus.
+ */
+function orderAccountCluster(isNarrow: boolean): void {
+  const info = document.getElementById('user-info');
+  const email = document.getElementById('user-email-display');
+  const role = document.getElementById('user-role-display');
+  const logout = document.getElementById('logout-btn');
+  if (!info || !email || !role || !logout) return;
+  if (email.parentElement !== info || role.parentElement !== info || logout.parentElement !== info) return;
+
+  const kids = Array.from(info.children);
+  const inPlace = isNarrow
+    ? kids[0] === email && kids[1] === role
+    : kids[kids.length - 1] === logout && kids[kids.length - 2] === role && kids[kids.length - 3] === email;
+  if (inPlace) return;
+
+  if (isNarrow) {
+    info.prepend(email, role);
+  } else {
+    info.insertBefore(email, logout);
+    info.insertBefore(role, logout);
+  }
 }
 
 /**

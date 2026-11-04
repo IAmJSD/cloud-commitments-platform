@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -74,22 +75,78 @@ func TestGetEnvInt(t *testing.T) {
 }
 
 func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
-	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
-	req.Header.Set("User-Agent", "TestAgent/1.0")
+	newReq := func(lines ...string) *http.Request {
+		req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
+		req.RemoteAddr = "10.0.0.9:4444"
+		for _, l := range lines {
+			req.Header.Add("X-Forwarded-For", l)
+		}
+		req.Header.Set("User-Agent", "TestAgent/1.0")
+		return req
+	}
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	convert := func(req *http.Request, hops int) *events.LambdaFunctionURLRequest {
+		lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, hops)
+		testutil.AssertNoError(t, err)
+		return lambdaReq
+	}
+	t.Run("one trusted hop takes rightmost", func(t *testing.T) {
+		lambdaReq := convert(newReq("1.2.3.4, 5.6.7.8"), 1)
+		testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
+		testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
+	})
+	t.Run("two trusted hops", func(t *testing.T) {
+		lambdaReq := convert(newReq("9.9.9.9, 1.2.3.4, 5.6.7.8"), 2)
+		testutil.AssertEqual(t, "1.2.3.4", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+	t.Run("zero hops ignores the header and strips the port", func(t *testing.T) {
+		lambdaReq := convert(newReq("6.6.6.6"), 0)
+		testutil.AssertEqual(t, "10.0.0.9", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+	t.Run("separate header lines count as one list", func(t *testing.T) {
+		// Only the configured trusted hops are honored, counted across all header lines.
+		lambdaReq := convert(newReq("6.6.6.6", "5.6.7.8"), 1)
+		testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
+		lambdaReq = convert(newReq("6.6.6.6", "5.6.7.8"), 2)
+		testutil.AssertEqual(t, "6.6.6.6", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+}
+
+func TestParseTrustedProxyHops(t *testing.T) {
+	for raw, want := range map[string]int{"": 0, "0": 0, "1": 1, "2": 2, "8": 8} {
+		got, err := parseTrustedProxyHops(raw)
+		testutil.AssertNoError(t, err)
+		testutil.AssertEqual(t, want, got)
+	}
+	for _, raw := range []string{"-1", "x", "9", "1.5", " 1", "99999999999999999999"} {
+		if _, err := parseTrustedProxyHops(raw); err == nil || !strings.Contains(err.Error(), "CUDLY_TRUSTED_PROXY_HOPS") {
+			t.Fatalf("parseTrustedProxyHops(%q): expected CUDLY_TRUSTED_PROXY_HOPS error, got %v", raw, err)
+		}
+	}
+}
+
+func TestLoadApplicationConfig_TrustedProxyHops(t *testing.T) {
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "")
+	cfg, err := LoadApplicationConfig()
 	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 0, cfg.TrustedProxyHops)
 
-	testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
-	testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "1")
+	cfg, err = LoadApplicationConfig()
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 1, cfg.TrustedProxyHops)
+
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "-1")
+	if _, err = LoadApplicationConfig(); err == nil || !strings.Contains(err.Error(), "CUDLY_TRUSTED_PROXY_HOPS") {
+		t.Fatalf("expected startup error for negative hops, got %v", err)
+	}
 }
 
 func TestHttpToLambdaRequest_NilBody(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Body = nil
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, 0)
 	testutil.AssertNoError(t, err)
 
 	testutil.AssertEqual(t, "", lambdaReq.Body)
@@ -281,9 +338,6 @@ func (n *noopEmailSender) SendPurchaseFailedNotification(ctx context.Context, da
 func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
 	return nil
 }
-func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
-	return nil
-}
 func (n *noopEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
 	return nil
 }
@@ -317,6 +371,8 @@ func TestLoadApplicationConfig(t *testing.T) {
 			"DEFAULT_PAYMENT_OPTION", "DEFAULT_COVERAGE", "DEFAULT_RAMP_SCHEDULE",
 			"API_KEY_SECRET_ARN", "ENABLE_DASHBOARD", "DASHBOARD_BUCKET",
 			"DASHBOARD_URL", "CORS_ALLOWED_ORIGIN", "AWS_LAMBDA_RUNTIME_API",
+			"RECOMMENDATION_SCHEDULE",
+			"SCHEDULED_PURCHASE_MAX_OVERDUE",
 		}
 		for _, key := range envVars {
 			testutil.SetEnv(t, key, "")
@@ -327,12 +383,15 @@ func TestLoadApplicationConfig(t *testing.T) {
 
 		testutil.AssertEqual(t, "dev", cfg.Version)
 		testutil.AssertEqual(t, 3, cfg.NotificationDaysBefore)
+		// Zero is read by the purchase manager as its 24h default cap.
+		testutil.AssertEqual(t, time.Duration(0), cfg.ScheduledPurchaseMaxOverdue)
 		testutil.AssertEqual(t, 3, cfg.DefaultTerm)
 		testutil.AssertEqual(t, "", cfg.DefaultPaymentOption)
 		testutil.AssertEqual(t, 80.0, cfg.DefaultCoverage)
 		testutil.AssertEqual(t, "", cfg.DefaultRampSchedule)
 		testutil.AssertEqual(t, false, cfg.EnableDashboard)
 		testutil.AssertEqual(t, false, cfg.IsLambda)
+		testutil.AssertEqual(t, "", cfg.RecommendationSchedule)
 	})
 
 	t.Run("custom values", func(t *testing.T) {
@@ -348,6 +407,8 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.SetEnv(t, "DASHBOARD_URL", "https://dash.example.com")
 		testutil.SetEnv(t, "CORS_ALLOWED_ORIGIN", "https://example.com")
 		testutil.SetEnv(t, "AWS_LAMBDA_RUNTIME_API", "localhost:9001")
+		testutil.SetEnv(t, "RECOMMENDATION_SCHEDULE", "cron(0 2 * * ? *)")
+		testutil.SetEnv(t, "SCHEDULED_PURCHASE_MAX_OVERDUE", "36h")
 
 		cfg, err := LoadApplicationConfig()
 		testutil.AssertNoError(t, err)
@@ -364,11 +425,13 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.AssertEqual(t, "https://dash.example.com", cfg.DashboardURL)
 		testutil.AssertEqual(t, "https://example.com", cfg.CORSAllowedOrigin)
 		testutil.AssertEqual(t, true, cfg.IsLambda)
+		testutil.AssertEqual(t, "cron(0 2 * * ? *)", cfg.RecommendationSchedule)
+		testutil.AssertEqual(t, 36*time.Hour, cfg.ScheduledPurchaseMaxOverdue)
 	})
 }
 
 func TestNewApplicationRejectsMalformedEnvDefaults(t *testing.T) {
-	for _, key := range []string{"DEFAULT_TERM", "DEFAULT_COVERAGE", "ANALYTICS_COLLECTION_ENABLED", "ANALYTICS_RETENTION_MONTHS", "ANALYTICS_PARTITIONS_AHEAD", "SQS_REPORT_BATCH_ITEM_FAILURES", "DB_HOST"} {
+	for _, key := range []string{"DEFAULT_TERM", "DEFAULT_COVERAGE", "SCHEDULED_PURCHASE_MAX_OVERDUE", "ANALYTICS_COLLECTION_ENABLED", "ANALYTICS_RETENTION_MONTHS", "ANALYTICS_PARTITIONS_AHEAD", "SQS_REPORT_BATCH_ITEM_FAILURES", "DB_HOST"} {
 		t.Setenv(key, "")
 	}
 	for _, tc := range []struct{ key, value string }{
@@ -376,6 +439,10 @@ func TestNewApplicationRejectsMalformedEnvDefaults(t *testing.T) {
 		{"DEFAULT_TERM", "999999999999999999999999999"},
 		{"DEFAULT_COVERAGE", "80%"},
 		{"DEFAULT_COVERAGE", "1e999"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "24"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "1d"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "0s"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "-1h"},
 		{"ANALYTICS_COLLECTION_ENABLED", "no"},
 		{"ANALYTICS_COLLECTION_ENABLED", "off"},
 		{"ANALYTICS_COLLECTION_ENABLED", "False "},
@@ -497,6 +564,20 @@ func TestNewApplicationFromDeps(t *testing.T) {
 		app, err := NewApplicationFromDeps(ctx, lambdaCfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertTrue(t, app.RateLimiter != nil, "Rate limiter must not be nil for Lambda (fix for issue #420: cold-start requests must be rate-limited)")
+	})
+
+	// Issue #756: the schedule reaches the API handler that serves
+	// next_collection_at on GET /api/recommendations/freshness.
+	t.Run("recommendation schedule reaches the API handler", func(t *testing.T) {
+		cfg := baseCfg
+		cfg.RecommendationSchedule = "cron(0 2 * * ? *)"
+		deps := ExternalDeps{EmailSender: &noopEmailSender{}, DBConfig: validDBConfig}
+
+		app, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertNoError(t, err)
+		next := app.API.NextCollectionAt(time.Date(2026, 10, 27, 15, 4, 5, 0, time.UTC))
+		testutil.AssertTrue(t, next != nil, "next_collection_at must be computed from the configured schedule")
+		testutil.AssertEqual(t, time.Date(2026, 10, 28, 2, 0, 0, 0, time.UTC), *next)
 	})
 
 	t.Run("nil dbConfig returns error", func(t *testing.T) {

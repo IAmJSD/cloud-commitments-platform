@@ -17,6 +17,7 @@
 import { openNewPlanModal, closePlanModal, openAddPurchasesModal } from '../plans';
 import type { ToastOptions } from '../toast';
 import * as api from '../api';
+import { flushPromises } from './flush-promises';
 
 jest.mock('../api', () => ({
   getPlans: jest.fn(),
@@ -671,7 +672,7 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     const form = document.getElementById('add-purchases-form') as HTMLFormElement;
     form.dispatchEvent(new Event('submit'));
 
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await flushPromises();
 
     expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
     const errDiv = document.getElementById('add-purchases-error');
@@ -689,7 +690,7 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     const form = document.getElementById('add-purchases-form') as HTMLFormElement;
     form.dispatchEvent(new Event('submit'));
 
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await flushPromises();
 
     expect(require('../api').createPlannedPurchases).not.toHaveBeenCalled();
   });

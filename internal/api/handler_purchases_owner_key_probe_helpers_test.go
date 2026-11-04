@@ -146,6 +146,7 @@ func TestPurchaseAuthzHelpers_APIKeyVerbProbeErrorRefuses(t *testing.T) {
 			t.Run(tc.name+"/"+failing, func(t *testing.T) {
 				boom := errors.New("key store down")
 				m := new(MockAuthService)
+				t.Cleanup(func() { m.AssertExpectations(t) })
 				if failing == tc.ownVerb {
 					m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, okpKeyID, okpOwnerID, tc.anyVerb, auth.ResourcePurchases, probe).
 						Return(false, nil)

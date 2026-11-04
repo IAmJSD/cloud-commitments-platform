@@ -26,16 +26,15 @@ var (
 	tfModuleFloor       = regexp.MustCompile(`var\.timeout\s*>=\s*(\d+)`)
 	tfRootFloor         = regexp.MustCompile(`var\.lambda_timeout\s*>=\s*(\d+)`)
 	tfvarsLambdaTimeout = regexp.MustCompile(`(?m)^\s*lambda_timeout\s*=\s*(\d+)`)
-	cfnLambdaTimeout    = regexp.MustCompile(`(?s)LambdaFunction:\s*\n\s*Type: AWS::Lambda::Function\b.*?\n\s{6}Timeout:\s*(\d+)`)
 )
 
 // AssertCovers fails t unless every AWS Lambda timeout the
 // repository ships covers budget plus Margin: the Terraform
 // module and root variable defaults and their validation floors, every
 // committed lambda_timeout tfvars value (including examples and the
-// deployment guide), and the CloudFormation function's Timeout. Lambda ends an
-// invocation at its timeout whatever a context deadline says, so detached
-// work with a longer budget would be cut off mid-flight (#913).
+// deployment guide). Lambda ends an invocation at its timeout whatever a
+// context deadline says, so detached work with a longer budget would be cut
+// off mid-flight (#913).
 //
 // repoRoot is the repository root relative to the calling test's package.
 func AssertCovers(t *testing.T, repoRoot string, budget time.Duration) {
@@ -43,8 +42,6 @@ func AssertCovers(t *testing.T, repoRoot string, budget time.Duration) {
 	c := &checker{t: t, repoRoot: repoRoot, budget: budget, need: budget + Margin}
 	c.terraformVariables()
 	c.tfvarsAndDocs()
-	c.one("cloudformation/stacks/CUDly/template.yaml LambdaFunction Timeout", cfnLambdaTimeout,
-		c.read("cloudformation/stacks/CUDly/template.yaml"))
 }
 
 // checker holds the state shared by the AssertCovers checks.

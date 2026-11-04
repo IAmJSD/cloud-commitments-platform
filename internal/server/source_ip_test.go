@@ -40,7 +40,7 @@ func TestRequestSourceIP(t *testing.T) {
 			if tc.xff != "" {
 				req.Header.Set("X-Forwarded-For", tc.xff)
 			}
-			assert.Equal(t, tc.want, requestSourceIP(req))
+			assert.Equal(t, tc.want, requestSourceIP(req, 1))
 		})
 	}
 }

@@ -192,7 +192,13 @@ test('config form uses compact aligned inputs and scrolls inside the modal on sh
   expect(fraction.x).toBeGreaterThan(coverage.x + coverage.width);
   for (const id of ['baseline-percentile', 'max-hourly']) expect((await box(id)).x).toBeCloseTo(coverage.x, 0);
   for (const id of ['buf-util-threshold', 'max-actions']) expect((await box(id)).x).toBeCloseTo(fraction.x, 0);
-  // The ramp textarea spans both columns, with its help text underneath.
+  // The ramp step editor spans both columns with compact step inputs; its
+  // JSON textarea (behind "Edit as JSON") does too, with the help text underneath.
+  const editor = (await page.locator('.ramp-editor').boundingBox())!;
+  expect(editor.x).toBeCloseTo(coverage.x, 0);
+  expect(editor.x + editor.width).toBeCloseTo(fraction.x + fraction.width, 0);
+  for (const id of ['ramp-after-0', 'ramp-share-0']) expect((await page.locator(`#ladder-${id}`).boundingBox())!.height).toBeLessThan(44);
+  await page.locator('#ladder-ramp-json-toggle').click();
   const ramp = await box('ramp-schedule');
   expect(ramp.x).toBeCloseTo(coverage.x, 0);
   expect(ramp.x + ramp.width).toBeCloseTo(fraction.x + fraction.width, 0);

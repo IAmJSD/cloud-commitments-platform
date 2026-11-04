@@ -50,6 +50,7 @@ import * as state from '../state';
 // updateUserUI mounts it.
 import { updateUserUI } from '../auth';
 import { closeModal } from '../modal';
+import { flushPromises } from './flush-promises';
 
 beforeEach(() => {
   document.body.innerHTML = `
@@ -104,7 +105,7 @@ describe('MFA enrollment flow', () => {
     expect(document.getElementById('mfa-enroll-password')).not.toBeNull();
     (document.getElementById('mfa-enroll-password') as HTMLInputElement).value = 'pw';
     document.getElementById('mfa-enroll-continue')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(api.setupMFA).toHaveBeenCalledWith('pw');
     expect(document.getElementById('mfa-qr')).not.toBeNull();
     expect(document.getElementById('mfa-secret-display')?.textContent).toMatch(/JBSW/);
@@ -122,10 +123,10 @@ describe('MFA enrollment flow', () => {
     document.getElementById('mfa-enable-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-enroll-password') as HTMLInputElement).value = 'pw';
     document.getElementById('mfa-enroll-continue')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     (document.getElementById('mfa-enroll-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-qr-verify')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(api.enableMFA).toHaveBeenCalledWith('123456');
     expect(document.body.textContent).toContain('AAAA-BBBB');
     expect(document.body.textContent).toContain('CCCC-DDDD');
@@ -140,10 +141,10 @@ describe('MFA enrollment flow', () => {
     document.getElementById('mfa-enable-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-enroll-password') as HTMLInputElement).value = 'pw';
     document.getElementById('mfa-enroll-continue')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     (document.getElementById('mfa-enroll-code') as HTMLInputElement).value = '000000';
     document.getElementById('mfa-qr-verify')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     const err = document.getElementById('mfa-flow-error');
     expect(err?.classList.contains('hidden')).toBe(false);
     // Still on the QR step (#mfa-qr-verify still present).
@@ -166,7 +167,7 @@ describe('MFA disable flow', () => {
     (document.getElementById('mfa-disable-password') as HTMLInputElement).value = 'pw';
     (document.getElementById('mfa-disable-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-disable-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(api.disableMFA).toHaveBeenCalledWith('pw', '123456');
   });
 
@@ -175,7 +176,7 @@ describe('MFA disable flow', () => {
     document.getElementById('mfa-disable-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-disable-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-disable-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(api.disableMFA).not.toHaveBeenCalled();
     expect(document.getElementById('mfa-flow-error')?.textContent).toMatch(/password/i);
   });
@@ -197,7 +198,7 @@ describe('MFA regenerate-recovery-codes flow', () => {
     document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(api.regenerateMFARecoveryCodes).toHaveBeenCalledWith('123456');
     expect(document.body.textContent).toContain('NEW1-XXXX');
   });
@@ -208,7 +209,7 @@ describe('MFA regenerate-recovery-codes flow', () => {
     document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     const modal = document.getElementById('profile-modal')!;
     modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -226,13 +227,13 @@ describe('MFA regenerate-recovery-codes flow', () => {
     document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
     document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     const modal = document.getElementById('profile-modal')!;
     const save = modal.querySelector<HTMLButtonElement>('#profile-form button[type="submit"]')!;
     expect(save.disabled).toBe(true);
     document.getElementById('profile-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
     expect(modal.classList.contains('hidden')).toBe(false);
     closeModal(modal);
     expect(modal.classList.contains('hidden')).toBe(false);
@@ -250,7 +251,6 @@ describe('MFA panels are styled by classes, not inline styles (issue #745)', () 
   const click = (id: string): void => {
     document.getElementById(id)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   };
-  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10));
   const inlineStyled = (): number => document.querySelectorAll('#profile-modal [style]').length;
 
   test('enrollment steps use .mfa-panel, .mfa-secret, .code-input and .recovery-codes', async () => {
@@ -268,7 +268,7 @@ describe('MFA panels are styled by classes, not inline styles (issue #745)', () 
 
     (document.getElementById('mfa-enroll-password') as HTMLInputElement).value = 'pw';
     click('mfa-enroll-continue');
-    await tick();
+    await flushPromises();
     expect(document.getElementById('mfa-qr')?.classList.contains('mfa-qr')).toBe(true);
     expect(document.querySelector('.mfa-secret #mfa-secret-display')).not.toBeNull();
     expect(document.getElementById('mfa-enroll-code')?.classList.contains('code-input')).toBe(true);
@@ -276,7 +276,7 @@ describe('MFA panels are styled by classes, not inline styles (issue #745)', () 
 
     (document.getElementById('mfa-enroll-code') as HTMLInputElement).value = '123456';
     click('mfa-qr-verify');
-    await tick();
+    await flushPromises();
     expect(document.querySelector('#mfa-flow-host .mfa-panel.mfa-panel-emphasis')).not.toBeNull();
     expect(document.querySelectorAll('ul.recovery-codes li')).toHaveLength(2);
     expect(inlineStyled()).toBe(0);

@@ -777,6 +777,14 @@ locals {
       # Connector does not emit Entra OIDC tokens). Validated app-side via
       # internal/server/scheduledauth.
       { name = "SCHEDULED_TASK_AUTH_MODE", value = "bearer", secret_ref = null },
+      # The collect_recommendations CronJob schedule (UTC, scheduled-tasks.tf),
+      # so GET /api/recommendations/freshness can report the next run
+      # (next_collection_at, #756). Empty when that CronJob is not created.
+      {
+        name       = "RECOMMENDATION_SCHEDULE"
+        value      = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
+        secret_ref = null
+      },
     ],
     [for k, v in local.archera_env : { name = k, value = v, secret_ref = null }],
     [for k, v in var.additional_env_vars : { name = k, value = v, secret_ref = null }],

@@ -30,11 +30,12 @@ func zonalRecRecord(t *testing.T, az string) config.RecommendationRecord {
 	}
 }
 
-func managerServing(sc provider.ServiceClient) *Manager {
+func managerServing(t *testing.T, sc provider.ServiceClient) *Manager {
 	prov := new(MockProvider)
 	prov.On("GetServiceClient", mock.Anything, mock.Anything, "us-east-1").Return(sc, nil)
 	factory := new(MockProviderFactory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil)
+	assertMocksOnCleanup(t, prov, factory)
 	return &Manager{providerFactory: factory}
 }
 
@@ -42,12 +43,13 @@ func managerServing(sc provider.ServiceClient) *Manager {
 // (persisted blob -> decode -> PurchaseCommitment).
 func TestExecuteSinglePurchase_ZonalRecKeepsAvailabilityZone(t *testing.T) {
 	sc := new(MockServiceClient)
+	assertMocksOnCleanup(t, sc)
 	var got common.Recommendation
 	sc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(common.Recommendation) }).
 		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-1"}, nil)
 
-	_, err := managerServing(sc).executeSinglePurchase(context.Background(), zonalRecRecord(t, "us-east-1b"), nil, common.PurchaseOptions{ExecutionID: "exec-az"})
+	_, err := managerServing(t, sc).executeSinglePurchase(context.Background(), zonalRecRecord(t, "us-east-1b"), nil, common.PurchaseOptions{ExecutionID: "exec-az"})
 	require.NoError(t, err)
 
 	d, ok := got.Details.(*common.ComputeDetails)
@@ -79,7 +81,7 @@ func TestExecuteSinglePurchase_StaleZonalRowWithoutAZFailsClosed(t *testing.T) {
 	c := ec2svc.NewClient(awsConfigForTest())
 	c.SetEC2API(api)
 
-	_, err := managerServing(c).executeSinglePurchase(context.Background(), zonalRecRecord(t, ""), nil, common.PurchaseOptions{ExecutionID: "exec-stale"})
+	_, err := managerServing(t, c).executeSinglePurchase(context.Background(), zonalRecRecord(t, ""), nil, common.PurchaseOptions{ExecutionID: "exec-stale"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "re-fetch")
 	assert.Zero(t, api.purchases, "no purchase call")

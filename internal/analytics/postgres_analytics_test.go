@@ -510,10 +510,11 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		month := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage",
+			"total_commitment", "total_usage", "snapshot_count",
 		}).
-			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), 720).
-			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "elasticache", 800.0, f64ptr(75.0), 720)
+			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), f64ptr(720.0), f64ptr(600.0), 720).
+			AddRow(month, "account-123", strPtr("cloud-1"), "aws", "elasticache", 800.0, f64ptr(75.0), nil, nil, 720)
 
 		mock.ExpectQuery(`SELECT month, account_id`).
 			WithArgs(6, []string{"account-123"}).
@@ -524,6 +525,12 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		assert.Len(t, summaries, 2)
 		assert.Equal(t, "rds", summaries[0].Service)
 		assert.Equal(t, 1500.0, summaries[0].TotalSavings)
+		require.NotNil(t, summaries[0].TotalCommitment)
+		assert.Equal(t, 720.0, *summaries[0].TotalCommitment)
+		require.NotNil(t, summaries[0].TotalUsage)
+		assert.Equal(t, 600.0, *summaries[0].TotalUsage)
+		assert.Nil(t, summaries[1].TotalCommitment, "NULL stays unknown")
+		assert.Nil(t, summaries[1].TotalUsage, "NULL stays unknown")
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -552,7 +559,8 @@ func TestQueryMonthlyTotals(t *testing.T) {
 		store := newTestableStore(mock)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage",
+			"total_commitment", "total_usage", "snapshot_count",
 		})
 
 		mock.ExpectQuery(`SELECT month, account_id`).
@@ -995,6 +1003,23 @@ func TestMonthlySummary(t *testing.T) {
 		assert.Equal(t, summary.Provider, unmarshaled.Provider)
 		assert.InDelta(t, summary.TotalSavings, unmarshaled.TotalSavings, 0.001)
 	})
+
+	// Issue #30: an unknown commitment or usage is omitted (never 0) and a
+	// known 0 is sent as 0.
+	t.Run("json keeps unknown commitment and usage distinct from zero", func(t *testing.T) {
+		unknown, err := json.Marshal(MonthlySummary{Provider: "aws"})
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(unknown, &fields))
+		assert.NotContains(t, fields, "total_commitment")
+		assert.NotContains(t, fields, "total_usage")
+
+		known, err := json.Marshal(MonthlySummary{TotalCommitment: f64ptr(0), TotalUsage: f64ptr(12.5)})
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(known, &fields))
+		assert.Equal(t, 0.0, fields["total_commitment"])
+		assert.Equal(t, 12.5, fields["total_usage"])
+	})
 }
 
 // TestProviderBreakdown tests the ProviderBreakdown struct.
@@ -1239,8 +1264,9 @@ func TestQueryMonthlyTotalsRowsErr(t *testing.T) {
 		month := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 		rows := pgxmock.NewRows([]string{
-			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage", "snapshot_count",
-		}).AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), 720)
+			"month", "account_id", "cloud_account_id", "provider", "service", "total_savings", "avg_coverage",
+			"total_commitment", "total_usage", "snapshot_count",
+		}).AddRow(month, "account-123", strPtr("cloud-1"), "aws", "rds", 1500.0, f64ptr(85.0), f64ptr(720.0), f64ptr(600.0), 720)
 
 		mock.ExpectQuery(`SELECT month, account_id`).
 			WithArgs(6, []string{"account-123"}).

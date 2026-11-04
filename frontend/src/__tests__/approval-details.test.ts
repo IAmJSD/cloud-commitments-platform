@@ -140,15 +140,15 @@ describe('renderApprovalDetailsBody', () => {
   it('shows "CUDly host (id)" for AWS recs without cloud_account_id when host account is known', () => {
     const rec = makeRec({ provider: 'aws' });
     delete rec.cloud_account_id;
-    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '444444444444');
     const cells = body.querySelectorAll('.approval-details-table tbody td');
-    expect(cells[0]?.textContent).toBe('CUDly host (909626172446)');
+    expect(cells[0]?.textContent).toBe('CUDly host (444444444444)');
   });
 
   it('shows "Account deleted" warning for Azure recs without cloud_account_id', () => {
     const rec = makeRec({ provider: 'azure' });
     delete rec.cloud_account_id;
-    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '444444444444');
     const cells = body.querySelectorAll('.approval-details-table tbody td');
     expect(cells[0]?.textContent).toBe('⚠ Account deleted — purchase cannot execute');
   });
@@ -238,7 +238,7 @@ describe('renderApprovalDetailsBody', () => {
   it('counts "Accounts: 1" for an all-host-account purchase (host AWS account, no cloud_account_id)', () => {
     const rec = makeRec({ provider: 'aws' });
     delete rec.cloud_account_id;
-    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
+    const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '444444444444');
     const stats = body.querySelectorAll('.approval-details-stat');
     // Stat index 7 = Accounts.
     expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('1');
@@ -248,7 +248,7 @@ describe('renderApprovalDetailsBody', () => {
     const hostRec = makeRec({ id: 'r1', provider: 'aws' });
     delete hostRec.cloud_account_id;
     const namedRec = makeRec({ id: 'r2', provider: 'aws', cloud_account_id: 'acct-uuid-1' });
-    const body = renderApprovalDetailsBody(makeDetails([hostRec, namedRec]), new Map(), '909626172446');
+    const body = renderApprovalDetailsBody(makeDetails([hostRec, namedRec]), new Map(), '444444444444');
     const stats = body.querySelectorAll('.approval-details-stat');
     expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2');
   });
@@ -256,7 +256,7 @@ describe('renderApprovalDetailsBody', () => {
   it('does NOT count an orphan row (cloud_account_id nil AND provider !== aws) in the Accounts total', () => {
     const orphanRec = makeRec({ provider: 'azure' });
     delete orphanRec.cloud_account_id;
-    const body = renderApprovalDetailsBody(makeDetails([orphanRec]), new Map(), '909626172446');
+    const body = renderApprovalDetailsBody(makeDetails([orphanRec]), new Map(), '444444444444');
     const stats = body.querySelectorAll('.approval-details-stat');
     expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('0');
   });
@@ -290,7 +290,7 @@ describe('formatAccountLabel', () => {
 
   // issue #608: distinguish genuine ambient from deleted account
   it('returns "CUDly host (id)" when provider is aws, no recAccountId, and hostAWSAccountID is known', () => {
-    expect(formatAccountLabel(undefined, undefined, 'aws', '909626172446')).toBe('CUDly host (909626172446)');
+    expect(formatAccountLabel(undefined, undefined, 'aws', '444444444444')).toBe('CUDly host (444444444444)');
   });
 
   it('returns "Account deleted" warning for azure with no recAccountId', () => {

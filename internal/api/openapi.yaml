@@ -160,6 +160,30 @@ paths:
       operationId: getUpcomingPurchases
       tags: [Dashboard]
       summary: Get upcoming scheduled purchases
+      description: >
+        Pending purchase executions the caller's account scope can see. The
+        optional filters narrow that set and never widen it.
+      parameters:
+        - name: provider
+          in: query
+          description: >
+            Filter by the row's provider (its plan's first service). "all" or
+            no value means every provider. Any other value is a 400.
+          schema:
+            type: string
+            enum: [aws, azure, gcp, all]
+        - name: account_ids
+          in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). When present it
+            takes precedence over account_id. A row matches when any account
+            the execution can buy in is selected (a plan-level execution
+            covers every plan account; a per-account execution only its own).
+            The selection is narrowed to the caller's allowed accounts, so an
+            account outside them matches no rows.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
           description: Upcoming purchases
@@ -167,6 +191,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpcomingPurchaseResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -439,7 +465,8 @@ paths:
         collection error, whether a collection is in flight, and whether the
         last collection was partial (some subscriptions, projects or scopes
         could not be queried, so the stored recommendations under-state the
-        real opportunity).
+        real opportunity). It also reports when the deployment's schedule
+        next triggers a collection, or null when that is unknown.
       responses:
         '200':
           description: Freshness state
@@ -1667,11 +1694,15 @@ paths:
             floor, or no default price computable), the RI is not Standard,
             the purchase's cloud account is missing, not AWS or cannot be
             signed for, the account role could not be assumed, or AWS rejected
-            the request as a client error.
+            the request as a client error. When AWS answers
+            SellerNotRegistered, reason is seller_not_registered and error
+            explains that the account's root user must register it as an RI
+            Marketplace seller, with a bank account that has a US address,
+            linking the AWS guide; no other 400 carries a reason.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -1766,11 +1797,13 @@ paths:
           description: >
             Invalid ID, the purchase's cloud account is missing, not AWS or
             cannot be signed for, the account role could not be assumed, or
-            AWS rejected the cancel as a client error.
+            AWS rejected the cancel as a client error. AWS errors are mapped
+            as for marketplace-list, so a SellerNotRegistered answer carries
+            reason seller_not_registered here too.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -2000,7 +2033,9 @@ paths:
         '200':
           description: >
             Convertible RI list. Empty when the deployment's AWS account is
-            outside the session's allowed accounts.
+            outside the session's allowed accounts. Each entry in `instances`
+            carries `account_id`, the AWS account the RI belongs to; it is
+            omitted when that account could not be resolved.
           content:
             application/json:
               schema:
@@ -3075,6 +3110,14 @@ paths:
       operationId: login
       tags: [Auth]
       summary: Authenticate and obtain a session token
+      description: >
+        Two request forms. The password form sends email and password, plus
+        mfa_code for an MFA-enrolled account. When the password is right but
+        the account needs a code and none was sent, the 401 body is
+        `mfa_required` with an `mfa_token`: a single-use continuation token
+        valid for 5 minutes and for at most 3 code attempts. The code step
+        then sends email, mfa_token and mfa_code with no password. The
+        password + mfa_code form keeps working.
       security: []
       requestBody:
         required: true
@@ -3092,7 +3135,19 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: >
+            Not signed in. `error` is `mfa_required` (password right, code
+            needed; carries mfa_token unless one could not be stored, in
+            which case resend password + mfa_code), `invalid_mfa_code`
+            (wrong code),
+            `invalid_mfa_token` (the token is unknown, expired, used, out of
+            attempts or not this account's, or the account can no longer
+            sign in; start again from the password),
+            or `invalid credentials` for every other failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginError'
         '429':
           $ref: '#/components/responses/RateLimited'
         '503':
@@ -4450,9 +4505,10 @@ paths:
       summary: Replace a cloud account (admin only)
       description: >
         Replaces the account's configuration with the request body; fields
-        omitted from the body are cleared, and enabled defaults to false.
-        The provider is validated but not changed. Stored credentials are
-        not affected.
+        omitted from the body are cleared, except enabled and
+        aws_is_org_root, which keep their stored values when omitted or
+        null (send false to clear them). The provider is validated but not
+        changed. Stored credentials are not affected.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -6092,16 +6148,41 @@ components:
     # -- Auth ---------------------------------------------------------------
     LoginRequest:
       type: object
-      required: [email, password]
+      description: >
+        Either the password form (email, password, optional mfa_code) or the
+        MFA token form (email, mfa_token, mfa_code). A body with both password
+        and mfa_token is a 400.
+      required: [email]
       properties:
         email:
           type: string
           format: email
         password:
           type: string
-          description: Base64-encoded password
+          description: Base64-encoded password. Required unless mfa_token is sent.
         mfa_code:
           type: string
+          description: TOTP or recovery code. Required with mfa_token.
+        mfa_token:
+          type: string
+          description: >
+            The token from an mfa_required answer. Sent with email and
+            mfa_code in place of password.
+
+    LoginError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [mfa_required, invalid_mfa_code, invalid_mfa_token, invalid credentials]
+        mfa_token:
+          type: string
+          description: Set with mfa_required. Single use; valid for 5 minutes and 3 code attempts.
+        mfa_token_expires_at:
+          type: string
+          format: date-time
+          description: Set with mfa_required.
 
     LoginResponse:
       type: object
@@ -6552,6 +6633,7 @@ components:
       properties:
         enabled_providers:
           type: array
+          description: A write that carries this key must list at least one provider; an empty list or null returns 400. A GET on a fresh install can return an empty list.
           items:
             type: string
             enum: [aws, azure, gcp]
@@ -6624,6 +6706,23 @@ components:
             Minimum instance/node count a recommendation must carry to be
             surfaced (GUI/persisted equivalent of the CLI --min-count flag).
             0 (default) disables the filter.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row was first saved. Present on stored
+            rows (GET /api/config, GET /api/config/service/{provider}/{service});
+            omitted from a purchase plan's services entries. Ignored on write.
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row last changed, set by the database on
+            every save of the row, including a changed global default being
+            copied onto it. Present and omitted exactly like created_at;
+            ignored on write.
 
     CommitmentOptionsResponse:
       type: object
@@ -6674,6 +6773,9 @@ components:
         committed_monthly:
           type: number
           format: double
+          description: >-
+            Estimated monthly savings of the active commitments (the sum of
+            their estimated savings), not what the commitments cost.
         current_coverage:
           type: number
           format: double
@@ -6849,7 +6951,7 @@ components:
 
     RecommendationsFreshness:
       type: object
-      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial]
+      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial, next_collection_at]
       properties:
         last_collected_at:
           type: string
@@ -6867,14 +6969,32 @@ components:
           description: Set while a collection is in flight.
         last_collection_partial:
           $ref: '#/components/schemas/RecommendationsCollectionPartial'
+        next_collection_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the deployment's scheduler next triggers a recommendation
+            collection (UTC), computed from the schedule the deployment was
+            given (RECOMMENDATION_SCHEDULE) rather than stored. Null when
+            scheduled collection is off, the schedule is not set or not
+            understood, or the next run cannot be known: an EventBridge
+            rate() schedule counts from when its rule was created, which the
+            server cannot see, so rate() schedules always report null; a
+            cron() schedule gives an exact time. Manual refreshes and
+            on-read background refreshes are not included.
+          example: "2026-10-28T02:00:00Z"
 
     RecommendationsCollectionPartial:
       type: object
       nullable: true
       description: >
         Non-null when the most recent persisted collection kept rows from
-        at least one incomplete sweep. Cleared by the next collection whose
-        sweeps are all complete. Carries counts and reason categories only.
+        at least one incomplete sweep, or while a pricing hold carries
+        forward from an earlier collection. Cleared by the next collection
+        whose sweeps are all complete and that leaves no hold. Carries counts
+        and reason categories, plus held_account_ids filtered to the
+        caller's account scope.
       required: [providers]
       properties:
         providers:
@@ -6914,12 +7034,25 @@ components:
           description: >
             Failure count per reason category. Keys are drawn from a closed
             set: permission_denied, throttled, timeout, canceled, not_found,
-            provider_unavailable, other.
+            provider_unavailable, pricing_unavailable, other.
           additionalProperties:
             type: integer
           example:
             permission_denied: 2
             throttled: 1
+        held_account_ids:
+          type: array
+          description: >
+            Platform cloud-account IDs (not cloud account numbers) whose
+            previous-cycle Azure Advisor rows are held because the price
+            catalog was unreachable (reason pricing_unavailable). Their
+            reservations cannot be purchased until a collection re-prices them.
+            The nil UUID (00000000-0000-0000-0000-000000000000) stands for the
+            ambient identity, which has no registered account. It is returned
+            only to callers with an unrestricted account scope.
+          items:
+            type: string
+            format: uuid
 
     # -- Plans --------------------------------------------------------------
     PlansResponse:
@@ -7731,7 +7864,11 @@ components:
           format: email
         enabled:
           type: boolean
-          description: Defaults to false when omitted.
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false
+            disables the account.
         aws_auth_mode:
           type: string
           enum: [access_keys, role_arn, bastion, workload_identity_federation]
@@ -7750,6 +7887,11 @@ components:
             contain "..".
         aws_is_org_root:
           type: boolean
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false clears
+            the flag.
         azure_subscription_id:
           type: string
         azure_tenant_id:
@@ -8482,6 +8624,19 @@ components:
             One-time USD sale price per instance when term_months remain. Must
             be positive.
 
+    MarketplaceClientError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        reason:
+          type: string
+          enum: [seller_not_registered]
+          description: >
+            Present only when AWS reported that the account is not a
+            registered RI Marketplace seller (SellerNotRegistered).
+
     MarketplaceListRequest:
       type: object
       properties:
@@ -8658,6 +8813,28 @@ components:
           type: number
           format: double
           description: Average coverage percentage. Omitted when coverage data is absent (not zero).
+        total_commitment:
+          type: number
+          format: double
+          description: >
+            Amortized upfront cost as a monthly run-rate: each active
+            purchase's upfront payment spread evenly over its term, summed
+            per collection and averaged over the month (the same averaging as
+            total_savings). Recurring fees are not included; they are in
+            total_usage, so total committed spend is total_commitment plus
+            total_usage. Omitted when unknown, which is when any snapshot in
+            the bucket had no upfront figure; never reported as 0 in that
+            case. A known zero (for example a no-upfront portfolio) is
+            returned as 0.
+        total_usage:
+          type: number
+          format: double
+          description: >
+            Recurring commitment fees (the purchases' monthly cost) as a
+            monthly run-rate, averaged like total_commitment. Omitted when unknown, which is when any
+            snapshot in the bucket had no usage figure (for example an
+            all-upfront purchase); never reported as 0 in that case. A known
+            zero is returned as 0.
         snapshot_count:
           type: integer
 

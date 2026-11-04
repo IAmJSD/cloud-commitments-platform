@@ -90,7 +90,8 @@ func runZoneReshape(t *testing.T, ri ec2types.ReservedInstances) (*exchange.Auto
 		RIExchangeLookbackDays:         30,
 	}
 	clients := riExchangeClients{
-		listConvertibleRIs: c.ListConvertibleReservedInstances,
+		offeredInstanceTypes: noOfferedCatalog,
+		listConvertibleRIs:   c.ListConvertibleReservedInstances,
 		getRIUtilization: func(context.Context, int) ([]recommendations.RIUtilization, error) {
 			return []recommendations.RIUtilization{{ReservedInstanceID: zoneTestRIID, UtilizationPercent: 40.0}}, nil
 		},

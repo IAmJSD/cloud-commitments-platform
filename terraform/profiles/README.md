@@ -39,15 +39,21 @@ those declarations (`go test ./terraform/profiles/`).
 
 ### Quick Deployment with Profile
 
+Each provider is one Terraform root, `terraform/environments/<provider>`.
+The profile supplies the variables, and a matching
+`backends/<profile>.tfbackend` (copied from `backends/*.tfbackend.example`)
+supplies the state backend:
+
 ```bash
 # Deploy to AWS dev
-cd terraform/environments/aws/dev
-terraform apply -var-file="../../../profiles/aws/dev.tfvars"
-
-# Deploy to AWS prod
-cd terraform/environments/aws/prod
-terraform apply -var-file="../../../profiles/aws/prod.tfvars"
+cd terraform/environments/aws
+terraform init -backend-config=backends/dev.tfbackend
+terraform apply -var-file="../../profiles/aws/dev.tfvars"
 ```
+
+Switching profiles in the same root means re-running `terraform init
+-reconfigure` with the other backend config; the helper script below
+keeps a separate data directory per profile instead.
 
 ### With Helper Script (Even Easier)
 
@@ -363,26 +369,14 @@ EOF
 
 ### tf-deploy.sh
 
-```bash
-#!/bin/bash
-# Deploy using profile
-
-PROVIDER=$1
-PROFILE=$2
-ACTION=${3:-apply}
-
-PROFILE_FILE="profiles/${PROVIDER}/${PROFILE}.tfvars"
-
-if [ ! -f "$PROFILE_FILE" ]; then
-  echo "Error: Profile not found: $PROFILE_FILE"
-  exit 1
-fi
-
-cd "terraform/environments/${PROVIDER}/${PROFILE}"
-
-terraform init
-terraform $ACTION -var-file="../../../../${PROFILE_FILE}"
-```
+`scripts/tf-deploy.sh <provider> <profile> [action]` runs in
+`terraform/environments/<provider>` with
+`-var-file=terraform/profiles/<provider>/<profile>.tfvars`. On the first
+run of a profile it runs `terraform init
+-backend-config=backends/<profile>.tfbackend`, with
+`TF_DATA_DIR=.terraform/profiles/<profile>` so each profile keeps its
+own backend. It stops before calling Terraform if the profile or its
+backend config is missing.
 
 ## Related Documentation
 

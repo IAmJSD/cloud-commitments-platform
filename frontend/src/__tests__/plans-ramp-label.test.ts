@@ -44,6 +44,7 @@ jest.mock('../toast', () => ({ showToast: jest.fn(() => ({ dismiss: jest.fn() })
 jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn(() => Promise.resolve(true)) }));
 
 import * as api from '../api';
+import { flushPromises } from './flush-promises';
 
 function loadRealIndexBody(): string {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -89,7 +90,7 @@ describe('plan list ramp label (#1185)', () => {
     expect(listedRampLabel()).toBe(label);
 
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
     expect((document.querySelector('input[name="ramp-schedule"]:checked') as HTMLInputElement | null)?.value).toBe(radio);
   });
 });
@@ -137,7 +138,7 @@ describe('custom ramp inputs when Edit is the first plan modal (#1536)', () => {
     await loadPlans();
 
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
     expect(stepInput().disabled).toBe(true);
 
     const custom = document.querySelector('input[name="ramp-schedule"][value="custom"]') as HTMLInputElement;
@@ -158,7 +159,7 @@ describe('custom ramp inputs when Edit is the first plan modal (#1536)', () => {
     setupPlanHandlers();
     await loadPlans();
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
   }
 
   test('Edit-first leaves an absent stored term unset', async () => {
@@ -177,5 +178,21 @@ describe('custom ramp inputs when Edit is the first plan modal (#1536)', () => {
     openCreatePlanModal();
     expect(stepInput().disabled).toBe(true);
     expect(intervalInput().disabled).toBe(true);
+  });
+});
+
+describe('ramp step wording says percent of target (#1680)', () => {
+  beforeEach(() => { document.body.innerHTML = loadRealIndexBody(); });
+
+  test('custom step field label names the target', () => {
+    const label = document.getElementById('ramp-step-percent')?.closest('label')?.textContent ?? '';
+    expect(label).toContain('% of target');
+  });
+
+  test('preset descriptions say each step is a share of the target', () => {
+    const desc = (value: string): string =>
+      document.querySelector(`input[value="${value}"]`)?.closest('label')?.querySelector('.ramp-desc')?.textContent ?? '';
+    expect(desc('weekly-25pct')).toContain('25% of target each week');
+    expect(desc('monthly-10pct')).toContain('10% of target each month');
   });
 });

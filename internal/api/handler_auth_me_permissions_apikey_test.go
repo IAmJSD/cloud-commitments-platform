@@ -63,6 +63,14 @@ func (a *mePermsAuth) HasAPIKeyPermissionAPI(ctx context.Context, apiKey, action
 	return a.service.HasAPIKeyPermissionAPI(ctx, apiKey, action, resource)
 }
 
+func (a *mePermsAuth) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyID, userID, action, resource string, sets []auth.PermissionConstraints) (bool, error) {
+	return a.service.HasAPIKeyPermissionForConstraintsAPI(ctx, keyID, userID, action, resource, sets)
+}
+
+func (a *mePermsAuth) HasPermissionForConstraintsAPI(ctx context.Context, userID, action, resource string, sets []auth.PermissionConstraints) (bool, error) {
+	return a.service.HasPermissionForConstraintsAPI(ctx, userID, action, resource, sets)
+}
+
 // keyLookup is what the store's GetAPIKeyByID answers.
 type keyLookup struct {
 	key *auth.UserAPIKey

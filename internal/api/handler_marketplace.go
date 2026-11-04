@@ -23,11 +23,10 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
-	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -38,9 +37,9 @@ import (
 // marketplaceEC2Client is the narrow EC2 interface the marketplace handlers
 // need. Using a minimal interface keeps test stubs small.
 type marketplaceEC2Client interface {
-	CreateMarketplaceListing(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
-	DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
-	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	CreateMarketplaceListing(ctx context.Context, req ec2MarketplaceListingRequest) (ec2MarketplaceListingResult, error)
+	DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2MarketplaceListingResult, error)
+	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2MarketplaceListingResult, error)
 	// FetchOfferingClass calls AWS DescribeReservedInstances to determine
 	// whether a given Reserved Instance is 'standard' or 'convertible'. Used
 	// when the purchase_history row has no offering_class stored (pre-migration
@@ -54,7 +53,7 @@ func (h *Handler) buildMarketplaceEC2Client(cfg aws.Config) marketplaceEC2Client
 	if h.marketplaceEC2Factory != nil {
 		return h.marketplaceEC2Factory(cfg)
 	}
-	return awsprovider.NewEC2ClientDirect(cfg)
+	return newMarketplaceEC2Client(cfg)
 }
 
 // loadMarketplaceAWSConfig returns an AWS config for the purchase's region that
@@ -91,8 +90,9 @@ func (h *Handler) loadMarketplaceAWSConfig(ctx context.Context, row *config.Purc
 // account, resolved through the purchase path's credential resolver.
 func (h *Handler) marketplaceAccountAWSConfig(ctx context.Context, account *config.CloudAccount, base aws.Config) (aws.Config, error) {
 	stsClient := sts.NewFromConfig(base)
-	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient,
-		credentials.AWSResolveOptions{AmbientProvider: base.Credentials, AmbientSTS: stsClient})
+	opts := h.bastionResolveOptions(base)
+	opts.AmbientProvider, opts.AmbientSTS = base.Credentials, stsClient
+	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient, opts)
 	if err != nil {
 		if errors.Is(err, credentials.ErrNotHostAccount) {
 			return aws.Config{}, NewClientError(400, err.Error())
@@ -304,17 +304,17 @@ const marketplaceCompensationTimeout = 10 * time.Second
 
 // keepUncanceledListing records a listing that could be neither persisted nor
 // canceled; releasing the claim instead would hide it from the cancel endpoint.
-func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, listing ec2svc.MarketplaceListingResult, cancelErr error) error {
+func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, listing ec2MarketplaceListingResult, cancelErr error) error {
 	logging.Errorf("marketplace: rollback cancel for listing %s failed: %v", listing.ListingID, cancelErr)
 	state := listing.State
 	if state == "" {
 		state = config.ListingStatePending
 	}
-	cancelDetail := cancelErr.Error()
+	_, cancelDetail := purchase.SummarizeProviderError(cancelErr)
 	if isRoleAssumptionFailure(cancelErr) {
 		cancelDetail = marketplaceRoleAssumptionMessage
 	}
-	msg := fmt.Sprintf("marketplace listing %s was created but could not be saved, and canceling it failed (%s); the listing may still be active on AWS", listing.ListingID, cancelDetail)
+	msg := fmt.Sprintf("marketplace listing %s was created but could not be saved, and canceling it failed (%s); the listing may still be active on AWS (reference: purchase %s)", listing.ListingID, cancelDetail, purchaseID)
 	if err := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, listing.ListingID, state); err != nil {
 		if isListingEndedConflict(err) {
 			return listingCanceledConcurrently(listing.ListingID)
@@ -423,7 +423,8 @@ const awsMarketplaceMinPriceFloorFraction = 0.05
 // awsMarketplaceClientFaultCodes is the set of AWS error codes that represent
 // client-side faults for Marketplace listing operations. These map to 4xx
 // responses so the caller receives an actionable message. Server-side AWS
-// errors remain 5xx.
+// errors remain 5xx. SellerNotRegistered is a client fault too, but
+// mapAWSMarketplaceError answers it before consulting this set.
 var awsMarketplaceClientFaultCodes = map[string]bool{
 	"InvalidReservedInstancesId":            true,
 	"InvalidReservedInstancesId.NotFound":   true,
@@ -432,12 +433,20 @@ var awsMarketplaceClientFaultCodes = map[string]bool{
 	"IncorrectState":                        true,
 	"InvalidReservedInstancesListingId":     true,
 	"ReservedInstancesListingAlreadyExists": true,
-	"SellerNotRegistered":                   true,
 	"AuthFailure":                           true,
 	"UnauthorizedOperation":                 true,
 }
 
 const marketplaceRoleAssumptionMessage = "could not assume the role configured for this account"
+
+// marketplaceSellerNotRegisteredMessage replaces AWS's SellerNotRegistered text
+// (issue #27), which says only that the account is not a registered seller.
+// Registration is a one-time step in the AWS console that this app cannot do:
+// the account's root user registers it with a bank account that has a US
+// address and completes a tax interview.
+const marketplaceSellerNotRegisteredMessage = "this AWS account is not registered as a Reserved Instance Marketplace seller. " +
+	"Its root user must register it as a seller, with a bank account that has a US address, before it can list Reserved Instances: " +
+	"https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-market-general.html#ri-market-seller-profile"
 
 // isRoleAssumptionFailure reports whether err came from the STS AssumeRole call
 // that the credential provider makes lazily inside an EC2 request. Its text
@@ -458,10 +467,17 @@ func roleAssumptionOperationError(err error) *smithy.OperationError {
 	return nil
 }
 
+// marketplaceSellerNotRegisteredReason is the stable details.reason (flattened
+// into the JSON body as "reason") that marks the SellerNotRegistered 400, so a
+// client can branch on it instead of matching the message.
+const marketplaceSellerNotRegisteredReason = "seller_not_registered"
+
 // mapAWSMarketplaceError maps an AWS SDK error to an appropriate ClientError.
-// AWS client-fault errors (4xx-category codes) produce a 4xx response with the
-// original AWS message so the caller gets actionable feedback. All other errors
-// produce a 502 (AWS-side failure). STS AssumeRole failures are classified by
+// AWS client-fault errors (4xx-category codes) produce a 400 with a category
+// message, never the AWS text, which carries ARNs and request IDs. SellerNotRegistered
+// is the exception: its 400 carries marketplaceSellerNotRegisteredMessage and
+// reason seller_not_registered instead. All other errors produce a 502
+// (AWS-side failure). STS AssumeRole failures are classified by
 // roleAssumptionClientError and never echo the AWS text.
 func mapAWSMarketplaceError(opMsg string, err error) error {
 	if opErr := roleAssumptionOperationError(err); opErr != nil {
@@ -469,12 +485,27 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() == "SellerNotRegistered" {
+			return NewClientErrorWithDetails(400, marketplaceSellerNotRegisteredMessage,
+				map[string]any{"reason": marketplaceSellerNotRegisteredReason})
+		}
 		if awsMarketplaceClientFaultCodes[apiErr.ErrorCode()] || apiErr.ErrorFault() == smithy.FaultClient {
-			return NewClientError(400, apiErr.ErrorMessage())
+			logging.Warnf("marketplace: %s: provider rejected the request: %v", opMsg, err)
+			category, msg := purchase.SummarizeProviderError(err)
+			if category == purchase.ErrCategoryUnknown {
+				msg = marketplaceRejectedMessage
+			}
+			return NewClientError(400, msg)
 		}
 	}
-	return NewClientError(502, opMsg+": "+err.Error())
+	logging.Warnf("marketplace: %s: %v", opMsg, err)
+	_, msg := purchase.SummarizeProviderError(err)
+	return NewClientError(502, opMsg+": "+msg)
 }
+
+// marketplaceRejectedMessage is the fixed text for a client-fault rejection
+// the error classifier has no category for; the provider's text stays in the log.
+const marketplaceRejectedMessage = "AWS rejected the listing request as invalid: check the listing parameters"
 
 // isKnownNonStandardOfferingClass reports true when offering_class is
 // explicitly set to a non-standard value (e.g. "convertible"). An empty string

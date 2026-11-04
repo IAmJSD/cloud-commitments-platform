@@ -80,7 +80,9 @@ func (c *globalConfigCache) lookup(ctx context.Context, store AccountConfigReade
 // Errors from either lookup are returned alongside the partial map so the
 // caller decides whether to fail the whole operation or pass through. The
 // scheduler / dashboard read paths choose pass-through (over-show vs.
-// under-show), matching the precedent set by applySuppressions.
+// under-show); the money path (ListRecommendationsStrict) fails. Suppression
+// reads fail closed on every path, since they are a spend guard rather than
+// a display filter (issue #111).
 func ResolveAccountConfigsForRecs(
 	ctx context.Context,
 	store AccountConfigReader,

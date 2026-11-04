@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -21,6 +22,8 @@ var ErrStepCommitmentCap = errors.New("plan step refused by commitment cap")
 //   - a recommendation with a zero, negative or non-finite total commitment is
 //     refused (Azure monthly commitments have upfront 0, so upfront alone
 //     would pass anything);
+//   - a recommendation whose CommitmentCurrency is set and not USD is refused
+//     (the cap is USD; an empty currency is not refused here);
 //   - no recommendations is not a step that can buy, so it is not this
 //     check's concern and returns nil (the no-recommendations refusal owns it).
 //
@@ -34,9 +37,9 @@ func CheckStepCommitmentCap(plan *config.PurchasePlan, recs []config.Recommendat
 	}
 	var total float64
 	for i := range recs {
-		c := recs[i].TotalCommitment()
-		if !(c > 0) || math.IsInf(c, 0) {
-			return fmt.Errorf("%w: recommendation %q has non-positive or non-finite total commitment %v", ErrStepCommitmentCap, recs[i].ID, c)
+		c, err := capCommitment(&recs[i])
+		if err != nil {
+			return err
 		}
 		total += c
 	}
@@ -44,6 +47,20 @@ func CheckStepCommitmentCap(plan *config.PurchasePlan, recs []config.Recommendat
 		return fmt.Errorf("%w: step total commitment %.2f exceeds max_step_commitment %.2f", ErrStepCommitmentCap, total, *plan.MaxStepCommitment)
 	}
 	return nil
+}
+
+// capCommitment returns a rec's total commitment for the cap comparison, or
+// refuses it. The cap is USD with no FX conversion, so a set non-USD currency
+// is refused; an empty (unknown) currency passes.
+func capCommitment(rec *config.RecommendationRecord) (float64, error) {
+	if cur := strings.TrimSpace(rec.CommitmentCurrency); cur != "" && !config.IsUSDCommitmentCurrency(cur) {
+		return 0, fmt.Errorf("%w: recommendation %q is not priced in USD, so it cannot be compared against the USD cap", ErrStepCommitmentCap, rec.ID)
+	}
+	c := rec.TotalCommitment()
+	if !(c > 0) || math.IsInf(c, 0) {
+		return 0, fmt.Errorf("%w: recommendation %q has non-positive or non-finite total commitment %v", ErrStepCommitmentCap, rec.ID, c)
+	}
+	return c, nil
 }
 
 // recheckStepCap re-reads the plan and re-applies CheckStepCommitmentCap to a

@@ -84,7 +84,8 @@ func FanOutWithConcurrency[T any](
 		// ctx.Err() on the result slot and skip launching the goroutine.
 		// Without this, a large fan-out on an already-canceled context
 		// (e.g. Lambda deadline exceeded partway through) would block
-		// indefinitely here rather than draining quickly.
+		// indefinitely here rather than draining quickly. The goroutine
+		// re-checks ctx at start because select picks randomly when both are ready.
 		wg.Add(1)
 		select {
 		case sem <- struct{}{}:
@@ -122,6 +123,11 @@ func FanOutWithConcurrency[T any](
 					}
 				}
 			}()
+			if err := ctx.Err(); err != nil {
+				logging.Warnf("purchase[fan-out]: skipping account=%s, context done before start: %v", accountID, err)
+				results[idx] = Result[T]{AccountID: accountID, Err: err}
+				return
+			}
 			t0 := time.Now()
 			logging.Infof("purchase[fan-out]: goroutine starting for account=%s", accountID)
 			val, err := fn(ctx, accountID)

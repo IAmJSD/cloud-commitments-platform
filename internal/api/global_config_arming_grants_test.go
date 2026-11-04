@@ -113,6 +113,7 @@ func TestGlobalConfigArmingGates_LookupErrorOnlyMattersOnEscalation(t *testing.T
 	lookupErr := errors.New("auth store unavailable")
 	newHandler := func() (*Handler, *authFreeTxStore) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: apgUserID}, nil).Maybe()
 		mockAuth.On("HasPermissionAPI", mock.Anything, apgUserID, auth.ActionExecute, mock.Anything).Return(false, lookupErr)
 		mockAuth.grantPermissions(afAdmin)

@@ -25,13 +25,14 @@ const plannedOtherUser = "someone-else"
 
 // runUpdateAnyDelete drives deletePlannedPurchase for a row created by creator
 // (nil = legacy NULL creator), optionally replacing its recommendations.
-func runUpdateAnyDelete(creator *string, recs []config.RecommendationRecord, perms ...auth.Permission) (*DeletePlannedPurchaseResponse, *MockConfigStore, error) {
+func runUpdateAnyDelete(t *testing.T, creator *string, recs []config.RecommendationRecord, perms ...auth.Permission) (*DeletePlannedPurchaseResponse, *MockConfigStore, error) {
+	t.Helper()
 	exec := cancelRouteExec("pending")
 	exec.CreatedByUserID = creator
 	if recs != nil {
 		exec.Recommendations = recs
 	}
-	h, store := cancelRouteHandler(exec, perms...)
+	h, store := cancelRouteHandler(t, exec, perms...)
 	resp, err := h.deletePlannedPurchase(context.Background(), deletePlannedReq(), cancelExecID)
 	return resp, store, err
 }
@@ -67,7 +68,7 @@ func TestDeletePlannedPurchase_UpdateAnyConstraintDimensions(t *testing.T) {
 	for dim, c := range denying {
 		t.Run("deny/"+dim, func(t *testing.T) {
 			t.Parallel()
-			_, store, err := runUpdateAnyDelete(&other, nil, revokePerm(auth.ActionUpdateAny, c))
+			_, store, err := runUpdateAnyDelete(t, &other, nil, revokePerm(auth.ActionUpdateAny, c))
 			requireRevokeForbidden(t, err, constraintDenied)
 			requireNotCanceled(t, store)
 		})
@@ -75,7 +76,7 @@ func TestDeletePlannedPurchase_UpdateAnyConstraintDimensions(t *testing.T) {
 	for dim, c := range allowing {
 		t.Run("allow/"+dim, func(t *testing.T) {
 			t.Parallel()
-			resp, _, err := runUpdateAnyDelete(&other, nil, revokePerm(auth.ActionUpdateAny, c))
+			resp, _, err := runUpdateAnyDelete(t, &other, nil, revokePerm(auth.ActionUpdateAny, c))
 			requireCanceled(t, resp, err)
 		})
 	}
@@ -88,26 +89,26 @@ func TestDeletePlannedPurchase_UpdateAnyStrictScopeAndRecommendations(t *testing
 	t.Run("unknown region is refused by a region-bounded grant", func(t *testing.T) {
 		t.Parallel()
 		recs := []config.RecommendationRecord{recFor("acct-1", "azure", "compute", "")}
-		_, store, err := runUpdateAnyDelete(&other, recs, revokePerm(auth.ActionUpdateAny, &auth.PermissionConstraints{Regions: []string{"westeurope"}}))
+		_, store, err := runUpdateAnyDelete(t, &other, recs, revokePerm(auth.ActionUpdateAny, &auth.PermissionConstraints{Regions: []string{"westeurope"}}))
 		requireRevokeForbidden(t, err, constraintDenied)
 		requireNotCanceled(t, store)
 	})
 	t.Run("every recommendation must be in scope", func(t *testing.T) {
 		t.Parallel()
 		recs := []config.RecommendationRecord{azureRec(), recFor("acct-uuid", "aws", "ec2", "us-east-1")}
-		_, store, err := runUpdateAnyDelete(&other, recs, azureOnly)
+		_, store, err := runUpdateAnyDelete(t, &other, recs, azureOnly)
 		requireRevokeForbidden(t, err, constraintDenied)
 		requireNotCanceled(t, store)
 	})
 	t.Run("a row with no recommendations is refused by a bounded grant", func(t *testing.T) {
 		t.Parallel()
-		_, store, err := runUpdateAnyDelete(&other, []config.RecommendationRecord{}, azureOnly)
+		_, store, err := runUpdateAnyDelete(t, &other, []config.RecommendationRecord{}, azureOnly)
 		requireRevokeForbidden(t, err, constraintDenied)
 		requireNotCanceled(t, store)
 	})
 	t.Run("a row with no recommendations is allowed by an unbounded grant", func(t *testing.T) {
 		t.Parallel()
-		resp, _, err := runUpdateAnyDelete(&other, []config.RecommendationRecord{}, revokePerm(auth.ActionUpdateAny, nil))
+		resp, _, err := runUpdateAnyDelete(t, &other, []config.RecommendationRecord{}, revokePerm(auth.ActionUpdateAny, nil))
 		requireCanceled(t, resp, err)
 	})
 }
@@ -132,7 +133,7 @@ func TestDeletePlannedPurchase_UpdateAnyFallback(t *testing.T) {
 	for name, tc := range allowed {
 		t.Run("falls back "+name, func(t *testing.T) {
 			t.Parallel()
-			resp, _, err := runUpdateAnyDelete(tc.creator, nil, tc.perms...)
+			resp, _, err := runUpdateAnyDelete(t, tc.creator, nil, tc.perms...)
 			requireCanceled(t, resp, err)
 		})
 	}
@@ -148,7 +149,7 @@ func TestDeletePlannedPurchase_UpdateAnyFallback(t *testing.T) {
 	for name, tc := range denied {
 		t.Run("denies "+name, func(t *testing.T) {
 			t.Parallel()
-			_, store, err := runUpdateAnyDelete(tc.creator, nil, tc.perms...)
+			_, store, err := runUpdateAnyDelete(t, tc.creator, nil, tc.perms...)
 			requireRevokeForbidden(t, err, constraintDenied)
 			requireNotCanceled(t, store)
 		})
@@ -160,13 +161,13 @@ func TestDeletePlannedPurchase_UpdateAnyAdministratorsGroup(t *testing.T) {
 	other := plannedOtherUser
 	t.Run("unbounded admin still cancels", func(t *testing.T) {
 		t.Parallel()
-		resp, _, err := runUpdateAnyDelete(&other, nil, auth.Permission{Action: auth.ActionAdmin, Resource: auth.ResourceAll})
+		resp, _, err := runUpdateAnyDelete(t, &other, nil, auth.Permission{Action: auth.ActionAdmin, Resource: auth.ResourceAll})
 		requireCanceled(t, resp, err)
 	})
 	t.Run("admin bounded to another provider is refused", func(t *testing.T) {
 		t.Parallel()
 		admin := auth.Permission{Action: auth.ActionAdmin, Resource: auth.ResourceAll, Constraints: &auth.PermissionConstraints{Providers: []string{"aws"}}}
-		_, store, err := runUpdateAnyDelete(&other, nil, admin)
+		_, store, err := runUpdateAnyDelete(t, &other, nil, admin)
 		requireRevokeForbidden(t, err, constraintDenied)
 		requireNotCanceled(t, store)
 	})
@@ -181,11 +182,13 @@ func TestDeletePlannedPurchase_UpdateAnyConstraintErrorDoesNotFallBack(t *testin
 	exec := cancelRouteExec("pending")
 	exec.CreatedByUserID = &owner
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
 	// Reached only if the error were swallowed; requireNotCanceled reports it.
 	store.On("TransitionExecutionStatus", mock.Anything, cancelExecID, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, errKeyScopeReached).Maybe()
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: owner}, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
 	m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(true, nil)

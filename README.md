@@ -37,7 +37,8 @@ Per-account service overrides are available from **Settings -> Accounts**. Expan
 - `cmd/lambda` contains the Lambda entry point.
 - `internal` contains platform services and API code.
 - `frontend` contains the web dashboard.
-- `terraform`, `cloudformation`, `arm`, and related infrastructure directories contain deployment definitions.
+- `terraform` contains the deployment definitions; install CUDly with it (see [deployment](docs/DEPLOYMENT.md)). There is no CloudFormation install.
+- `cloudformation`, `arm`, and `iac` contain the templates that create CUDly's role in each target cloud account. They do not install CUDly.
 
 This component does not provide the `cudly` CLI. Use the [CLI component](https://github.com/LeanerCloud/cloud-commitments-cli) for command-line workflows.
 
