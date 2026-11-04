@@ -83,6 +83,10 @@ var keyScopeOwnerPerms = purchasesPerms(auth.ActionUpdateAny, auth.ActionCancelA
 	auth.ActionDelete, auth.ActionUpdate, auth.ActionExecute)
 
 func newKeyScopeAuth(keyPerms []auth.Permission) *keyScopeAuth {
+	return newKeyScopeAuthWithGroup(keyPerms, keyScopeOwnerPerms)
+}
+
+func newKeyScopeAuthWithGroup(keyPerms, groupPerms []auth.Permission) *keyScopeAuth {
 	sum := sha256.Sum256([]byte(keyScopeRawKey))
 	expires := time.Now().Add(24 * time.Hour)
 	key := &auth.UserAPIKey{
@@ -96,7 +100,7 @@ func newKeyScopeAuth(keyPerms []auth.Permission) *keyScopeAuth {
 		ID: keyScopeOwnerID, Email: "owner@example.com", Active: true, GroupIDs: []string{keyScopeGroupID},
 	}, nil).Maybe()
 	store.On("GetGroup", mock.Anything, keyScopeGroupID).Return(&auth.Group{
-		ID: keyScopeGroupID, Permissions: keyScopeOwnerPerms,
+		ID: keyScopeGroupID, Permissions: groupPerms,
 	}, nil).Maybe()
 
 	m := new(MockAuthService)

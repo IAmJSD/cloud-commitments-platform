@@ -6631,6 +6631,7 @@ components:
       properties:
         enabled_providers:
           type: array
+          description: A write that carries this key must list at least one provider; an empty list or null returns 400. A GET on a fresh install can return an empty list.
           items:
             type: string
             enum: [aws, azure, gcp]

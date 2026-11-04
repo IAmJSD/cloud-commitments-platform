@@ -363,7 +363,7 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     // (or drops) a column trips the test.
     const headers = Array.from(list.querySelectorAll('thead th')).map(th => th.textContent);
     expect(headers).toEqual([
-      'Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', 'Monthly cost', 'Monthly savings', 'Expires',
+      'Provider', 'Account', 'Service', 'Resource Type', 'Region', 'Count', 'Term', 'Payment', 'Monthly Cost', 'Monthly Savings', 'Expires',
     ]);
 
     const rows = list.querySelectorAll('tbody tr');
@@ -450,7 +450,7 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     ]);
     await loadActiveCommitments();
     const list = document.getElementById('active-commitments-list')!;
-    expect(numColumns(list)).toEqual({ headers: ['Count', 'Monthly cost', 'Monthly savings'], rowsMatch: true });
+    expect(numColumns(list)).toEqual({ headers: ['Count', 'Monthly Cost', 'Monthly Savings'], rowsMatch: true });
   });
 });
 
@@ -644,7 +644,7 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     // label (not empty string) so screen readers announce the column purpose.
     const barTh = headers[headers.length - 1];
     expect(barTh).not.toBeNull();
-    expect(barTh!.textContent).toBe('Coverage bar');
+    expect(barTh!.textContent).toBe('Coverage Bar');
     expect(barTh!.getAttribute('aria-label')).toBe('Coverage bar');
   });
 
@@ -688,7 +688,7 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     });
     await loadCoverageBreakdown();
     const card = document.querySelector('#coverage-providers .coverage-provider-card')!;
-    expect(numColumns(card)).toEqual({ headers: ['Covered/mo', 'On-demand gap/mo'], rowsMatch: true });
+    expect(numColumns(card)).toEqual({ headers: ['Covered/mo', 'On-Demand Gap/mo'], rowsMatch: true });
   });
 });
 

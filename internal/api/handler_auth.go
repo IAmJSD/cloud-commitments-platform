@@ -420,7 +420,7 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 	// request. Failing closed here would reveal infrastructure state (503 vs 200) to
 	// an enumerating attacker and harm legitimate users more than the enumeration risk.
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithEmail(ctx, pwdReq.Email, "forgot_password")
+		allowed, err := h.rateLimiter.AllowWithEmail(ctx, strings.ToLower(strings.TrimSpace(pwdReq.Email)), "forgot_password")
 		if err != nil {
 			logging.Errorf("ALERT: rate limiter error on forgot_password for %s; proceeding fail-open (02-M1): %v",
 				redactEmail(pwdReq.Email), err)

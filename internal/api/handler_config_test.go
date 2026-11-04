@@ -1613,3 +1613,82 @@ func TestHandler_updateConfig_RequiresUpdateConfigPermission(t *testing.T) {
 	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
 	mockStore.AssertNotCalled(t, "SaveGlobalConfig", mock.Anything, mock.Anything)
 }
+
+func TestHandler_updateConfig_EnabledProvidersWrite(t *testing.T) {
+	cases := []struct {
+		name     string
+		stored   []string
+		body     string
+		wantErr  bool
+		wantSave bool
+	}{
+		{"empty list refused", []string{"aws"}, `{"enabled_providers": []}`, true, false},
+		{"null refused", []string{"aws"}, `{"enabled_providers": null}`, true, false},
+		{"duplicate key differing in case refused", []string{"aws"}, `{"enabled_providers":["aws"],"ENABLED_PROVIDERS":[]}`, true, false},
+		{"mixed-case key refused", []string{"aws"}, `{"Enabled_Providers": []}`, true, false},
+		{"omitted key on stored empty row accepted", []string{}, `{"laddering_enabled": false}`, false, true},
+		{"one provider accepted", []string{}, `{"enabled_providers": ["aws"]}`, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockStore := new(MockConfigStore)
+			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+			mockAuth.On("ValidateSession", ctx, "admin-token").
+				Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
+			mockAuth.grantAdmin()
+			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
+				EnabledProviders: tc.stored, DefaultTerm: 3, DefaultPayment: "all-upfront",
+				DefaultCoverage: 80, DefaultRampSchedule: "immediate", RIExchangeMode: "manual",
+				RIExchangeLookbackDays: 30, RecommendationsCacheStaleHours: 24, RecommendationsLookbackDays: 7,
+			}, nil)
+			if tc.wantSave {
+				mockStore.On("SaveGlobalConfig", ctx, mock.AnythingOfType("*config.GlobalConfig")).Return(nil)
+			}
+			handler := &Handler{config: mockStore, auth: mockAuth}
+			req := &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"Authorization": "Bearer admin-token"},
+				Body:    tc.body,
+			}
+			result, err := handler.updateConfig(ctx, req)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, result)
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+				assert.Equal(t, 400, ce.code)
+				assert.Contains(t, err.Error(), "enabled_providers must list at least one provider")
+				mockStore.AssertNotCalled(t, "SaveGlobalConfig", mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "updated", result.Status)
+		})
+	}
+}
+
+func TestHandler_updateConfig_EmptyEnabledProvidersWithoutPermissionIs403(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockStore.AssertExpectations(t); mockAuth.AssertExpectations(t) })
+
+	userSession := &Session{UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd", Email: "standard@example.com"}
+	mockAuth.On("ValidateSession", ctx, "user-token").Return(userSession, nil)
+	mockAuth.On("HasPermissionAPI", ctx, userSession.UserID, mock.AnythingOfType("string"), mock.AnythingOfType("string")).
+		Return(false, nil).Maybe()
+
+	handler := &Handler{config: mockStore, auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer user-token"},
+		Body:    `{"enabled_providers": []}`,
+	}
+	result, err := handler.updateConfig(ctx, req)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code)
+	mockStore.AssertNotCalled(t, "SaveGlobalConfig", mock.Anything, mock.Anything)
+}

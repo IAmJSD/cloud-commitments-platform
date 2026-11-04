@@ -81,6 +81,8 @@ services:
       ENVIRONMENT: development
       LOG_LEVEL: debug
       CORS_ALLOWED_ORIGIN: http://localhost:3001
+      # nginx on :3001 appends one X-Forwarded-For entry; the app port is published on loopback only, so hops=1 holds for nginx-fronted traffic.
+      CUDLY_TRUSTED_PROXY_HOPS: "1"
 
       # Optional: set initial admin password (skips password reset)
       # ADMIN_PASSWORD: "YourSecureP@ss1"
@@ -90,7 +92,7 @@ services:
       # AWS_PROFILE: default # Uncomment if using AWS profiles
 
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       # Mount source code for hot reload
       - .:/app

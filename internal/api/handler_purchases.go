@@ -686,6 +686,11 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
+	err = h.requirePlanUpdateIfPlanBearing(ctx, req, executionID)
+	if err != nil {
+		return nil, err
+	}
+
 	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
@@ -744,6 +749,20 @@ func (h *Handler) requirePlannedCancelPlanScope(ctx context.Context, session *Se
 	if IsNotFoundError(err) {
 		return errPlannedCancelPlanOutOfScope
 	}
+	return err
+}
+
+// requirePlanUpdateIfPlanBearing requires update:plans when the execution has a
+// plan, because canceling it also disables that plan. Call before any write.
+func (h *Handler) requirePlanUpdateIfPlanBearing(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) error {
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if execution.PlanID == "" {
+		return nil
+	}
+	_, err = h.requirePermission(ctx, req, auth.ActionUpdate, auth.ResourcePlans)
 	return err
 }
 
@@ -4501,11 +4520,8 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 		// can proceed.
 		return "", NewClientError(403, "no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
-	actorLower := strings.ToLower(strings.TrimSpace(actor))
-	for _, addr := range approvers {
-		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
-			return actor, nil
-		}
+	if email.ContainsAddress(approvers, actor) {
+		return actor, nil
 	}
 	return "", NewClientError(403, "your session email is not the authorized approver for this purchase")
 }

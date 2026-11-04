@@ -494,3 +494,21 @@ func TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil(t *testing.T) {
 	assert.Nil(t, reg.ReviewedBy, "admin-api-key must not be written to reviewed_by")
 	assert.NotNil(t, reg.ReviewedAt, "reviewed_at is still recorded for an API-key review")
 }
+
+// Case and whitespace variants of one address must share the per-email bucket.
+func TestHandler_forgotPassword_EmailKeyIsNormalised(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("RequestPasswordReset", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	mockRL := new(MockRateLimiter)
+	mockRL.On("AllowWithIP", mock.Anything, mock.Anything, "forgot_password_ip").Return(true, nil).Twice()
+	mockRL.On("AllowWithEmail", mock.Anything, "user@example.com", "forgot_password").Return(true, nil).Twice()
+	t.Cleanup(func() { mockRL.AssertExpectations(t) })
+
+	h := &Handler{auth: mockAuth, rateLimiter: mockRL}
+	for _, email := range []string{"user@example.com", "  User@Example.COM "} {
+		_, err := h.forgotPassword(ctx, &events.LambdaFunctionURLRequest{Body: `{"email": "` + email + `"}`})
+		require.NoError(t, err)
+	}
+}
