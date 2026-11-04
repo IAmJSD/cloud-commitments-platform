@@ -36,7 +36,7 @@ func Precheck(plan *config.PurchasePlan) error {
 			return fmt.Errorf("%w: plan %s service %q sets %s", ErrUnsupportedPlan, plan.ID, k, field)
 		}
 	}
-	if plan.RampSchedule.AllocationMode == "" && plan.RampSchedule.Type == "immediate" && plan.RampSchedule.PercentPerStep != 100 {
+	if plan.RampSchedule.AllocationMode.SizesByPercent() && plan.RampSchedule.Type == "immediate" && plan.RampSchedule.PercentPerStep != 100 {
 		return fmt.Errorf("%w: plan %s has an immediate ramp with percent_per_step %v (must be 100)",
 			ErrUnsupportedPlan, plan.ID, plan.RampSchedule.PercentPerStep)
 	}

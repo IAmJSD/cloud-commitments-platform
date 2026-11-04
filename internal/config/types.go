@@ -233,6 +233,13 @@ type ServiceConfig struct {
 	// entry of a purchase plan's services map.
 	CreatedAt *time.Time `json:"created_at,omitempty" dynamodbav:"created_at,omitempty"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty" dynamodbav:"updated_at,omitempty"`
+	// GroupID, BoundIdentities and MaxStepCommitment describe one config group
+	// of a bound plan (issue #1746). BoundIdentities holds RecIdentityKey values;
+	// MaxStepCommitment is the group's own per-step cap. All are empty on legacy
+	// entries and on the global and per-account service settings.
+	GroupID           string   `json:"group_id,omitempty" dynamodbav:"group_id,omitempty"`
+	BoundIdentities   []string `json:"bound_identities,omitempty" dynamodbav:"bound_identities,omitempty"`
+	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty" dynamodbav:"max_step_commitment,omitempty"`
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.
@@ -265,7 +272,18 @@ type PurchasePlan struct {
 
 type RampAllocationMode string
 
-const RampAllocationEqualCount RampAllocationMode = "equal_count"
+const (
+	RampAllocationEqualCount RampAllocationMode = "equal_count"
+	// RampAllocationBoundGroups marks a plan whose services entries are bound
+	// to selected recommendations (issue #1746). It sizes like the default
+	// mode; binaries that predate it refuse the plan (fail closed on rollback).
+	RampAllocationBoundGroups RampAllocationMode = "bound_groups"
+)
+
+// SizesByPercent reports whether the mode sizes each step by PercentPerStep.
+func (m RampAllocationMode) SizesByPercent() bool {
+	return m == "" || m == RampAllocationBoundGroups
+}
 
 // RampSchedule defines how purchases are spread over time.
 type RampSchedule struct {
