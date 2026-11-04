@@ -85,3 +85,38 @@ func TestUpdateServiceConfig_IgnoresClientStamps(t *testing.T) {
 	assert.Nil(t, saved.UpdatedAt, "a client-supplied updated_at must not reach the store")
 	assert.Equal(t, 80.0, saved.Coverage, "the editable fields still apply")
 }
+
+// TestUpdateServiceConfig_IgnoresClientGroupFields: the plan-group fields
+// (issue #1746) belong only to purchase plan entries, so a first save of a
+// global service setting must not store a client's group_id,
+// bound_identities or max_step_commitment.
+func TestUpdateServiceConfig_IgnoresClientGroupFields(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+	}, nil)
+	mockAuth.grantAdmin()
+
+	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
+	var saved *config.ServiceConfig
+	mockStore.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).
+		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.ServiceConfig) }).
+		Return(nil)
+	handler := &Handler{config: mockStore, auth: mockAuth}
+
+	_, err := handler.updateServiceConfig(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body: `{"enabled": true, "term": 3, "payment": "all-upfront", "coverage": 80,
+			"group_id": "g1", "bound_identities": ["k1"], "max_step_commitment": 50}`,
+	}, "aws/rds")
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.Empty(t, saved.GroupID)
+	assert.Nil(t, saved.BoundIdentities)
+	assert.Nil(t, saved.MaxStepCommitment)
+	assert.Equal(t, 80.0, saved.Coverage, "the editable fields still apply")
+}
