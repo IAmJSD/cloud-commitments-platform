@@ -17,6 +17,7 @@ import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGro
 import { wireGroupForm } from './groups/groupFormValidation';
 import { initTopbarFilters } from './topbar-filters';
 import { initTableScroll } from './lib/table-scroll';
+import { SIDEBAR_ICON_QUERY } from './nav/mobile-nav';
 
 // Re-export for external use
 export { api, utils };
@@ -55,20 +56,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // page and lost the edit.
   wireGroupForm((e) => void saveGroup(e));
 
-  // Sidebar collapse toggle (issue #340). Persisted in localStorage so the
-  // user's preference survives reloads.
+  // Sidebar collapse toggle (issue #340). On wide screens the user's choice
+  // is persisted in localStorage. Up to SIDEBAR_ICON_QUERY the sidebar starts
+  // icon-only and the toggle expands it for the session only (issue #1682),
+  // so aria-expanded always matches the width actually shown.
   const sidebar = document.querySelector<HTMLElement>('.app-sidebar');
   const sidebarToggle = document.querySelector<HTMLButtonElement>('.app-sidebar-toggle');
   if (sidebar && sidebarToggle) {
     const STORAGE_KEY = 'cudly_sidebar_collapsed';
-    if (localStorage.getItem(STORAGE_KEY) === '1') {
-      sidebar.classList.add('collapsed');
-      sidebarToggle.setAttribute('aria-expanded', 'false');
-    }
+    const narrow = window.matchMedia(SIDEBAR_ICON_QUERY);
+    const apply = (collapsed: boolean): void => {
+      sidebar.classList.toggle('collapsed', collapsed);
+      sidebarToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    };
+    const initial = (): boolean => narrow.matches || localStorage.getItem(STORAGE_KEY) === '1';
+    apply(initial());
+    narrow.addEventListener('change', () => apply(initial()));
     sidebarToggle.addEventListener('click', () => {
-      const isCollapsed = sidebar.classList.toggle('collapsed');
-      sidebarToggle.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
-      localStorage.setItem(STORAGE_KEY, isCollapsed ? '1' : '0');
+      const collapsed = !sidebar.classList.contains('collapsed');
+      apply(collapsed);
+      if (!narrow.matches) localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0');
     });
   }
 

@@ -241,7 +241,7 @@
 
 /* The brand fills the sidebar column, so the chips start on the same left
  * edge as the page content below them. */
-@media (min-width: 901px) {
+@media (min-width: 1101px) {
     .app-topbar-brand {
         flex: 0 0 auto;
         width: calc(var(--cudly-sidebar-w) - var(--cudly-sp-3));
@@ -253,8 +253,26 @@
     gap: var(--cudly-sp-2);
 }
 
+/* Chips stay on one line: a wrapped "All / Providers" overflowed the
+ * fixed-height chip, and a long account name pushed the bar sideways. The
+ * value truncates instead, bounded by the room the chip gets (#1682). */
+.app-topbar > .app-topbar-filters,
+.app-topbar .chip-select-root {
+    min-width: 0;
+}
+
+.app-topbar .chip-select-value {
+    min-width: 0;
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .app-topbar .chip-select {
     height: var(--cudly-topbar-control-h);
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
     padding: 0 var(--cudly-sp-3);
     border-color: var(--cudly-border);
     background: var(--cudly-surface);
@@ -1278,6 +1296,15 @@ div.error::before {
 
     .user-info-divider {
         margin: 0 var(--cudly-sp-1);
+    }
+}
+
+/* Between the drawer and the full sidebar the chips drop their visible
+ * "Provider:" / "Account:" prefix; each chip keeps it as its aria-label
+ * (issue #1682). */
+@media (min-width: 769px) and (max-width: 1100px) {
+    .app-topbar .chip-select-label {
+        display: none;
     }
 }
 

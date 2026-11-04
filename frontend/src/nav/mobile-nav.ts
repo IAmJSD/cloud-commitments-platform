@@ -18,6 +18,12 @@
 export const MOBILE_NAV_QUERY = '(max-width: 768px)';
 
 /**
+ * Up to this width the sidebar starts icon-only (issue #1682). Must stay in
+ * lockstep with the 1100px / 1101px blocks in styles/shell.css.
+ */
+export const SIDEBAR_ICON_QUERY = '(max-width: 1100px)';
+
+/**
  * Handle returned by setupMobileNav. open and close are the same transitions
  * the hamburger, overlay and Escape key drive, focus moves included.
  */

@@ -505,20 +505,21 @@ th .history-column-filter-btn:focus-visible {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 8px;
+    /* Wide and dark enough to read as "more columns" at a glance (#1682). */
+    width: 16px;
     pointer-events: none;
     opacity: 0;
     transition: opacity var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .table-sticky-start tr > :first-child::after {
-    right: -8px;
-    background: linear-gradient(to right, color-mix(in srgb, var(--cudly-text) 8%, transparent), transparent);
+    right: -16px;
+    background: linear-gradient(to right, color-mix(in srgb, var(--cudly-text) 18%, transparent), transparent);
 }
 
 .table-sticky-end tr > :last-child::before {
-    left: -8px;
-    background: linear-gradient(to left, color-mix(in srgb, var(--cudly-text) 8%, transparent), transparent);
+    left: -16px;
+    background: linear-gradient(to left, color-mix(in srgb, var(--cudly-text) 18%, transparent), transparent);
 }
 
 :is(.scroll-hint-left .table-sticky-start, .table-sticky-start.scroll-hint-left) tr > :first-child::after,

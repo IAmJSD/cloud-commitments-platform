@@ -173,13 +173,15 @@ body.sidebar-open {
     }
 
     /* Sidebar: off-screen by default; slides in when .sidebar-open is on <body> */
-    .app-sidebar {
+    .app-sidebar,
+    .app-sidebar.collapsed {
         position: fixed;
         top: 0;
         left: 0;
         height: 100%;
         z-index: 100;
-        /* Override the 900px icon-only collapse for mobile — full labels when open */
+        /* The drawer always opens with full labels, even when the desktop
+         * sidebar is collapsed (issue #1682). */
         width: var(--cudly-sidebar-w);
         transform: translateX(-100%);
         transition: transform var(--cudly-dur-slow) var(--cudly-ease);
@@ -187,8 +189,9 @@ body.sidebar-open {
         box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
     }
 
-    /* Restore labels hidden by the 900px collapse rule */
-    .app-sidebar .sidebar-label {
+    /* Restore labels hidden by the collapsed sidebar */
+    .app-sidebar .sidebar-label,
+    .app-sidebar.collapsed .sidebar-label {
         display: inline;
     }
 
@@ -208,7 +211,8 @@ body.sidebar-open {
         pointer-events: auto;
     }
 
-    body.sidebar-open .app-sidebar {
+    body.sidebar-open .app-sidebar,
+    body.sidebar-open .app-sidebar.collapsed {
         transform: translateX(0);
     }
 
