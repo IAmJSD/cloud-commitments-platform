@@ -29,8 +29,10 @@ func createMockLambdaRequest(sourceIP string) *events.LambdaFunctionURLRequest {
 // adminDashboardReq returns (mocked auth with admin session, admin-authed request).
 // Dashboard handlers are now permission-gated; this short-circuits the gate so
 // existing tests keep exercising the aggregation logic.
-func adminDashboardReq(ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+func adminDashboardReq(t *testing.T, ctx context.Context) (*MockAuthService, *events.LambdaFunctionURLRequest) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
@@ -44,7 +46,9 @@ func adminDashboardReq(ctx context.Context) (*MockAuthService, *events.LambdaFun
 func TestHandler_getDashboardSummary(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	// Two rds recs for DISTINCT physical resources (different resource_type) so
 	// they aggregate additively, plus one ec2 rec. Distinct cells are required
@@ -69,7 +73,7 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 	// uncapped active set across all accounts via GetActivePurchaseHistory.
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -109,7 +113,9 @@ func (s *dashboardOverrideStore) GetAccountServiceOverride(_ context.Context, ac
 func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	store := &dashboardOverrideStore{
 		MockConfigStore: mockStore,
 		overrides: map[string]*config.AccountServiceOverride{
@@ -133,7 +139,7 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 100,
 	}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -157,7 +163,9 @@ func float64Ptr(f float64) *float64 { return &f }
 func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFull(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	// No AccountServiceOverride — only a global ServiceConfig with Coverage=0.
 	store := &dashboardOverrideStore{
 		MockConfigStore: mockStore,
@@ -177,7 +185,7 @@ func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFu
 		Provider: "aws", Service: "rds", Enabled: true, Coverage: 0,
 	}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -416,6 +424,7 @@ func TestSummarizeRecommendationsWithCoverage_DedupesVariantsPerCell(t *testing.
 func TestHandler_getUpcomingPurchases(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	nextExecDate := time.Now().AddDate(0, 0, 7)
 	planA := config.PurchasePlan{
@@ -462,7 +471,7 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{planA, planB}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getUpcomingPurchases(ctx, req)
@@ -499,6 +508,7 @@ func TestHandler_getUpcomingPurchases(t *testing.T) {
 func TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	scheduled := time.Now().AddDate(0, 0, 7)
 	plan := config.PurchasePlan{
@@ -537,7 +547,7 @@ func TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID(t *testing.T) {
 	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getUpcomingPurchases(ctx, req)
@@ -555,6 +565,7 @@ func TestHandler_getUpcomingPurchases_PropagatesCreatedByUserID(t *testing.T) {
 func TestHandler_getUpcomingPurchases_OrphanExecutionSkipped(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	pending := []config.PurchaseExecution{
 		{
@@ -566,7 +577,7 @@ func TestHandler_getUpcomingPurchases_OrphanExecutionSkipped(t *testing.T) {
 	mockStore.On("GetPendingExecutions", ctx).Return(pending, nil)
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getUpcomingPurchases(ctx, req)
@@ -593,7 +604,9 @@ func (m *mockStoreWithPlanAccounts) GetPlanAccounts(_ context.Context, planID st
 func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	nextExecDate := time.Now().AddDate(0, 0, 7)
 	planA := config.PurchasePlan{
@@ -661,7 +674,9 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 func TestHandler_getUpcomingPurchases_ScopedUser_SkipsUnattributed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	nextExecDate := time.Now().AddDate(0, 0, 7)
 	plan := config.PurchasePlan{
@@ -701,6 +716,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 	t.Run("with auth service and admin exists", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
 		handler := &Handler{
@@ -717,6 +733,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 	t.Run("with auth service and no admin", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("CheckAdminExists", ctx).Return(false, nil)
 
 		handler := &Handler{
@@ -731,6 +748,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 	t.Run("auth service check error still returns response", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("CheckAdminExists", ctx).Return(false, errors.New("db error"))
 
 		handler := &Handler{
@@ -755,9 +773,13 @@ func TestHandler_getPublicInfo(t *testing.T) {
 
 	t.Run("with rate limiting - allowed", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockRateLimiter := new(MockRateLimiter)
+		t.Cleanup(func() { mockRateLimiter.AssertExpectations(t) })
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
-		mockRateLimiter.On("AllowWithIP", ctx, "192.168.1.1", "api_general").Return(true, nil)
+		// No AllowWithIP expectation: getPublicInfo never consults the rate
+		// limiter, so a configured limiter must not change its answer, and an
+		// unexpected call would fail the test.
 
 		handler := &Handler{
 			auth:        mockAuth,
@@ -773,6 +795,7 @@ func TestHandler_getPublicInfo(t *testing.T) {
 	// unauthenticated /api/info response, even when a secretsARN is configured.
 	t.Run("no sensitive fields in unauthenticated response (#633)", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
 		handler := &Handler{
@@ -848,6 +871,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("no purchase history", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return([]config.PurchaseHistoryRecord{}, nil)
 
 		handler := &Handler{config: mockStore}
@@ -864,6 +888,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 	// Issue #72: a store error must be returned, not reported as zeroed KPIs.
 	t.Run("purchase history error is returned, not zeroed", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		storeErr := errors.New("db error")
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(nil, storeErr)
 
@@ -876,6 +901,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("with active commitments", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		// Create a purchase made 6 months ago with 1-year term (still active)
 		purchaseTime := time.Now().AddDate(0, -6, 0)
@@ -904,6 +930,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("with expired commitments", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		// Create a purchase made 2 years ago with 1-year term (expired)
 		purchaseTime := time.Now().AddDate(-2, 0, 0)
@@ -932,6 +959,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 	t.Run("with purchase made this year", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		// Create a purchase made this year
 		purchaseTime := time.Now().AddDate(0, -1, 0) // 1 month ago
@@ -963,6 +991,7 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 	// that isn't "completed".
 	t.Run("failed status row is excluded from committedMonthly", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		purchaseTime := time.Now().AddDate(0, -3, 0)
 		purchases := []config.PurchaseHistoryRecord{
 			{
@@ -1207,7 +1236,9 @@ func TestHandler_getDashboardSummary_CurrentSavingsPopulated(t *testing.T) {
 	}
 
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
@@ -1216,7 +1247,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsPopulated(t *testing.T) {
 	mockStore.On("GetServiceConfig", ctx, "", mock.Anything).Return(nil, config.ErrNotFound)
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(purchases, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -1252,7 +1283,9 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	}
 
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(
 		[]config.RecommendationRecord{{Service: "EC2", Savings: 400.0}}, nil)
@@ -1262,7 +1295,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	// with an empty scope) runs.
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(purchases, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -1295,7 +1328,9 @@ func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *test
 	// No purchases at all — represents a new account that has recommendations
 	// but has not yet acted on them.
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(
 		[]config.RecommendationRecord{
@@ -1308,7 +1343,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *test
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(
 		[]config.PurchaseHistoryRecord{}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{
 		auth:      mockAuth,
 		scheduler: mockScheduler,
@@ -1368,6 +1403,7 @@ func TestHandler_calculateCurrentCoverage(t *testing.T) {
 func TestHandleRequest_DashboardSummary_PurchaseHistoryErrorIs500(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
 
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
@@ -1404,13 +1440,15 @@ func TestHandleRequest_DashboardSummary_PurchaseHistoryErrorIs500(t *testing.T) 
 func TestGetDashboardSummary_NothingToMeasure_CoverageIsNull(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
-	mockAuth, req := adminDashboardReq(ctx)
+	mockAuth, req := adminDashboardReq(t, ctx)
 	handler := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
 
 	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
@@ -1427,9 +1465,10 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 	t.Run("scheduler error", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(nil, errors.New("scheduler error"))
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{auth: mockAuth, scheduler: mockScheduler}
 
 		_, err := handler.getDashboardSummary(ctx, req, map[string]string{})
@@ -1441,14 +1480,16 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 	// recommendations; a store error must fail the request, not zero the KPIs.
 	t.Run("purchase history error", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		storeErr := errors.New("db error")
 
 		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(nil, storeErr)
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
 
 		result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
@@ -1460,13 +1501,15 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 	t.Run("nil global config uses default coverage", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{
 			auth:      mockAuth,
 			scheduler: mockScheduler,
@@ -1480,7 +1523,9 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 	t.Run("zero coverage in global config uses default", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
+		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 		globalCfg := &config.GlobalConfig{
 			DefaultCoverage: 0,
@@ -1490,7 +1535,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{
 			auth:      mockAuth,
 			scheduler: mockScheduler,
@@ -1546,6 +1591,7 @@ func TestGetDashboardSummary_ScopedUser_ExplicitOutOfScopeAccountIsIgnored(t *te
 	}
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: scopedUserID,
 		Email:  "viewer@example.com",
@@ -1610,6 +1656,7 @@ func TestGetDashboardSummary_ScopedUser_ExplicitInScopeAccountStillWorks(t *test
 	}
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: scopedUserID,
 		Email:  "viewer@example.com",
@@ -1689,6 +1736,7 @@ func TestGetDashboardSummary_ScopedUser_LegacyExternalAccountIDStillMatchesAllow
 	}
 
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: scopedUserID,
 		Email:  "viewer@example.com",
@@ -1717,9 +1765,10 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 
 	t.Run("get pending executions error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetPendingExecutions", ctx).Return(nil, errors.New("db error"))
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		_, err := handler.getUpcomingPurchases(ctx, req)
@@ -1729,10 +1778,11 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 
 	t.Run("list plans error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 		mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(nil, errors.New("db error"))
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		_, err := handler.getUpcomingPurchases(ctx, req)
@@ -1742,10 +1792,11 @@ func TestHandler_getUpcomingPurchases_Errors(t *testing.T) {
 
 	t.Run("no pending executions yields empty list", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{}, nil)
 		mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{}, nil)
 
-		mockAuth, req := adminDashboardReq(ctx)
+		mockAuth, req := adminDashboardReq(t, ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
 
 		result, err := handler.getUpcomingPurchases(ctx, req)
@@ -2006,6 +2057,7 @@ func TestHandler_calculateCommitmentMetrics_ProviderFilter(t *testing.T) {
 func TestHandleRequest_DashboardUpcomingFlagsStepWithoutRecommendations(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	plan := config.PurchasePlan{
 		ID:   "11111111-1111-1111-1111-111111111620",

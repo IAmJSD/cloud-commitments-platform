@@ -28,7 +28,7 @@ import (
 //   - The plan has several services and the request names none of them: the
 //     form cannot say which entry it means, and adding a service could buy
 //     something the user never chose, so the update is refused.
-func mergeRequestedServices(existing, requested map[string]config.ServiceConfig) (map[string]config.ServiceConfig, error) {
+func mergeRequestedServices(existing, requested map[string]config.ServiceConfig, omitted omittedFields) (map[string]config.ServiceConfig, error) {
 	if len(requested) == 0 {
 		return existing, nil
 	}
@@ -40,7 +40,7 @@ func mergeRequestedServices(existing, requested map[string]config.ServiceConfig)
 
 	if key, ok := findServiceKey(existing, reqSvc.Provider, reqSvc.Service); ok {
 		merged := maps.Clone(existing)
-		merged[key] = overlayServiceConfig(existing[key], reqSvc)
+		merged[key] = overlayServiceConfig(existing[key], reqSvc, omitted)
 		return merged, nil
 	}
 	if len(existing) == 1 {
@@ -50,7 +50,7 @@ func mergeRequestedServices(existing, requested map[string]config.ServiceConfig)
 				continue
 			}
 			merged := maps.Clone(existing)
-			updated := overlayServiceConfig(stored, reqSvc)
+			updated := overlayServiceConfig(stored, reqSvc, omitted)
 			updated.Enabled = stored.Enabled
 			merged[key] = updated
 			return merged, nil
@@ -96,13 +96,20 @@ func findServiceKey(services map[string]config.ServiceConfig, provider, service 
 // overlayServiceConfig applies the fields the legacy form sends onto the
 // stored entry, keeping the ones it cannot express (ramp_schedule,
 // include/exclude filters, min_count).
-func overlayServiceConfig(stored, req config.ServiceConfig) config.ServiceConfig {
+// Fields the request omitted keep the stored value.
+func overlayServiceConfig(stored, req config.ServiceConfig, omitted omittedFields) config.ServiceConfig {
 	stored.Provider = req.Provider
 	stored.Service = req.Service
 	stored.Enabled = req.Enabled
-	stored.Term = req.Term
-	stored.Payment = req.Payment
-	stored.Coverage = req.Coverage
+	if !omitted.Term {
+		stored.Term = req.Term
+	}
+	if !omitted.Payment {
+		stored.Payment = req.Payment
+	}
+	if !omitted.Coverage {
+		stored.Coverage = req.Coverage
+	}
 	return stored
 }
 

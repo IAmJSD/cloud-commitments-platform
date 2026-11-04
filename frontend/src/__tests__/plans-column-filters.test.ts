@@ -233,7 +233,8 @@ describe('Planned Purchases column filters (issue #166 follow-up)', () => {
     const survivor = document.querySelector(
       '#planned-purchases-list tbody tr.planned-purchase-row',
     );
-    expect(survivor?.innerHTML).toContain('rds');
+    // #1683: the Service cell shows the display name.
+    expect(survivor?.innerHTML).toContain('RDS');
   });
 
   test('invalid numeric expression surfaces the lib error inline (no filter applied)', async () => {

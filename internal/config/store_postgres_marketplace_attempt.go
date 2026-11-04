@@ -57,8 +57,9 @@ func (s *PostgresStore) GetMarketplaceListingAttempt(ctx context.Context, purcha
 // caller just canceled). state must be an ended state (canceled or closed) or
 // empty, which clears a stuck pending row that has no listing; an empty
 // listingID clears the listing id too. A new listing id drops the previous
-// listing's listed_at and settlement (issue #27). It reports whether the row
-// was written.
+// listing's listed_at and settlement (issue #27); the previous listing is
+// kept in marketplace_listing_settlements (migration 000153, issue #1494). It
+// reports whether the row was written.
 func (s *PostgresStore) ResolveMarketplaceListingAttempt(ctx context.Context, purchaseID string, seen MarketplaceListingAttempt, listingID, state string) (bool, error) {
 	if state != "" && !isEndedListingState(state) {
 		return false, fmt.Errorf("cannot resolve marketplace listing %s for purchase %s to live state %q", listingID, purchaseID, state)

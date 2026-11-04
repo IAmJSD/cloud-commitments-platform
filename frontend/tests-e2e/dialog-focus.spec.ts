@@ -50,7 +50,9 @@ test('upcoming purchase details dialog takes focus, closes on Escape and restore
 
   const dialog = page.getByRole('dialog', { name: 'Upcoming Purchase Details' });
   await expect(dialog).toBeVisible();
-  expect(await page.evaluate(() => !!document.getElementById('purchase-details-modal')?.contains(document.activeElement))).toBe(true);
+  // #1653: the safe Close button takes focus, not the destructive Cancel Purchase.
+  await expect(dialog.locator('#cancel-purchase-detail-btn')).toBeVisible();
+  await expect(dialog.locator('#close-purchase-details-btn')).toBeFocused();
   expect(await tabStaysInside(page, '#purchase-details-modal', 5)).toBe(true);
 
   await page.keyboard.press('Escape');

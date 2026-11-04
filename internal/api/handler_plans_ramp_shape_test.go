@@ -19,15 +19,19 @@ func putPlan(t *testing.T, existing *config.PurchasePlan, body string) (*events.
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
-	mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "admin-id", Email: "admin@example.com"}, nil)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	// The admin X-API-Key authenticates the request, so the bearer session is
+	// never validated.
 	mockAuth.grantAdmin()
-	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	var saved *config.PurchasePlan
 	mockStore.On("GetPurchasePlan", mock.Anything, existing.ID).Return(existing, nil)
+	// Maybe: a refused update never reaches the store. Callers prove which
+	// way it went through the returned plan (nil when refused).
 	mockStore.On("UpdatePurchasePlan", mock.Anything, mock.AnythingOfType("*config.PurchasePlan")).
-		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchasePlan) }).Return(nil)
+		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchasePlan) }).Return(nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth, apiKey: "test-key"}
 	resp, err := handler.HandleRequest(ctx, &events.LambdaFunctionURLRequest{

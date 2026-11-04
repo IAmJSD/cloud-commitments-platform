@@ -30,7 +30,10 @@ func apiKeyBodyWithConstraints(constraints string) string {
 func TestHandleRequest_CreateAPIKey_RejectsExplicitZeroMaxAmount(t *testing.T) {
 	for _, literal := range []string{`0`, `0.0`, `-0`, `0e5`} {
 		t.Run(literal, func(t *testing.T) {
-			h, _, stored := newAPIKeyRoundtripHandler(t)
+			h, store, stored := newAPIKeyRoundtripHandler(t)
+			// The handler refuses the cap before the owner is read or a key
+			// is stored; *stored below pins the latter.
+			relaxUnreachedStubs(&store.Mock, "GetUserByID", "GetGroup", "CreateAPIKey")
 
 			resp := apiKeyRoundtripRequest(t, h, "POST",
 				apiKeyBodyWithConstraints(`{"regions":["us-east-1"],"max_amount":`+literal+`}`))

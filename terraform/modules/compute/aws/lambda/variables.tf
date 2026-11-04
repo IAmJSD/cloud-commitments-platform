@@ -50,11 +50,13 @@ variable "memory_size" {
 
 variable "timeout" {
   # Must cover the longest work the handler detaches from the request: an RI
-  # exchange or purchase gets 4m of execution plus a 30s terminal save
-  # (riExchangeExecutionTimeout / purchaseExecutionTimeout + their terminal
-  # save budgets). Lambda ends the invocation at this timeout whatever the
-  # context deadline says, so a shorter value cuts that work off mid-flight
-  # (#913). 300 = 270s of budget + 30s for the request work before it.
+  # exchange gets 4m of execution plus a 30s terminal save
+  # (riExchangeExecutionTimeout + riExchangeTerminalSaveTimeout); a purchase
+  # gets 3m30s of execution, a 30s terminal save and a 30s failure alert
+  # (purchaseExecutionTimeout + terminalSaveTimeout + failureNotifyTimeout).
+  # Lambda ends the invocation at this timeout whatever the context deadline
+  # says, so a shorter value cuts that work off mid-flight (#913, #1434).
+  # 300 = 270s of budget + 30s for the request work before it.
   # Pinned against the Go constants by TestLambdaTimeoutCoversRIExchangeBudget
   # and TestLambdaTimeoutCoversPurchaseBudget.
   description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
@@ -63,7 +65,7 @@ variable "timeout" {
 
   validation {
     condition     = var.timeout >= 300 && var.timeout <= 900
-    error_message = "timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+    error_message = "timeout must be between 300 and 900 seconds: RI exchanges run up to 270s (4m execution + 30s terminal save) and purchases up to 270s (3m30s execution + 30s terminal save + 30s failure alert) after the request, and Lambda cuts the invocation off at this timeout (#913)."
   }
 }
 
@@ -190,9 +192,9 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "EventBridge schedule expression for recommendations"
+  description = "EventBridge schedule expression for recommendation collection. Default: daily at 02:00 UTC, the same time as GCP and Azure. A cron() schedule lets the API report next_collection_at; a rate() schedule leaves it null because its phase is unknown (#756)."
   type        = string
-  default     = "rate(1 day)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -244,9 +246,9 @@ variable "ladder_run_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Enable the scheduled fire_scheduled_purchases sweep. When true, EventBridge periodically fires purchase_executions in status=scheduled whose scheduled_execution_at is past (auto-approve delayed-fire path). Default false until auto-approve (L9) is promoted to GA."
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {

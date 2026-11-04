@@ -244,6 +244,7 @@ func TestHandler_checkRateLimit_Exceeded(t *testing.T) {
 func TestRequireAuth_UserAPIKey_InvalidKey(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "bad-key").
 		Return(nil, nil, errors.New("invalid key"))
 
@@ -280,6 +281,7 @@ func TestHandler_requireAdmin_NoAuthService(t *testing.T) {
 
 func TestHandler_requireAdmin_NoToken(t *testing.T) {
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{},
@@ -292,6 +294,7 @@ func TestHandler_requireAdmin_NoToken(t *testing.T) {
 func TestHandler_requireAdmin_InvalidSession(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "bad-token").Return(nil, errors.New("expired"))
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -362,6 +365,7 @@ func TestHandler_validateCSRF_AdminAPIKey(t *testing.T) {
 func TestHandler_validateCSRF_ValidUserAPIKey(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-api-key").
 		Return("uid", map[string]interface{}{}, nil)
 	h := &Handler{auth: mockAuth}
@@ -375,6 +379,7 @@ func TestHandler_validateCSRF_ValidUserAPIKey(t *testing.T) {
 func TestHandler_validateCSRF_InvalidAPIKeyFallsThrough(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	// Invalid API key — also no bearer token → error about missing session
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "invalid-key").
 		Return(nil, nil, errors.New("bad key"))
@@ -389,6 +394,7 @@ func TestHandler_validateCSRF_InvalidAPIKeyFallsThrough(t *testing.T) {
 func TestHandler_validateCSRF_NoSessionToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{},
@@ -401,6 +407,7 @@ func TestHandler_validateCSRF_NoSessionToken(t *testing.T) {
 func TestHandler_validateCSRF_ValidCSRF(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateCSRFToken", ctx, "session-tok", "csrf-tok").Return(nil)
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
@@ -564,6 +571,7 @@ func TestHandler_checkCredentialPresence_WithCredStore_NotFound(t *testing.T) {
 func TestHandler_checkCredentialPresence_FallbackToConfigStore(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	acct := &config.CloudAccount{ID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Provider: "aws"}
 
 	// MockConfigStore.HasAccountCredentials returns false by default
@@ -624,6 +632,7 @@ func TestHandler_getRecommendations_InvalidAccountIDs(t *testing.T) {
 func TestHandler_getRecommendations_SchedulerError(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 		Return(nil, errors.New("scheduler down"))
 
@@ -637,6 +646,7 @@ func TestHandler_getRecommendations_SchedulerError(t *testing.T) {
 func TestHandler_getRecommendations_WithResults(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	recs := []config.RecommendationRecord{
 		{Service: "rds", Region: "us-east-1", Savings: 100.0, UpfrontCost: 200.0},
 		{Service: "rds", Region: "eu-west-1", Savings: 50.0, UpfrontCost: 100.0},
@@ -659,6 +669,7 @@ func TestHandler_getRecommendations_WithResults(t *testing.T) {
 func TestHandler_getRecommendations_ZeroSavings(t *testing.T) {
 	ctx := context.Background()
 	mockScheduler := new(MockScheduler)
+	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 	recs := []config.RecommendationRecord{
 		{Service: "rds", Region: "us-east-1", Savings: 0, UpfrontCost: 0},
 	}
@@ -694,6 +705,7 @@ func TestHandler_sendPurchaseApprovalEmail_NilNotifier(t *testing.T) {
 func TestHandler_sendPurchaseApprovalEmail_NoNotificationEmail(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	// GetGlobalConfig returns a config without a notification email
 	globalCfg := &config.GlobalConfig{}
@@ -747,6 +759,7 @@ func TestHandler_sendPurchaseApprovalEmail_ResponseRecipientUsesNotificationEmai
 	accountID := "acct-1"
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		NotificationEmail: &notificationEmail,
 	}, nil)
@@ -788,6 +801,7 @@ func TestHandler_sendPurchaseApprovalEmail_ResponseRecipientFallsBackToContactEm
 	accountID := "acct-2"
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
 		// NotificationEmail intentionally not set.
 	}, nil)

@@ -111,7 +111,9 @@ func TestSendPurchaseApprovalRequest_MuteCheckError_FailOpen(t *testing.T) {
 	// so a DB hiccup doesn't permanently block approval notifications).
 	ctx := context.Background()
 	ses := new(MockSESClient)
+	t.Cleanup(func() { ses.AssertExpectations(t) })
 	mc := new(mockMuteChecker)
+	t.Cleanup(func() { mc.AssertExpectations(t) })
 
 	mc.On("IsNotificationMuted", mock.Anything, "approver@example.com", string(common.ScopePurchaseApprovals)).
 		Return(false, errors.New("db error"))
@@ -199,6 +201,7 @@ func TestSendRIExchangePendingApproval_EmitsScopedUnsubscribeHeaders(t *testing.
 func TestSendPurchaseApprovalRequest_WithCC_SuppressesListUnsubscribe(t *testing.T) {
 	ctx := context.Background()
 	ses := new(MockSESClient)
+	t.Cleanup(func() { ses.AssertExpectations(t) })
 	mc := new(mockMuteChecker)
 
 	mc.On("IsNotificationMuted", mock.Anything, mock.Anything, mock.Anything).
@@ -364,6 +367,7 @@ func TestIsRecipientMuted_NoErrorFollowsStore(t *testing.T) {
 	for _, scope := range []string{string(common.ScopePurchaseApprovals), "new_recommendations"} {
 		for _, stored := range []bool{true, false} {
 			mc := new(mockMuteChecker)
+			t.Cleanup(func() { mc.AssertExpectations(t) })
 			mc.On("IsNotificationMuted", mock.Anything, "a@example.com", scope).Return(stored, nil)
 			assert.Equal(t, stored, isRecipientMuted(context.Background(), mc, "a@example.com", scope), "scope=%s stored=%v", scope, stored)
 		}

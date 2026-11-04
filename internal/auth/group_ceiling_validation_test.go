@@ -158,7 +158,7 @@ func TestGrantCeiling_RejectsBlankActionOrResource(t *testing.T) {
 // (allow everything) while a list holding only "" matches nothing (deny
 // everything) -- and the group-edit form's comma-joined text encoding
 // cannot represent the difference. The ceiling does not catch this either:
-// the admin:* branch of grantCeilingAllows covers any requested constraint
+// an unconstrained admin:* holder covers any requested constraint
 // set, so before this guard a blank entry was written straight through.
 func TestGrantCeiling_RejectsBlankConstraintEntries(t *testing.T) {
 	ctx := context.Background()

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +56,18 @@ func setupAdminMock(ctx context.Context) *MockConfigStore {
 	return new(MockConfigStore)
 }
 
+// relaxUnreachedStubs marks the expectations a shared fixture registered for
+// methods as optional, for a test whose path never reaches those calls; the
+// test asserts what does or does not happen itself. Times(0) also clears a
+// .Once() count, which testify would otherwise still report as unmet.
+func relaxUnreachedStubs(m *mock.Mock, methods ...string) {
+	for _, c := range m.ExpectedCalls {
+		if slices.Contains(methods, c.Method) {
+			c.Maybe().Times(0)
+		}
+	}
+}
+
 func setupAdminAuth(ctx context.Context, mockAuth *MockAuthService) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantAdmin()
@@ -64,9 +78,11 @@ func setupAdminAuth(ctx context.Context, mockAuth *MockAuthService) {
 func TestListAccounts_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	// MockConfigStore.ListCloudAccounts is a stub returning nil — override with embedded mock
 	accounts := []config.CloudAccount{sampleAccount()}
 	customStore := &mockConfigStoreAccounts{
@@ -87,9 +103,11 @@ func TestListAccounts_Success(t *testing.T) {
 func TestListAccounts_ReturnsEmptySlice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	result, err := handler.listAccounts(ctx, adminRequest(""))
@@ -139,6 +157,7 @@ func standardRequest(body string) *events.LambdaFunctionURLRequest { //nolint:un
 func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
 
 	full := sampleAccount()
@@ -182,6 +201,7 @@ func TestListAccountsMinimal_StandardUserAllowed_NoSensitiveFields(t *testing.T)
 func TestListAccounts_StandardUserDenied_403(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupStandardUserAuth(ctx, mockAuth, "view", "accounts", false, nil)
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
@@ -198,6 +218,7 @@ func TestListAccounts_StandardUserDenied_403(t *testing.T) {
 func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", false, nil)
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
@@ -214,6 +235,7 @@ func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{sampleAccount().ID})
 
 	prod := sampleAccount()
@@ -239,6 +261,7 @@ func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 func TestListAccountsMinimal_ReturnsEmptySlice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"*"})
 
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
@@ -254,9 +277,11 @@ func TestListAccountsMinimal_ReturnsEmptySlice(t *testing.T) {
 func TestCreateAccount_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012"}`
@@ -272,9 +297,11 @@ func TestCreateAccount_Success(t *testing.T) {
 func TestCreateAccount_MissingName(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"provider":"aws","external_id":"123456789012"}`
@@ -290,9 +317,11 @@ func TestCreateAccount_MissingName(t *testing.T) {
 func TestCreateAccount_InvalidProvider(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"digitalocean","external_id":"123"}`
@@ -308,9 +337,11 @@ func TestCreateAccount_InvalidProvider(t *testing.T) {
 func TestCreateAccount_MissingExternalID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws"}`
@@ -326,9 +357,11 @@ func TestCreateAccount_MissingExternalID(t *testing.T) {
 func TestCreateAccount_InvalidContactEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"not-an-email"}`
@@ -344,9 +377,11 @@ func TestCreateAccount_InvalidContactEmail(t *testing.T) {
 func TestCreateAccount_EmptyContactEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	// Empty contact_email is allowed (field is optional).
@@ -363,9 +398,11 @@ func TestCreateAccount_EmptyContactEmail(t *testing.T) {
 func TestCreateAccount_RejectsTLDlessContactEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"admin@intranet"}`
@@ -383,9 +420,11 @@ func TestCreateAccount_RejectsTLDlessContactEmail(t *testing.T) {
 func TestCreateAccount_AcceptsValidContactEmail(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"name":"Acme","provider":"aws","external_id":"123456789012","contact_email":"admin@example.com"}`
@@ -400,6 +439,7 @@ func TestCreateAccount_AcceptsValidContactEmail(t *testing.T) {
 func TestGetAccount_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	acct := sampleAccount()
@@ -419,9 +459,11 @@ func TestGetAccount_Success(t *testing.T) {
 func TestGetAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
 	handler := &Handler{auth: mockAuth, config: store}
 
@@ -434,9 +476,13 @@ func TestGetAccount_NotFound(t *testing.T) {
 func TestGetAccount_InvalidUUID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
+	// The id is refused before the session is read.
+	relaxUnreachedStubs(&mockAuth.Mock, "ValidateSession")
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	result, err := handler.getAccount(ctx, adminRequest(""), "not-a-uuid")
@@ -449,9 +495,11 @@ func TestGetAccount_InvalidUUID(t *testing.T) {
 func TestDeleteAccount_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	result, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
@@ -469,9 +517,11 @@ func TestDeleteAccount_Success(t *testing.T) {
 func TestDeleteAccount_PendingExecutions_Returns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		return 3, nil
 	}
@@ -508,9 +558,11 @@ func TestDeleteAccount_PendingExecutions_Returns409(t *testing.T) {
 func TestDeleteAccount_PendingZero_DeletesNormally(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	countCalled := false
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		countCalled = true
@@ -538,9 +590,11 @@ func TestDeleteAccount_PendingZero_DeletesNormally(t *testing.T) {
 func TestDeleteAccount_ActiveExecutions_Returns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
 	var liveAccount string
 	store.CountLiveExecutionsForAccountFn = func(_ context.Context, id string) (int, error) {
@@ -577,9 +631,11 @@ func TestDeleteAccount_ActiveExecutions_Returns409(t *testing.T) {
 func TestDeleteAccount_PendingTakesPrecedenceOverActive(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 1, nil }
 	store.ListPendingExecutionIDsForAccountFn = func(_ context.Context, _ string) ([]string, error) {
 		return []string{"exec-1"}, nil
@@ -605,9 +661,11 @@ func TestDeleteAccount_PendingTakesPrecedenceOverActive(t *testing.T) {
 func TestDeleteAccount_OnlyTerminalExecutions_Deletes(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
 	liveCalled := false
 	store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
@@ -633,9 +691,11 @@ func TestDeleteAccount_OnlyTerminalExecutions_Deletes(t *testing.T) {
 func TestDeleteAccount_LiveCountErr_Returns500(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
 	store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		return 0, errors.New("db down")
@@ -662,9 +722,11 @@ func TestDeleteAccount_LiveCountErr_Returns500(t *testing.T) {
 func TestDeleteAccount_PendingListErr_StillReturns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		return 5, nil
 	}
@@ -696,9 +758,11 @@ func TestDeleteAccount_PendingListErr_StillReturns409(t *testing.T) {
 func TestDeleteAccount_FKViolationRace_Returns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	// Preflight count is 0 (no pending rows at preflight time).
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		return 0, nil
@@ -742,9 +806,11 @@ func TestDeleteAccount_FKViolationRace_RequeriesPreflight(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			setupAdminAuth(ctx, mockAuth)
 
 			store := setupAdminMock(ctx)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			pendingCalls, liveCalls := 0, 0
 			// First call is the preflight (nothing yet); the second is the
 			// re-query after the FK violation, which sees the raced-in row.
@@ -786,9 +852,11 @@ func TestDeleteAccount_FKViolationRace_RequeriesPreflight(t *testing.T) {
 func TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	calls := 0
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		calls++
@@ -816,9 +884,11 @@ func TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack(t *testing.T) {
 func TestDeleteAccount_NonFKError_StillReturns500(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
 		return 0, nil
 	}
@@ -839,9 +909,11 @@ func TestDeleteAccount_NonFKError_StillReturns500(t *testing.T) {
 func TestDeleteAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
 	deleteCalled := false
 	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
@@ -862,9 +934,11 @@ func TestDeleteAccount_NotFound(t *testing.T) {
 func TestSaveAccountCredentials_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store, credStore: &MockCredentialStore{}}
 
 	body := `{"credential_type":"aws_access_keys","payload":{"access_key_id":"AKIA...","secret_access_key":"secret"}}`
@@ -876,9 +950,11 @@ func TestSaveAccountCredentials_Success(t *testing.T) {
 func TestSaveAccountCredentials_InvalidType(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"credential_type":"unknown_type","payload":{}}`
@@ -893,9 +969,11 @@ func TestSaveAccountCredentials_InvalidType(t *testing.T) {
 func TestSaveAccountCredentials_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	result, err := handler.saveAccountCredentials(ctx, adminRequest("{invalid}"), "11111111-1111-1111-1111-111111111111")
@@ -912,9 +990,11 @@ func TestSaveAccountCredentials_InvalidJSON(t *testing.T) {
 func TestSaveAccountCredentials_NotFound_WithNilCredStore(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return nil, nil }
 	handler := &Handler{auth: mockAuth, config: store, credStore: nil}
 
@@ -930,6 +1010,7 @@ func TestSaveAccountCredentials_NotFound_WithNilCredStore(t *testing.T) {
 func TestListAccountServiceOverrides_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	overrides := []config.AccountServiceOverride{
@@ -962,9 +1043,11 @@ func TestListAccountServiceOverrides_Success(t *testing.T) {
 func TestSaveAccountServiceOverride_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"enabled":true,"term":1}`
@@ -983,9 +1066,11 @@ func TestSaveAccountServiceOverride_Success(t *testing.T) {
 func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	saveCalled := false
 	store.SaveAccountServiceOverrideFn = func(_ context.Context, _ *config.AccountServiceOverride) error {
 		saveCalled = true
@@ -1021,9 +1106,11 @@ func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
 func TestSaveAccountServiceOverride_ValidCombo_Saves(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{
 		auth:   mockAuth,
 		config: store,
@@ -1053,9 +1140,11 @@ func TestSaveAccountServiceOverride_NoProbeData_Permissive(t *testing.T) {
 
 	t.Run("nil commitmentOpts", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		setupAdminAuth(ctx, mockAuth)
 
 		store := setupAdminMock(ctx)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		handler := &Handler{auth: mockAuth, config: store} // commitmentOpts is nil
 
 		result, err := handler.saveAccountServiceOverride(ctx, adminRequest(body), path)
@@ -1065,9 +1154,11 @@ func TestSaveAccountServiceOverride_NoProbeData_Permissive(t *testing.T) {
 
 	t.Run("ErrNoData falls through permissive", func(t *testing.T) {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		setupAdminAuth(ctx, mockAuth)
 
 		store := setupAdminMock(ctx)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		handler := &Handler{
 			auth:   mockAuth,
 			config: store,
@@ -1145,9 +1236,11 @@ func TestParseServiceOverridePath_Invalid(t *testing.T) {
 func TestSetPlanAccounts_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	handler := &Handler{auth: mockAuth, config: store}
 
 	body := `{"account_ids":["11111111-1111-1111-1111-111111111111"]}`
@@ -1185,10 +1278,12 @@ func awsPlan209() *config.PurchasePlan {
 func TestSetPlanAccounts_SingleMismatch(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1216,10 +1311,12 @@ func TestSetPlanAccounts_SingleMismatch(t *testing.T) {
 func TestSetPlanAccounts_MultipleMismatches(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1256,10 +1353,12 @@ func TestSetPlanAccounts_MultipleMismatches(t *testing.T) {
 func TestSetPlanAccounts_ValidHappyPath(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	var capturedIDs []string
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1282,9 +1381,11 @@ func TestSetPlanAccounts_ValidHappyPath(t *testing.T) {
 func TestSetPlanAccounts_StoreNotFoundAfterValidationMapsTo404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1308,10 +1409,12 @@ func TestSetPlanAccounts_StoreNotFoundAfterValidationMapsTo404(t *testing.T) {
 func TestSetPlanAccounts_PlanNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return nil, nil // store-style "not found": (nil, nil)
 	}
@@ -1334,10 +1437,12 @@ func TestSetPlanAccounts_PlanNotFound(t *testing.T) {
 func TestSetPlanAccounts_AccountNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1366,10 +1471,12 @@ func TestSetPlanAccounts_AccountNotFound(t *testing.T) {
 func TestSetPlanAccounts_MixedValidAndMismatch(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -1404,10 +1511,12 @@ func TestSetPlanAccounts_MixedValidAndMismatch(t *testing.T) {
 func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	var capturedIDs []string
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	// Plan with an empty services map — derived provider set is empty;
 	// the validation block skips and the assignment passes through.
 	// Pins the defensive behavior so a future change is conscious.
@@ -1437,10 +1546,12 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 func TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID209, Name: "sp-plan", Services: map[string]config.ServiceConfig{
 			"aws:savings-plans-compute":     {Provider: "aws", Service: "savings-plans"},
@@ -1482,9 +1593,11 @@ func TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			setupAdminAuth(ctx, mockAuth)
 			setCalled := false
 			store := setupAdminMock(ctx)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 				return &config.PurchasePlan{ID: planID209, Name: "alias plan", Services: map[string]config.ServiceConfig{
 					"original-key": {Provider: "azure", Service: "vm", Enabled: true},
@@ -1523,10 +1636,12 @@ func TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField(t *testing.T) {
 func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID209, Name: "bad-key", Services: map[string]config.ServiceConfig{
 			"ec2":    {Service: "ec2"},
@@ -1559,10 +1674,12 @@ func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
 func TestSetPlanAccounts_RejectsEmpty(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	setCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
 		setCalled = true
 		return nil
@@ -1582,6 +1699,7 @@ func TestSetPlanAccounts_RejectsEmpty(t *testing.T) {
 func TestListPlanAccounts_Success(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	accounts := []config.CloudAccount{sampleAccount()}
@@ -1619,6 +1737,7 @@ func orgRootAccount() *config.CloudAccount {
 func TestDiscoverOrgAccounts_RejectsInvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
 
@@ -1632,6 +1751,7 @@ func TestDiscoverOrgAccounts_RejectsInvalidBody(t *testing.T) {
 func TestDiscoverOrgAccounts_RejectsInvalidAccountID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
 
@@ -1645,8 +1765,10 @@ func TestDiscoverOrgAccounts_RejectsInvalidAccountID(t *testing.T) {
 func TestDiscoverOrgAccounts_RejectsNonAWSAccount(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, Provider: "azure", AWSIsOrgRoot: true}, nil
 	}
@@ -1663,8 +1785,10 @@ func TestDiscoverOrgAccounts_RejectsNonAWSAccount(t *testing.T) {
 func TestDiscoverOrgAccounts_RejectsNonOrgRoot(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, Provider: "aws", AWSIsOrgRoot: false}, nil
 	}
@@ -1681,8 +1805,10 @@ func TestDiscoverOrgAccounts_RejectsNonOrgRoot(t *testing.T) {
 func TestDiscoverOrgAccounts_NotFound(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
 		return nil, nil
 	}
@@ -1703,6 +1829,7 @@ func TestDiscoverOrgAccounts_NotFound(t *testing.T) {
 func TestDiscoverOrgAccounts_RejectsNonAdmin(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	// Non-admin session: the user is not an Administrators-group member, so
 	// HasPermissionAPI(admin,*) returns false and requireAdmin
 	// (middleware.go) rejects with 403 (issue #907 group-only authz).
@@ -1735,10 +1862,12 @@ func TestDiscoverOrgAccounts_RejectsNonAdmin(t *testing.T) {
 func TestDiscoverOrgAccounts_CredResolutionFailureIs5xx(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	root := orgRootAccount()
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
 		return root, nil
 	}
@@ -1790,6 +1919,7 @@ func (e *errCredStore) DecryptPayload(_ string) ([]byte, error)                 
 func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	root := orgRootAccount()
@@ -1807,6 +1937,7 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	}
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
 		return root, nil
 	}
@@ -1872,6 +2003,7 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	root := &config.CloudAccount{
@@ -1884,6 +2016,7 @@ func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 	}
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
 		return root, nil
 	}
@@ -1935,6 +2068,7 @@ func TestDiscoverOrgAccounts_SkipsDuplicateKeyOnInsert(t *testing.T) {
 func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	root := &config.CloudAccount{
@@ -1947,6 +2081,7 @@ func TestDiscoverOrgAccounts_AllowsNilDiscoveryResult(t *testing.T) {
 	}
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) {
 		return root, nil
 	}
@@ -2066,6 +2201,7 @@ const outOfScopeID = "22222222-2222-2222-2222-222222222222"
 func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
 
 	acct := sampleAccount()
@@ -2086,6 +2222,7 @@ func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
 func TestGetAccount_InScope_ByID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	// allowed_accounts holds acct.ID; entries match by account ID only (#1034).
 	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"11111111-1111-1111-1111-111111111111"})
 
@@ -2111,6 +2248,7 @@ func TestGetAccount_InScope_ByID(t *testing.T) {
 func TestGetAccount_NameEntry_Returns404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
 
 	acct := sampleAccount()
@@ -2131,6 +2269,7 @@ func TestGetAccount_NameEntry_Returns404(t *testing.T) {
 func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "delete", "accounts", []string{"Production"})
 
 	acct := sampleAccount()
@@ -2138,6 +2277,7 @@ func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
 	acct.Name = "Staging"
 	deleteCalled := false
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return &acct, nil }
 	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
 		deleteCalled = true
@@ -2155,12 +2295,14 @@ func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {
 func TestSaveAccountCredentials_OutOfScope_Returns404(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "update", "accounts", []string{"Production"})
 
 	acct := sampleAccount()
 	acct.ID = outOfScopeID
 	acct.Name = "Staging"
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, _ string) (*config.CloudAccount, error) { return &acct, nil }
 
 	handler := &Handler{auth: mockAuth, config: store, credStore: &MockCredentialStore{}}
@@ -2212,6 +2354,7 @@ func (m *mockConfigStoreAccounts) UpdateCloudAccount(ctx context.Context, a *con
 func TestCreateAccount_DuplicateKey_Returns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	customStore := &mockConfigStoreAccounts{
@@ -2235,6 +2378,7 @@ func TestCreateAccount_DuplicateKey_Returns409(t *testing.T) {
 func TestUpdateAccount_DuplicateKey_Returns409(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	// updateAccount loads the existing account first; wire a valid getResult.
@@ -2300,6 +2444,7 @@ func (m *mockConfigStoreAccounts) WithTx(_ context.Context, fn func(tx pgx.Tx) e
 func TestTestAccountCredentials_RequiresUpdateAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	viewOnlySession := &Session{
 		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -2352,6 +2497,7 @@ func TestValidatePlanAccountProviders_GetAccountDBError_NoPIILeak(t *testing.T) 
 	const rawDBErr = "pq: connection refused to host db-internal-99.example.com"
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -2390,6 +2536,7 @@ func TestValidatePlanAccountProviders_AccountNotFound_Still404(t *testing.T) {
 	ctx := context.Background()
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return awsPlan209(), nil
 	}
@@ -2422,6 +2569,7 @@ func TestGetPlanForAccountProviderValidation_GetPlanDBError_NoPIILeak(t *testing
 	const rawDBErr = "pq: SSL connection has been closed unexpectedly by host db-plans-99.example.com"
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return nil, errors.New(rawDBErr)
 	}
@@ -2454,6 +2602,7 @@ func TestGetPlanForAccountProviderValidation_PlanNotFound_Still404(t *testing.T)
 	ctx := context.Background()
 
 	store := setupAdminMock(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return nil, config.ErrNotFound
 	}

@@ -84,6 +84,7 @@ func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 		PurchaseDate:      "January 1, 2024",
 		DaysUntilPurchase: 7,
 		PlanName:          "Test Plan",
+		RecipientEmail:    "approver@example.com",
 		Recommendations: []RecommendationSummary{
 			{
 				Service:        "rds",
@@ -551,7 +552,7 @@ func TestSMTPSender_MethodsWithNoNetwork(t *testing.T) {
 	assert.NoError(t, sender.SendToEmail(ctx, "to@example.com", "Subject", "Body"))
 	assert.NoError(t, sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset"))
 
-	data := NotificationData{DashboardURL: "https://example.com"}
+	data := NotificationData{DashboardURL: "https://example.com", RecipientEmail: "approver@example.com"}
 	assert.NoError(t, sender.SendNewRecommendationsNotification(ctx, data))
 	assert.NoError(t, sender.SendScheduledPurchaseNotification(ctx, data))
 	assert.NoError(t, sender.SendPurchaseConfirmation(ctx, data))
@@ -642,6 +643,7 @@ func TestSMTPSender_AllMethods_ConnectionFails(t *testing.T) {
 		PurchaseDate:      "January 1, 2024",
 		DaysUntilPurchase: 7,
 		PlanName:          "Test Plan",
+		RecipientEmail:    "approver@example.com",
 		Recommendations: []RecommendationSummary{
 			{Service: "rds", ResourceType: "db.r5.large", Engine: "postgres", Region: "us-east-1", Count: 2, MonthlySavings: 100.00},
 		},
@@ -874,6 +876,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 			PurchaseDate:      "March 1, 2024",
 			DaysUntilPurchase: 14,
 			PlanName:          "Production Plan",
+			RecipientEmail:    "approver@example.com",
 			Recommendations: []RecommendationSummary{
 				{Service: "rds", ResourceType: "db.m5.large", Engine: "mysql", Region: "eu-west-1", Count: 3, MonthlySavings: 300.0},
 			},
@@ -891,6 +894,7 @@ func TestSMTPSender_SendMethods_RenderingPaths(t *testing.T) {
 			PurchaseDate:      "April 15, 2024",
 			DaysUntilPurchase: 7,
 			PlanName:          "Dev Plan",
+			RecipientEmail:    "approver@example.com",
 			Recommendations:   nil,
 		}
 		err := sender.SendScheduledPurchaseNotification(ctx, data)
@@ -1173,6 +1177,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 			PurchaseDate:      "February 15, 2024",
 			DaysUntilPurchase: 3,
 			PlanName:          "Production AWS Reserved Instances",
+			RecipientEmail:    "approver@example.com",
 			Recommendations: []RecommendationSummary{
 				{Service: "rds", ResourceType: "db.r5.xlarge", Engine: "mysql", Region: "us-east-1", Count: 4, MonthlySavings: 2000.0},
 				{Service: "rds", ResourceType: "db.m5.large", Engine: "postgresql", Region: "eu-west-1", Count: 6, MonthlySavings: 1500.0},
@@ -1386,6 +1391,7 @@ func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 		PurchaseDate:      "Jan 1, 2024",
 		DaysUntilPurchase: 10,
 		PlanName:          "Engine Plan",
+		RecipientEmail:    "approver@example.com",
 		Recommendations: []RecommendationSummary{
 			{Service: "rds", ResourceType: "db.r5.large", Engine: "postgresql", Region: "us-east-1", Count: 5, MonthlySavings: 1000.0},
 			{Service: "elasticache", ResourceType: "cache.r5.large", Engine: "redis", Region: "eu-west-1", Count: 3, MonthlySavings: 500.0},
@@ -1426,6 +1432,7 @@ func TestAllSMTPNotificationMethods_TemplatePaths(t *testing.T) {
 			PurchaseDate:      "Feb 1, 2024",
 			DaysUntilPurchase: 5,
 			PlanName:          "No Upfront Plan",
+			RecipientEmail:    "approver@example.com",
 		}
 		err := sender.SendScheduledPurchaseNotification(ctx, data)
 		require.Error(t, err)

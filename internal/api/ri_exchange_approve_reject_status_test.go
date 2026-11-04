@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
@@ -75,7 +76,8 @@ type riStatusOpts struct {
 	rateLimited bool   // the public approve/cancel rate limit rejects the request
 }
 
-func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
+func riStatusHandler(t *testing.T, rec riStatusRecord, o riStatusOpts) *Handler {
+	t.Helper()
 	var record *config.RIExchangeRecord
 	if rec != riRecMissing && rec != riRecMissingNotFound {
 		record = &config.RIExchangeRecord{
@@ -101,6 +103,7 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 		}
 	}
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	switch {
 	case o.dbError:
 		store.On("GetRIExchangeRecord", mock.Anything, riStatusID).Return(nil, errors.New("db down")).Maybe()
@@ -119,11 +122,14 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 	store.On("StampRIExchangeApprovedBy", mock.Anything, riStatusID, mock.Anything).Return(nil).Maybe()
 
 	a := new(MockAuthService)
+	t.Cleanup(func() { a.AssertExpectations(t) })
 	a.On("ValidateSession", mock.Anything, "admin-bearer").Return(&Session{UserID: "admin-uuid", Email: "admin@example.com"}, nil).Maybe()
 	a.On("ValidateSession", mock.Anything, mock.Anything).Return(nil, errors.New("invalid session")).Maybe()
 	switch {
 	case o.noApprove:
-		grantRINone(a, "admin-uuid")
+		// grantRINone's denial, as a Maybe like every stub here: a caller
+		// refused on the token or the record is never asked for a permission.
+		a.On("HasPermissionAPI", mock.Anything, "admin-uuid", mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
 	case o.approveOwn:
 		grantRIApproveOwn(a, "admin-uuid")
 	default:
@@ -134,6 +140,7 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 	h := &Handler{config: store, auth: a}
 	if o.rateLimited {
 		rl := new(MockRateLimiter)
+		t.Cleanup(func() { rl.AssertExpectations(t) })
 		rl.On("AllowWithIP", mock.Anything, mock.Anything, "approve_cancel_public").Return(false, nil)
 		h.rateLimiter = rl
 	}
@@ -184,7 +191,7 @@ type riStatusCase struct {
 func runRIStatusCases(t *testing.T, action string, cases []riStatusCase) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := riStatusHandler(tc.rec, tc.opts)
+			h := riStatusHandler(t, tc.rec, tc.opts)
 			req := riStatusRequest(action, tc.sess, tc.token)
 			if tc.id != "" {
 				req.RequestContext.HTTP.Path = "/api/ri-exchange/" + action + "/" + tc.id
@@ -320,7 +327,7 @@ func TestHandleRequest_RIExchangeTokenRoutes_MissingAnswersLikeWrongToken(t *tes
 	for _, action := range []string{"approve", "reject"} {
 		for _, caller := range callers {
 			do := func(p probe) *events.LambdaFunctionURLResponse {
-				resp, err := riStatusHandler(p.rec, caller.opts).HandleRequest(context.Background(), riStatusRequest(action, caller.sess, p.token))
+				resp, err := riStatusHandler(t, p.rec, caller.opts).HandleRequest(context.Background(), riStatusRequest(action, caller.sess, p.token))
 				require.NoError(t, err)
 				return resp
 			}
@@ -374,7 +381,7 @@ func TestHandleRequest_ApproveRIExchange_ApproveOwnSessionNoOracle(t *testing.T)
 		{"wrong token", "wrong", "invalid approval token"},
 	} {
 		do := func(p probe) *events.LambdaFunctionURLResponse {
-			resp, err := riStatusHandler(p.rec, p.opts).HandleRequest(context.Background(), riStatusRequest("approve", riSessCSRF, tc.token))
+			resp, err := riStatusHandler(t, p.rec, p.opts).HandleRequest(context.Background(), riStatusRequest("approve", riSessCSRF, tc.token))
 			require.NoError(t, err)
 			return resp
 		}

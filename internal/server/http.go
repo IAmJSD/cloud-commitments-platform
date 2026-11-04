@@ -158,6 +158,12 @@ func (app *Application) initializeUntilReady(ctx context.Context, init func(cont
 // background initializer. A variable so tests can shorten it.
 var shutdownGracePeriod = 30 * time.Second
 
+// shutdownInitWaitHook, when a test sets it, runs on the StartHTTPServer
+// goroutine after the HTTP server has shut down and scheduled tasks have
+// stopped, right before the wait for the background initializer. It lets a
+// test find that wait without a wall-clock window (#36). Nil in production.
+var shutdownInitWaitHook func()
+
 // scheduledTaskUnwindShare reserves 1/N of shutdownGracePeriod (5s of 30s) for
 // detached scheduled tasks to unwind after they are canceled at the end of
 // the drain window. The whole sequence stays inside shutdownGracePeriod, which
@@ -213,6 +219,9 @@ func StartHTTPServer(app *Application, port int) error {
 			log.Printf("Scheduled tasks did not stop within the shutdown grace period")
 		}
 		// The initializer shares app.DB with app.Close; let it exit first.
+		if shutdownInitWaitHook != nil {
+			shutdownInitWaitHook()
+		}
 		select {
 		case <-initDone:
 		case <-shutdownCtx.Done():
@@ -230,7 +239,7 @@ func (app *Application) handleOIDCHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	lambdaReq, err := httpToLambdaRequest(w, r)
+	lambdaReq, err := httpToLambdaRequest(w, r, app.appConfig.TrustedProxyHops)
 	if err != nil {
 		writeBodyReadError(w, err)
 		return
@@ -282,7 +291,7 @@ func (app *Application) handleHTTPRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	// Convert HTTP request to Lambda Function URL request format
-	lambdaReq, err := httpToLambdaRequest(w, r)
+	lambdaReq, err := httpToLambdaRequest(w, r, app.appConfig.TrustedProxyHops)
 	if err != nil {
 		writeBodyReadError(w, err)
 		return
@@ -310,7 +319,7 @@ func (app *Application) handleVersion(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	lambdaReq, err := httpToLambdaRequest(w, r)
+	lambdaReq, err := httpToLambdaRequest(w, r, app.appConfig.TrustedProxyHops)
 	if err != nil {
 		writeBodyReadError(w, err)
 		return
@@ -408,7 +417,7 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 // httpToLambdaRequest converts a standard HTTP request to Lambda Function URL
 // request format. It fails when the body cannot be read whole; answer that
 // with writeBodyReadError.
-func httpToLambdaRequest(w http.ResponseWriter, r *http.Request) (*events.LambdaFunctionURLRequest, error) {
+func httpToLambdaRequest(w http.ResponseWriter, r *http.Request, trustedHops int) (*events.LambdaFunctionURLRequest, error) {
 	body, err := readRequestBody(w, r)
 	if err != nil {
 		return nil, err
@@ -432,7 +441,7 @@ func httpToLambdaRequest(w http.ResponseWriter, r *http.Request) (*events.Lambda
 		}
 	}
 
-	sourceIP := requestSourceIP(r)
+	sourceIP := requestSourceIP(r, trustedHops)
 
 	return &events.LambdaFunctionURLRequest{
 		RequestContext: events.LambdaFunctionURLRequestContext{

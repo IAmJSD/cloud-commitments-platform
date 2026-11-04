@@ -317,9 +317,17 @@ button.secondary:hover {
     border: 1px solid var(--cudly-primary);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: var(--cudly-primary-hover);
     border-color: var(--cudly-primary-hover);
+}
+
+/* A faded primary fill still reads as enabled (issue #1684). */
+.btn-primary:disabled {
+    background: var(--cudly-surface-muted);
+    border-color: var(--cudly-border-strong);
+    color: var(--cudly-text-subtle);
+    opacity: 1;
 }
 
 .btn-destructive {
@@ -410,6 +418,9 @@ button.secondary:hover {
 .toast-message {
     line-height: 1.35;
     word-break: break-word;
+    /* A provider error body can be huge; scroll instead of covering the page. */
+    max-height: 8rem;
+    overflow-y: auto;
 }
 
 .toast-actions {
@@ -961,7 +972,7 @@ tr.recommendation-row:hover {
     box-shadow: 0 4px 16px rgba(0,0,0,0.13);
     padding: 0.6rem 0.75rem;
     min-width: 180px;
-    max-height: 360px;
+    max-height: calc(100vh - 2rem);
     overflow-y: auto;
 }
 .column-visibility-popover .column-visibility-title {
@@ -1018,8 +1029,10 @@ tr.rec-cell-summary-row:hover {
     background: #eaf0fb;
 }
 
-/* Summary row content cell: chevron + identity + range inline */
-.rec-cell-summary-content {
+/* Summary row content: identity + range inline. The flex box is an inner
+ * wrapper because a flex <td> stops being a table cell and drops its
+ * colspan, leaving the spanned columns empty (issue #1684). */
+.rec-cell-summary-inner {
     display: flex;
     align-items: center;
     gap: 0.75rem;
@@ -1063,11 +1076,15 @@ tr.rec-cell-summary-row:hover {
     font-size: 0.85em;
 }
 
-/* Variant rows nested under a cell summary (expanded state) */
+/* Variant rows nested under a cell summary (expanded state). Only the first
+ * data cell is indented: padding every cell widened the table enough to
+ * scroll sideways (issue #1684). */
 tr.rec-variant-row td:not(.checkbox-col) {
-    padding-left: 2rem;
     background: #fafbfe;
     font-size: 0.88em;
+}
+tr.rec-variant-row > td.checkbox-col + td {
+    padding-left: 2rem;
 }
 tr.rec-variant-row:hover td:not(.checkbox-col) {
     background: #f0f4fc;
@@ -1513,6 +1530,29 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     overflow-wrap: anywhere;
 }
 
+/* Clamp long failure text; the full text is in the title and, when clamped,
+   in a keyboard- and touch-reachable disclosure below it. */
+.history-status-desc {
+    max-width: 18rem;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+}
+
+.history-status-full {
+    max-width: 18rem;
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+}
+
+.history-status-full > div {
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
 .history-approver strong {
     color: var(--cudly-text);
     font-weight: var(--cudly-fw-semibold);
@@ -1766,6 +1806,14 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-text-muted);
     font-size: var(--cudly-fs-sm);
     font-style: italic;
+}
+
+/* A load failure inside the menu (issue #1693): an error line, not a choice. */
+.chip-select-notice {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    color: var(--cudly-error-fg);
+    font-size: var(--cudly-fs-sm);
+    white-space: normal;
 }
 
 /* ---------------------------------------------------------------------------

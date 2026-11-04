@@ -25,9 +25,11 @@ var exemptTasks = map[string]string{
 
 // optInRequired tasks must be wired but default to off (no live purchasing or
 // retention change by default). Flipping cleanup to default-on later means
-// removing it from this set.
+// removing it from this set. fire_scheduled_purchases left it when the owner
+// turned the fire sweep on by default (#712): it only executes purchases a
+// user already approved for a later time, and the server refuses any row due
+// more than 24h ago (#1549). process_scheduled_purchases stays opt-in.
 var optInRequired = map[string]bool{
-	"fire_scheduled_purchases":    true,
 	"process_scheduled_purchases": true,
 	"send_notifications":          true,
 	"cleanup":                     true,
@@ -37,44 +39,55 @@ const (
 	dimTask    = "missingTask"
 	dimPass    = "missingEnvPassThrough"
 	dimDefault = "missingEnvDefault"
+	// dimModuleDefault: a default-on task whose module enable var defaults
+	// to false.
+	dimModuleDefault = "moduleDefaultOff"
 )
 
-var (
-	validDims = []string{dimTask, dimPass, dimDefault}
-	sevenGCP  = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
-)
+var validDims = []string{dimTask, dimPass, dimDefault, dimModuleDefault}
 
 // knownGaps documents what is not wired yet, per platform and dimension. Each
 // PR that wires a task removes it here; the test fails when actual != documented.
-// aws/cleanup-lambda and gcp/cleanup-function run cleanup outside the server
-// task and are not scanned, so cleanup shows as a gap on AWS and GCP.
+// terraform/environments/gcp passes neither enable_scheduled_tasks nor app_url
+// to the GKE module, so its Cloud Scheduler (and with it every GKE sweep)
+// stays off when deployed from there. The GKE module also defaults
+// enable_scheduled_tasks to false, because it gates every Cloud Scheduler job
+// and those need app_url.
 var knownGaps = map[string]map[string][]string{
-	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
-	"gcp-cloud-run": {dimTask: sevenGCP},
-	"gcp-gke":       {dimTask: sevenGCP},
-	"azure-container-apps": {dimTask: {"analytics_collect", "finalize_revocations", "fire_scheduled_purchases",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
+	"gcp-gke": {dimPass: {"collect_recommendations"}, dimModuleDefault: {"collect_recommendations"}},
 }
 
-// aws platforms are also checked against terraform/environments/aws: envBlock
-// is the module block in compute.tf, needsPermission whether sweeps.tf must
-// hold an aws_lambda_permission (Lambda only). cronJob platforms schedule
-// their sweep_tasks through a Kubernetes CronJob in scheduled-tasks.tf.
-type platform struct {
-	name, dir, envBlock           string
-	aws, needsPermission, cronJob bool
+// legacyWiring lists tasks a platform schedules under variables other than
+// their taskVars entry, with the reason. The env check skips them; each must
+// still be wired.
+var legacyWiring = map[string]map[string]string{
+	"azure-container-apps": {"cleanup": "scheduled by enable_scheduled_tasks since before #712; " +
+		"making it opt-in would stop retention on deployments that rely on it"},
 }
+
+// Platforms with an envBlock are checked against the module block of that
+// name in envDir/compute.tf. aws platforms also have sweeps.tf checked;
+// lambda says whether it targets a Lambda (action key plus
+// aws_lambda_permission) rather than ECS RunTask. cronJob platforms schedule their sweep_tasks through a Kubernetes
+// CronJob in scheduled-tasks.tf; httpSweep platforms through a "sweep"
+// resource of that type calling /api/scheduled/<task>.
+type platform struct {
+	name, dir, envDir, envBlock, httpSweep string
+	aws, lambda, cronJob                   bool
+}
+
+const (
+	gcpEnvDir   = "../../environments/gcp"
+	azureEnvDir = "../../environments/azure"
+)
 
 var platforms = []platform{
-	{name: "aws-lambda", dir: "aws/lambda", aws: true, envBlock: "compute_lambda", needsPermission: true},
-	{name: "aws-fargate", dir: "aws/fargate", aws: true, envBlock: "compute_fargate"},
-	{name: "cloudformation", dir: "../../../cloudformation/stacks/CUDly"},
-	{name: "gcp-cloud-run", dir: "gcp/cloud-run"},
-	{name: "gcp-gke", dir: "gcp/gke"},
-	{name: "azure-container-apps", dir: "azure/container-apps"},
-	{name: "azure-aks", dir: "azure/aks", cronJob: true},
+	{name: "aws-lambda", dir: "aws/lambda", aws: true, envDir: awsEnvDir, envBlock: "compute_lambda", lambda: true},
+	{name: "aws-fargate", dir: "aws/fargate", aws: true, envDir: awsEnvDir, envBlock: "compute_fargate"},
+	{name: "gcp-cloud-run", dir: "gcp/cloud-run", envDir: gcpEnvDir, envBlock: "compute_cloud_run", httpSweep: "google_cloud_scheduler_job"},
+	{name: "gcp-gke", dir: "gcp/gke", envDir: gcpEnvDir, envBlock: "compute_gke", httpSweep: "google_cloud_scheduler_job"},
+	{name: "azure-container-apps", dir: "azure/container-apps", envDir: azureEnvDir, envBlock: "compute_container_apps", httpSweep: "azurerm_logic_app_action_custom"},
+	{name: "azure-aks", dir: "azure/aks", cronJob: true, envDir: azureEnvDir, envBlock: "compute_aks"},
 }
 
 // Copied from aws/cross_account_sts_discovery_test.go (commentLinePattern):
@@ -112,14 +125,12 @@ func stripComments(s string) string {
 // schedulerHeaders match the resources that actually send a task to the
 // server. A task name elsewhere (locals, env vars, permissions) is not a
 // schedule. A literal anywhere in the body counts, even in a description.
-// cfnRule scopes a CloudFormation AWS::Events::Rule resource.
 var (
 	schedulerHeaders = []string{
 		`resource\s+"aws_cloudwatch_event_target"\s+"[^"]+"\s*\{`,
 		`resource\s+"google_cloud_scheduler_job"\s+"[^"]+"\s*\{`,
 		`resource\s+"azurerm_logic_app_action_custom"\s+"[^"]+"\s*\{`,
 	}
-	cfnRule = regexp.MustCompile(`(?s)Type:\s*AWS::Events::Rule\b.*?(?:\n  \S|\z)`)
 	// Only a local's first-line value resolves, with no local-to-local recursion;
 	// an unresolved local leaves the task unwired (an undocumented gap).
 	localRef = regexp.MustCompile(`\blocal\.(\w+)`)
@@ -128,11 +139,9 @@ var (
 	// sweepKeys matches the task keys of a `sweep_tasks` map: `for_each` targets
 	// carry `action = each.key`, so the literal is the map key.
 	sweepKeyRe = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*\{`)
-	// literalRes are the task-name patterns of the contract test (schedulerRefs)
-	// plus the CloudFormation Input JSON.
+	// literalRes are the task-name patterns of the contract test (schedulerRefs).
 	literalRes = func() []*regexp.Regexp {
-		res := make([]*regexp.Regexp, 1, 1+len(schedulerRefs))
-		res[0] = regexp.MustCompile(`"action":\s*"([^"]+)"`)
+		res := make([]*regexp.Regexp, 0, len(schedulerRefs))
 		for _, ref := range schedulerRefs {
 			res = append(res, ref.re)
 		}
@@ -176,10 +185,10 @@ func schedulerScopes(src, all string) []string {
 			scopes = append(scopes, body)
 		}
 	}
-	return append(scopes, cfnRule.FindAllString(src, -1)...)
+	return scopes
 }
 
-// scanDir reads the non-test *.tf files (or template.yaml) directly in dir.
+// scanDir reads the non-test *.tf files directly in dir.
 // Non-recursive on purpose: that skips tests/ and .terraform/.
 func scanDir(dir string) (map[string]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -188,7 +197,7 @@ func scanDir(dir string) (map[string]string, error) {
 	}
 	files := map[string]string{}
 	for _, e := range entries {
-		if e.IsDir() || (filepath.Ext(e.Name()) != ".tf" && e.Name() != "template.yaml") {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".tf" {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -322,7 +331,7 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			t.Errorf("%s: %s (missing now: %v)", p.name, prob, missing)
 		}
 		if p.aws {
-			sweeps, err := sweepProblems(p.dir, p.needsPermission)
+			sweeps, err := sweepProblems(p.dir, p.lambda)
 			if err != nil {
 				t.Errorf("%s: %v", p.name, err)
 			}
@@ -337,6 +346,11 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			}
 			for _, prob := range probs {
 				t.Errorf("%s: %s: %s", p.name, cronJobFile, prob)
+			}
+		}
+		if p.httpSweep != "" {
+			for _, prob := range httpSweepProblems(files, p.httpSweep) {
+				t.Errorf("%s: %s", p.name, prob)
 			}
 		}
 	}
@@ -363,9 +377,6 @@ func TestCheckerNegatives(t *testing.T) {
 	const aud = "locals {\n  aud = \"x/api/scheduled/collect_recommendations\"\n}\n"
 	job := func(body string) string { return "resource \"google_cloud_scheduler_job\" \"j\" {\n" + body + "\n}\n" }
 	target := func(body string) string { return "resource \"aws_cloudwatch_event_target\" \"t\" {\n" + body + "\n}\n" }
-	cfn := func(typ string) string {
-		return "  R:\n    Type: " + typ + "\n    Properties:\n      Input: '{\"action\": \"finalize_revocations\"}'\n  Other:\n    Type: X\n"
-	}
 	for name, c := range map[string]struct {
 		src     string
 		wired   []string
@@ -384,8 +395,6 @@ func TestCheckerNegatives(t *testing.T) {
 		"literal outside a scheduler block":              {"resource \"aws_lambda_permission\" \"p\" {\n" + finalize + "\n}\n", nil, nil},
 		"unknown task in a scheduler block":              {target(`input = jsonencode({ action = "bogus_task" })`), nil, []string{"bogus_task"}},
 		"sweep_tasks keys are wired":                     {"locals {\n  sweep_tasks = {\n    finalize_revocations = { rule = \"finalize\" }\n    bogus_task = { rule = \"x\" }\n  }\n}\n", []string{"finalize_revocations"}, []string{"bogus_task"}},
-		"CloudFormation rule input":                      {cfn("AWS::Events::Rule"), []string{"finalize_revocations"}, nil},
-		"CloudFormation literal outside a rule":          {cfn("AWS::Lambda::Function"), nil, nil},
 	} {
 		wired, unknown := wiredFrom(map[string]string{"a.tf": c.src})
 		if !slices.Equal(slices.Sorted(maps.Keys(wired)), c.wired) || !slices.Equal(unknown, c.unknown) {

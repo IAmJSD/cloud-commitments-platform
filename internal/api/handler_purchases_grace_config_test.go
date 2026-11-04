@@ -23,7 +23,9 @@ import (
 func TestHandler_executePurchase_GlobalConfigErrorFailsBeforePersist(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
@@ -50,7 +52,7 @@ func TestHandler_executePurchase_GlobalConfigErrorFailsBeforePersist(t *testing.
 }
 
 func TestHandler_retryPurchase_GlobalConfigErrorFailsBeforePersist(t *testing.T) {
-	_, handler, mockConfig := retryDedupeFixture(t)
+	_, handler, mockConfig := retryDedupeFixture(t, false)
 	for _, c := range mockConfig.ExpectedCalls {
 		if c.Method == "GetGlobalConfig" {
 			c.Unset()

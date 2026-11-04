@@ -14,6 +14,16 @@ const (
 	// DefaultExecutionTTLDays is how long execution records are kept.
 	DefaultExecutionTTLDays = 30
 
+	// DefaultStaleRecommendationRetentionDays is how long the cached
+	// recommendations of a (provider, account) pair survive once that pair
+	// stops collecting (a removed provider, a disabled account, credentials
+	// that keep failing). Collection runs daily on every cloud (#1580), so
+	// this is about 30 missed collections in a row: long enough to ride out
+	// an outage or an expired credential nobody fixed for a few weeks, short
+	// enough that a pair that is gone for good stops showing within a month.
+	// PruneStaleRecommendations applies it after every collection (#120).
+	DefaultStaleRecommendationRetentionDays = 30
+
 	// DefaultMaxRecommendationsInEmail is the max recommendations shown in email notifications.
 	DefaultMaxRecommendationsInEmail = 10
 

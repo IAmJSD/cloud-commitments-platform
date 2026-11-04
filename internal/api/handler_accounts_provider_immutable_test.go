@@ -27,10 +27,12 @@ func updateAccountRequest(body, id string) *events.LambdaFunctionURLRequest {
 func TestUpdateAccount_ProviderChangeIsRejected(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	existing := sampleAccount() // provider aws
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetCloudAccount", ctx, existing.ID).Return(&existing, nil)
 	// Registered so the pre-fix handler reaches the save and returns the
 	// echoed account instead of panicking on an unexpected call.
@@ -53,6 +55,7 @@ func TestUpdateAccount_ProviderChangeIsRejected(t *testing.T) {
 func TestUpdateAccount_SameProviderIsSaved(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 
 	existing := sampleAccount()

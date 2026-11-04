@@ -346,7 +346,7 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 func permissionsAllow(permissions []Permission, action, resource string, constraints *PermissionConstraints) bool {
 	for _, perm := range permissions {
 		if checkAdminPermission(perm) {
-			if coversCarvedOut(Permission{Action: action, Resource: resource}) {
+			if coversCarvedOut(Permission{Action: action, Resource: resource}) || !adminGrantSatisfies(perm, action, resource) {
 				continue
 			}
 			if !checkPermissionConstraints(perm, constraints) {
@@ -373,8 +373,25 @@ func checkAdminPermission(perm Permission) bool {
 	return perm.Action == ActionAdmin && perm.Resource == ResourceAll
 }
 
+// isFullAdminGrant reports whether perm is {admin, *} with no constraint on
+// any dimension. A constrained {admin, *} is a scoped grant, not the
+// full-administrator capability.
+func isFullAdminGrant(perm Permission) bool {
+	return checkAdminPermission(perm) && constraintsCover(perm.Constraints, nil)
+}
+
+// adminGrantSatisfies reports whether an {admin, *} grant may answer a
+// request for action/resource. Asking for the admin capability itself needs
+// an unconstrained grant; every other request keeps the scoped behavior.
+func adminGrantSatisfies(perm Permission, action, resource string) bool {
+	if action == ActionAdmin && resource == ResourceAll {
+		return isFullAdminGrant(perm)
+	}
+	return true
+}
+
 // UserHasAdminCapability reports whether the user's effective (group-derived)
-// permissions include the full-access {admin, *} capability, i.e. the user is
+// permissions include the unconstrained full-access {admin, *} capability, i.e. the user is
 // a member of the Administrators group (or any group granted equivalent
 // permission). This is the group-membership replacement for the old
 // role == "admin" short-circuit. Fail closed: any lookup error returns
@@ -385,7 +402,7 @@ func (s *Service) UserHasAdminCapability(ctx context.Context, userID string) (bo
 		return false, err
 	}
 	for _, perm := range perms {
-		if checkAdminPermission(perm) {
+		if isFullAdminGrant(perm) {
 			return true, nil
 		}
 	}
@@ -403,6 +420,9 @@ func checkPermissionMatch(perm Permission, action, resource string) bool {
 }
 
 func checkPermissionConstraints(perm Permission, constraints *PermissionConstraints) bool {
+	if constraints != nil && constraints.Global {
+		return !perm.Constraints.restricts()
+	}
 	if constraints != nil && perm.Constraints != nil {
 		return matchConstraints(perm.Constraints, constraints)
 	}

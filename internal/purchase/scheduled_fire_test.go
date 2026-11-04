@@ -172,6 +172,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	const acctID = "acct-fire"
@@ -192,6 +193,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 
 	approved := row
 	approved.Status = "approved"
+	approved.ApprovedBy = aws.String("approver@example.com")
 	store.On("TransitionExecutionStatus", ctx, "exec-scheduled-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
@@ -236,7 +238,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	require.NotNil(t, savedFinal, "the fired execution must be persisted")
 	assert.Equal(t, "completed", savedFinal.Status)
 	require.NotNil(t, savedFinal.ApprovedBy)
-	assert.Equal(t, "scheduler", *savedFinal.ApprovedBy, "the scheduler must stamp itself as approver")
+	assert.Equal(t, "approver@example.com", *savedFinal.ApprovedBy, "the sweep must keep the stored approver")
 
 	mockServiceClient.AssertExpectations(t)
 }
@@ -252,6 +254,7 @@ func TestFireScheduledDelayedPurchases_AuditGapAfterCASStillFires(t *testing.T) 
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	const acctID = "acct-auditgap"
@@ -330,4 +333,209 @@ func TestFireScheduledDelayedPurchases_DelayPathNotSilentNoOp(t *testing.T) {
 	// would revert to the weaker method-existence-only guard that this
 	// assertion replaced.
 	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases //nolint:staticcheck // QF1011: explicit type is intentional to catch signature drift
+}
+
+// fireWithClaimedApprover fires one due row whose claimed copy carries the
+// given ApprovedBy and returns the sweep result plus every guarded
+// "running" save (the audit stamp and the terminal save).
+func fireWithClaimedApprover(t *testing.T, approver *string) (FireResult, []config.PurchaseExecution) {
+	t.Helper()
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
+	mockServiceClient := new(MockServiceClient)
+
+	const acctID = "acct-approver"
+	row := dueExec("exec-approver-fire")
+	row.StepNumber = 1
+	row.Recommendations = []config.RecommendationRecord{
+		{
+			Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, UpfrontCost: 300, Savings: 60, Selected: true, CloudAccountID: aws.String(acctID),
+		},
+	}
+	account := &config.CloudAccount{
+		ID: acctID, Name: "Approver Account", Provider: "aws", ExternalID: "555555555555", AWSAuthMode: "access_keys",
+	}
+	plan := &config.PurchasePlan{ID: "plan-1", Name: "Plan 1", RampSchedule: config.RampSchedule{TotalSteps: 1}}
+
+	store.On("GetScheduledExecutionsDue", ctx).Return([]config.PurchaseExecution{row}, nil)
+	claimed := row
+	claimed.Status = "running"
+	claimed.ApprovedBy = approver
+	store.On("TransitionExecutionStatus", ctx, "exec-approver-fire", []string{"scheduled"}, "running", (*string)(nil)).
+		Return(&claimed, nil)
+	store.On("GetPurchasePlan", mock.Anything, "plan-1").Return(plan, nil)
+	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+	store.On("GetCloudAccount", mock.Anything, acctID).Return(account, nil)
+	store.On("CompletePlanStep", mock.Anything, "plan-1", 1).Return(nil)
+
+	var saves []config.PurchaseExecution
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).
+		Run(func(args mock.Arguments) {
+			saves = append(saves, *args.Get(1).(*config.PurchaseExecution))
+		}).Return(nil)
+	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-approver"}, nil).Once()
+
+	mgr := &Manager{
+		config:          store,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+	result, err := mgr.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	mockServiceClient.AssertExpectations(t)
+	return *result, saves
+}
+
+// Issue #1589: the sweep used to overwrite the approver stored at approve
+// time with the literal "scheduler".
+func TestFireScheduledDelayedPurchases_KeepsApproverInApprovedBy(t *testing.T) {
+	result, saves := fireWithClaimedApprover(t, aws.String("approver@example.com"))
+	assert.Equal(t, 1, result.Fired)
+	require.GreaterOrEqual(t, len(saves), 2, "audit stamp and terminal save are both guarded on running")
+	for i, s := range saves {
+		require.NotNil(t, s.ApprovedBy, "save %d lost the approver", i)
+		assert.Equal(t, "approver@example.com", *s.ApprovedBy, "save %d", i)
+	}
+}
+
+func TestFireScheduledDelayedPurchases_NilApproverStaysNil(t *testing.T) {
+	result, saves := fireWithClaimedApprover(t, nil)
+	assert.Equal(t, 1, result.Fired, "the purchase still runs without a stored approver")
+	require.GreaterOrEqual(t, len(saves), 2)
+	for i, s := range saves {
+		assert.Nil(t, s.ApprovedBy, "save %d must not invent an approver", i)
+	}
+}
+
+// fireFixture wires the same real provider chain as the EndToEnd test for n
+// due rows, so a row that is not deferred really fires. hook runs inside each
+// PurchaseCommitment call.
+func fireFixture(t *testing.T, n int, hook func(call int)) (*Manager, *MockConfigStore, *MockServiceClient, []string) {
+	t.Helper()
+	store := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	svc := new(MockServiceClient)
+
+	const acctID = "acct-fire"
+	account := &config.CloudAccount{
+		ID: acctID, Name: "Fire Account", Provider: "aws", ExternalID: "333333333333", AWSAuthMode: "access_keys",
+	}
+	plan := &config.PurchasePlan{ID: "plan-1", Name: "Plan 1", RampSchedule: config.RampSchedule{TotalSteps: 1}}
+
+	rows := make([]config.PurchaseExecution, 0, n)
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("exec-budget-%d", i)
+		row := dueExec(id)
+		row.StepNumber = 1
+		row.Recommendations = []config.RecommendationRecord{{
+			Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, UpfrontCost: 300, Savings: 60, Selected: true, CloudAccountID: aws.String(acctID),
+		}}
+		rows = append(rows, row)
+		ids = append(ids, id)
+		claimed := row
+		claimed.Status = "running"
+		store.On("TransitionExecutionStatus", mock.Anything, id, []string{"scheduled"}, "running", (*string)(nil)).
+			Return(&claimed, nil).Maybe()
+	}
+	store.On("GetScheduledExecutionsDue", mock.Anything).Return(rows, nil)
+	store.On("GetPurchasePlan", mock.Anything, "plan-1").Return(plan, nil).Maybe()
+	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) { return nil, nil }
+	store.On("GetCloudAccount", mock.Anything, acctID).Return(account, nil).Maybe()
+	store.On("CompletePlanStep", mock.Anything, "plan-1", 1).Return(nil).Maybe()
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil).Maybe()
+	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil).Maybe()
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(svc, nil).Maybe()
+
+	calls := 0
+	svc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) {
+			calls++
+			if hook != nil {
+				hook(calls)
+			}
+		}).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-fired"}, nil).Maybe()
+
+	mgr := &Manager{
+		config: store, email: mockEmail, providerFactory: mockFactory,
+		credStore: awsAccessKeyCredStore(), dashboardURL: "https://dashboard.example.com",
+	}
+	return mgr, store, svc, ids
+}
+
+// A sweep whose context has less than one purchase budget left must claim
+// nothing: a claimed row would be cut off mid-purchase and strand in running
+// (issue #1582).
+func TestFireScheduledDelayedPurchases_DefersRowsWhenTimeBudgetShort(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mgr, store, svc, _ := fireFixture(t, 3, nil)
+
+	result, err := mgr.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Found)
+	assert.Equal(t, 0, result.Fired)
+	assert.Equal(t, 3, result.Deferred)
+	assert.Equal(t, 0, result.Errored)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	svc.AssertNumberOfCalls(t, "PurchaseCommitment", 0)
+}
+
+// No deadline (CLI, tests) means enough time: the guard must not starve rows.
+func TestFireScheduledDelayedPurchases_ProceedsWhenNoDeadline(t *testing.T) {
+	mgr, _, svc, _ := fireFixture(t, 3, nil)
+
+	result, err := mgr.FireScheduledDelayedPurchases(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Fired)
+	assert.Equal(t, 0, result.Deferred)
+	svc.AssertNumberOfCalls(t, "PurchaseCommitment", 3)
+}
+
+// The first row starts with just over one budget left; while it runs the
+// remaining time drops under the budget, so the second row is deferred
+// unclaimed.
+func TestFireScheduledDelayedPurchases_FirstRowFiresThenDefers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), purchaseRunBudget+500*time.Millisecond)
+	defer cancel()
+	mgr, store, svc, ids := fireFixture(t, 2, func(call int) {
+		if call == 1 {
+			time.Sleep(time.Second)
+		}
+	})
+
+	result, err := mgr.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fired)
+	assert.Equal(t, 1, result.Deferred)
+	assert.Equal(t, 0, result.Errored)
+	svc.AssertNumberOfCalls(t, "PurchaseCommitment", 1)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, ids[1], []string{"scheduled"}, "running", (*string)(nil))
+}
+
+func TestNothingCouldFire(t *testing.T) {
+	assert.True(t, nothingCouldFire(&FireResult{Found: 3, Deferred: 3}), "all rows deferred, none fired")
+	assert.False(t, nothingCouldFire(&FireResult{Found: 3, Fired: 1, Deferred: 2}), "a fired row means the deadline works")
+	assert.False(t, nothingCouldFire(&FireResult{Found: 3, Errored: 1, Deferred: 2}), "not every row was deferred")
+	assert.False(t, nothingCouldFire(&FireResult{}), "no due rows")
 }

@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
-	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
@@ -38,9 +36,9 @@ import (
 // marketplaceEC2Client is the narrow EC2 interface the marketplace handlers
 // need. Using a minimal interface keeps test stubs small.
 type marketplaceEC2Client interface {
-	CreateMarketplaceListing(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
-	DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
-	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	CreateMarketplaceListing(ctx context.Context, req ec2MarketplaceListingRequest) (ec2MarketplaceListingResult, error)
+	DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2MarketplaceListingResult, error)
+	CancelMarketplaceListing(ctx context.Context, listingID string) (ec2MarketplaceListingResult, error)
 	// FetchOfferingClass calls AWS DescribeReservedInstances to determine
 	// whether a given Reserved Instance is 'standard' or 'convertible'. Used
 	// when the purchase_history row has no offering_class stored (pre-migration
@@ -54,7 +52,7 @@ func (h *Handler) buildMarketplaceEC2Client(cfg aws.Config) marketplaceEC2Client
 	if h.marketplaceEC2Factory != nil {
 		return h.marketplaceEC2Factory(cfg)
 	}
-	return awsprovider.NewEC2ClientDirect(cfg)
+	return newMarketplaceEC2Client(cfg)
 }
 
 // loadMarketplaceAWSConfig returns an AWS config for the purchase's region that
@@ -91,8 +89,9 @@ func (h *Handler) loadMarketplaceAWSConfig(ctx context.Context, row *config.Purc
 // account, resolved through the purchase path's credential resolver.
 func (h *Handler) marketplaceAccountAWSConfig(ctx context.Context, account *config.CloudAccount, base aws.Config) (aws.Config, error) {
 	stsClient := sts.NewFromConfig(base)
-	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient,
-		credentials.AWSResolveOptions{AmbientProvider: base.Credentials, AmbientSTS: stsClient})
+	opts := h.bastionResolveOptions(base)
+	opts.AmbientProvider, opts.AmbientSTS = base.Credentials, stsClient
+	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient, opts)
 	if err != nil {
 		if errors.Is(err, credentials.ErrNotHostAccount) {
 			return aws.Config{}, NewClientError(400, err.Error())
@@ -304,7 +303,7 @@ const marketplaceCompensationTimeout = 10 * time.Second
 
 // keepUncanceledListing records a listing that could be neither persisted nor
 // canceled; releasing the claim instead would hide it from the cancel endpoint.
-func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, listing ec2svc.MarketplaceListingResult, cancelErr error) error {
+func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, listing ec2MarketplaceListingResult, cancelErr error) error {
 	logging.Errorf("marketplace: rollback cancel for listing %s failed: %v", listing.ListingID, cancelErr)
 	state := listing.State
 	if state == "" {

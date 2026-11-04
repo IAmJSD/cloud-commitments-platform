@@ -160,6 +160,20 @@ func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.R
 	return args.Error(1)
 }
 
+// PageRecommendations returns the registered page when the test sets an
+// expectation; otherwise it sends the handler to the scan, so tests written
+// against ScanRecommendations keep exercising the paginated list.
+func (m *MockScheduler) PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error) {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "PageRecommendations" {
+			args := m.Called(ctx, scope, afterID, limit)
+			page, _ := args.Get(0).(*config.RecommendationPage)
+			return page, args.Error(1)
+		}
+	}
+	return nil, scheduler.ErrRecommendationsPageNeedsScan
+}
+
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {
 	args := m.Called(ctx, id)
 	var rec *config.RecommendationRecord
@@ -519,6 +533,9 @@ func (m *MockAuthService) grantPermissions(perms []auth.Permission) {
 func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accounts []string) {
 	authCtx := &auth.AuthContext{Permissions: perms}
 	decide := func(action, resource string) bool {
+		if action == auth.ActionAdmin && resource == auth.ResourceAll {
+			return holdsUnconstrainedAdmin(perms)
+		}
 		return authCtx.HasPermission(action, resource)
 	}
 	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -548,6 +565,19 @@ func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accoun
 		Return(decideConstrained, nil).Maybe()
 	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
 		Return(accounts, nil).Maybe()
+}
+
+// holdsUnconstrainedAdmin mirrors the service: the admin capability itself
+// (admin, *) is answered only by an {admin, *} grant with no constraint.
+func holdsUnconstrainedAdmin(perms []auth.Permission) bool {
+	for _, p := range perms {
+		c := p.Constraints
+		if p.Action == auth.ActionAdmin && p.Resource == auth.ResourceAll &&
+			(c == nil || len(c.AccountIDs)+len(c.Providers)+len(c.Services)+len(c.Regions) == 0 && c.MaxPurchaseAmount == 0) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {

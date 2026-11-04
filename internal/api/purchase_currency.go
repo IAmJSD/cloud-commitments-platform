@@ -10,12 +10,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
-// purchaseCapCurrency is the currency every purchases MaxPurchaseAmount
-// (group permission and API-key max_amount) is denominated in. The cap has
-// no currency field of its own (PR #1515): it is USD by construction, and
-// there is no FX conversion here.
-const purchaseCapCurrency = "USD"
-
 // nonUSDPurchaseCurrency returns "" when every rec's CommitmentCurrency is
 // USD, so its total commitment can be compared against a USD cap. Otherwise
 // it returns the first rec's currency that is not USD, or "unknown" when a
@@ -23,7 +17,7 @@ const purchaseCapCurrency = "USD"
 func nonUSDPurchaseCurrency(recs []config.RecommendationRecord) string {
 	for i := range recs {
 		currency := strings.TrimSpace(recs[i].CommitmentCurrency)
-		if strings.EqualFold(currency, purchaseCapCurrency) {
+		if config.IsUSDCommitmentCurrency(currency) {
 			continue
 		}
 		if currency == "" {

@@ -63,8 +63,10 @@ func recsReadStore() *MockConfigStore {
 
 // capturingScheduler records whether each ListRecommendations ctx was allowed
 // to kick a background collection.
-func capturingScheduler(allowed *[]bool) *MockScheduler {
+func capturingScheduler(t *testing.T, allowed *[]bool) *MockScheduler {
+	t.Helper()
 	sched := new(MockScheduler)
+	t.Cleanup(func() { sched.AssertExpectations(t) })
 	sched.On("ListRecommendations", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			*allowed = append(*allowed, scheduler.BackgroundCollectionAllowed(args.Get(0).(context.Context)))
@@ -96,7 +98,7 @@ func TestRecommendationsRead_BackgroundCollectionOnlyForUnrestrictedReaders(t *t
 		for _, tc := range cases {
 			t.Run(ep.name+"/"+tc.name, func(t *testing.T) {
 				var allowed []bool
-				h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(&allowed), auth: tc.auth()}
+				h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(t, &allowed), auth: tc.auth()}
 				req := scopedRequest("")
 				if tc.apiKey {
 					h.apiKey = "test-key"
@@ -117,19 +119,22 @@ func TestRecommendationsRead_ScopeLookupErrorNeverAllowsBackgroundCollection(t *
 	for _, ep := range recsReadEndpoints {
 		t.Run(ep.name, func(t *testing.T) {
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", mock.Anything, scopedToken).
 				Return(&Session{UserID: scopedUserID}, nil).Maybe()
 			mockAuth.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 				Return(true, nil).Maybe()
 			mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
 				Return(nil, errors.New("scope lookup failed"))
-			var allowed []bool
-			h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(&allowed), auth: mockAuth}
+			// No ListRecommendations expectation: a read without an
+			// established scope would hit an unregistered method.
+			sched := new(MockScheduler)
+			h := &Handler{config: recsReadStore(), scheduler: sched, auth: mockAuth}
 
 			err := ep.call(h, context.Background(), scopedRequest(""))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "scope lookup failed")
-			assert.Empty(t, allowed, "no recommendations read may happen without an established scope")
+			sched.AssertNotCalled(t, "ListRecommendations", mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -151,6 +156,7 @@ func TestGetRecommendations_ColdStartMarkerOnlyForUnrestrictedReaders(t *testing
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := recsReadStore()
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetRecommendationsFreshness", mock.Anything).
 				Return(&config.RecommendationsFreshness{LastCollectedAt: nil}, nil)
 			store.On("MarkCollectionStarted", mock.Anything).Return("", false, nil).Maybe()
@@ -170,7 +176,7 @@ func TestGetRecommendations_ResolvesAccountScopeOnce(t *testing.T) {
 	for _, accounts := range [][]string{nil, {scopedInAccount}} {
 		var allowed []bool
 		mockAuth := scopedAuth(accounts)
-		h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(&allowed), auth: mockAuth}
+		h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(t, &allowed), auth: mockAuth}
 
 		_, err := h.getRecommendations(context.Background(), scopedRequest(""), map[string]string{})
 		require.NoError(t, err)

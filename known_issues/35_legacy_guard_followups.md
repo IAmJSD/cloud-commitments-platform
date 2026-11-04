@@ -14,6 +14,8 @@
 
 **Status:** ✔️ Resolved
 
+**Update (#357):** `cmd/cleanup-lambda` was deleted, so the files and tests named below no longer exist. No production path sets `PurchaseExecution.TTL`, so `expires_at` is NULL on every row current code writes and it never deleted one, and the server `cleanup` task (`CleanupOldExecutions`) carries the same status guard. `TestPurchaseExecutionsDeletedOnlyByConfigStore` keeps any new `purchase_executions` deleter inside `internal/config`.
+
 **Resolved by:** `deleteExpired` and `dryRunCount` now share `expiredExecutionsWhere`: a lapsed `expires_at` deletes a row only when its status is in `TerminalExecutionStatuses` and not in `HealthScoredExecutionStatuses`, so live rows survive and failed or canceled rows stay with `CleanupOldExecutions`. Covered by the real-Postgres tests in `cmd/cleanup-lambda/main_integration_test.go`, including a writer that turns a settled row live while the DELETE waits for its lock.
 
 ## MEDIUM: a failed-with-submission row blocks deleting a managed plan forever

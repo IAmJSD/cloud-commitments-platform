@@ -297,7 +297,7 @@ variable "lambda_timeout" {
 
   validation {
     condition     = var.lambda_timeout >= 300 && var.lambda_timeout <= 900
-    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges run up to 270s (4m execution + 30s terminal save) and purchases up to 270s (3m30s execution + 30s terminal save + 30s failure alert) after the request, and Lambda cuts the invocation off at this timeout (#913)."
   }
 }
 
@@ -365,9 +365,9 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "Schedule expression for recommendation collection"
+  description = "EventBridge schedule expression for recommendation collection. Default: daily at 02:00 UTC, the same time as GCP and Azure. A cron() schedule lets the API report next_collection_at; a rate() schedule leaves it null because its phase is unknown (#756)."
   type        = string
-  default     = "rate(1 day)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -395,9 +395,9 @@ variable "ladder_run_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Enable the scheduled fire_scheduled_purchases sweep. Default false until auto-approve (L9) is promoted to GA."
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {
@@ -743,5 +743,16 @@ variable "alert_emails" {
       trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
     ])
     error_message = "alert_emails must be a comma-separated list of email addresses."
+  }
+}
+
+variable "trusted_proxy_hops" {
+  description = "Number of trusted proxies that append to X-Forwarded-For before the app (CUDLY_TRUSTED_PROXY_HOPS). 1 = one appending proxy (ALB). 0 ignores X-Forwarded-For and keys on the peer address. 2 is safe only when the origin admits CDN traffic only; never set it while the origin is directly reachable."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.trusted_proxy_hops >= 0 && var.trusted_proxy_hops <= 8 && floor(var.trusted_proxy_hops) == var.trusted_proxy_hops
+    error_message = "trusted_proxy_hops must be an integer between 0 and 8."
   }
 }

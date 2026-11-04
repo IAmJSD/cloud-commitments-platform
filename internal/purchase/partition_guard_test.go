@@ -142,6 +142,7 @@ func TestExecutePurchase_SingleAccount_AWSChinaSavingsPlanRefused(t *testing.T) 
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-cn"}, nil).Once()
 	mockEmail := new(MockEmailSender)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockProviderInst, mockEmail)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 	m := newAWSCNManager(mockStore, mockFactory, mockEmail)
 

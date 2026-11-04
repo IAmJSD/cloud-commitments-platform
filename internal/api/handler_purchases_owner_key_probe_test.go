@@ -135,6 +135,7 @@ func okpRequest(method, path, body string, headers map[string]string) *events.La
 func serveOKPExecute(t *testing.T, a *okpAuth, headers map[string]string) (int, bool) {
 	t.Helper()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil).Maybe()
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	store.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil).Maybe()
@@ -191,6 +192,7 @@ func TestExecuteDirect_FullScopeFollowsTheAPIKey(t *testing.T) {
 func TestExecuteDirect_APIKeyFullScopeProbeErrorRefuses(t *testing.T) {
 	boom := errors.New("key store down")
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 	store.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil).Maybe()
@@ -202,6 +204,7 @@ func TestExecuteDirect_APIKeyFullScopeProbeErrorRefuses(t *testing.T) {
 		Return(nil, "", errOKPReached).Maybe()
 
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasAPIKeyPermissionAPI", mock.Anything, okpRawKey, auth.ActionExecute, auth.ResourcePurchases).
 		Return(okpOwnerID, okpKeyID, true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, okpOwnerID).Return([]string{}, nil)

@@ -26,6 +26,7 @@ var errDenialTestReached = errors.New("mutation reached")
 func newDenialTestHandler(t *testing.T, store *MockConfigStore, mockPurchase *MockPurchaseManager) (*Handler, context.Context) {
 	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: denialTestUserID, Email: "denied@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, denialTestUserID, mock.Anything, mock.Anything).Return(false, nil)
@@ -64,6 +65,7 @@ func requireForbidden(t *testing.T, err error) {
 
 func TestApprovePurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 	store, mockPurchase := new(MockConfigStore), new(MockPurchaseManager)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	h, ctx := newDenialTestHandler(t, store, mockPurchase)
 	store.On("GetExecutionByID", mock.Anything, denialTestExecID).Return(&config.PurchaseExecution{
 		ExecutionID:     denialTestExecID,
@@ -80,6 +82,7 @@ func TestApprovePurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 func TestCancelPurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	h, ctx := newDenialTestHandler(t, store, new(MockPurchaseManager))
 	store.On("GetExecutionByID", mock.Anything, denialTestExecID).Return(&config.PurchaseExecution{
 		ExecutionID: denialTestExecID,
@@ -94,6 +97,7 @@ func TestCancelPurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 func TestRevokePurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	h, ctx := newDenialTestHandler(t, store, new(MockPurchaseManager))
 	store.On("GetExecutionByID", mock.Anything, denialTestExecID).Return(&config.PurchaseExecution{
 		ExecutionID: denialTestExecID,
@@ -125,6 +129,7 @@ func TestApproveRIExchange_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 func TestApproveRIExchange_SessionDenialWithTokenUsesToken(t *testing.T) {
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	h, ctx := newDenialTestHandler(t, store, new(MockPurchaseManager))
 	store.On("GetRIExchangeRecord", mock.Anything, denialTestExecID).Return(&config.RIExchangeRecord{
 		ID:            denialTestExecID,

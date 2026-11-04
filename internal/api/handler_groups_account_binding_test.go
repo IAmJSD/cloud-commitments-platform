@@ -35,6 +35,7 @@ var (
 func bindingHandler(t *testing.T, scope []string, accounts []config.CloudAccount, listErr error) (*Handler, *MockAuthService, *int) {
 	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").
 		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}, nil)
 	if scope == nil {
@@ -259,6 +260,8 @@ func TestGroupGrantByName_SurvivesRenameAndNameReuse(t *testing.T) {
 	newcomer := bindOther
 	newcomer.Name = "prod"
 	scoped := sharedNameHandler(t, stored, []config.CloudAccount{renamed, newcomer}, nil)
+	scopedAuth := scoped.auth.(*MockAuthService)
+	t.Cleanup(func() { scopedAuth.AssertExpectations(t) })
 
 	assert.Equal(t, 200, sharedNameGET(t, scoped, "/api/accounts/"+renamed.ID).StatusCode)
 	assert.Equal(t, 404, sharedNameGET(t, scoped, "/api/accounts/"+newcomer.ID).StatusCode,

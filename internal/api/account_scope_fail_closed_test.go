@@ -61,6 +61,7 @@ func TestGetAllowedAccounts_PropagatesResolverFailure(t *testing.T) {
 func TestRequireAccountAccess_RefusesWhenScopeUnestablishable(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	m := new(MockAuthService)
 	t.Cleanup(func() { m.AssertExpectations(t) })
 
@@ -128,6 +129,7 @@ func TestRequireAccountAccess_ScopedPrincipalUnchanged(t *testing.T) {
 
 	t.Run("in-scope account is reachable", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		m := new(MockAuthService)
 		t.Cleanup(func() { m.AssertExpectations(t) })
 		mockStore.On("GetCloudAccount", ctx, scopeAcctA).
@@ -142,6 +144,7 @@ func TestRequireAccountAccess_ScopedPrincipalUnchanged(t *testing.T) {
 
 	t.Run("out-of-scope account is refused", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		m := new(MockAuthService)
 		t.Cleanup(func() { m.AssertExpectations(t) })
 		mockStore.On("GetCloudAccount", ctx, scopeAcctB).

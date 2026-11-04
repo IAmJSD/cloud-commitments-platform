@@ -32,8 +32,8 @@ type failedEmailRecorder struct {
 	sent []email.NotificationData
 }
 
-func (r *failedEmailRecorder) expect(sender *MockEmailSender) {
-	sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).
+func (r *failedEmailRecorder) expect(sender *MockEmailSender) *mock.Call {
+	return sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -51,6 +51,7 @@ func TestNotifyExecutionFailure_FailedRowEmailsUnpurchasedSelectedRecs(t *testin
 	store := new(MockConfigStore)
 	store.On("GetGlobalConfig", mock.Anything).Return(failureNotifyCfg(), nil)
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, store, sender)
 	rec := &failedEmailRecorder{}
 	rec.expect(sender)
 	m := &Manager{config: store, email: sender, dashboardURL: "https://dashboard.example.com/"}
@@ -84,7 +85,10 @@ func TestNotifyExecutionFailure_OnlyFailedOrPartialRowsNotify(t *testing.T) {
 	for _, status := range []string{"completed", "running", "approved", "pending", ""} {
 		t.Run(fmt.Sprintf("status=%q", status), func(t *testing.T) {
 			sender := new(MockEmailSender)
-			sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil)
+			assertMocksOnCleanup(t, sender)
+			// Must NOT fire (AssertNotCalled below); .Maybe() keeps a regression
+			// an assertion failure instead of a mock panic.
+			sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil).Maybe()
 			m := &Manager{config: new(MockConfigStore), email: sender}
 			m.notifyExecutionFailure(context.Background(), &config.PurchaseExecution{ExecutionID: "e", Status: status})
 			sender.AssertNotCalled(t, "SendPurchaseFailedNotification", mock.Anything, mock.Anything)
@@ -93,6 +97,7 @@ func TestNotifyExecutionFailure_OnlyFailedOrPartialRowsNotify(t *testing.T) {
 	for _, status := range []string{"failed", "partially_completed"} {
 		t.Run(fmt.Sprintf("status=%q", status), func(t *testing.T) {
 			sender := new(MockEmailSender)
+			assertMocksOnCleanup(t, sender)
 			sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil)
 			m := &Manager{config: new(MockConfigStore), email: sender}
 			m.notifyExecutionFailure(context.Background(), &config.PurchaseExecution{ExecutionID: "e", Status: status})
@@ -104,6 +109,7 @@ func TestNotifyExecutionFailure_OnlyFailedOrPartialRowsNotify(t *testing.T) {
 // A send failure is logged, never propagated: the purchase outcome stands.
 func TestNotifyExecutionFailure_SendErrorAndNilSenderAreBestEffort(t *testing.T) {
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, sender)
 	sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(errors.New("ses down"))
 	m := &Manager{config: new(MockConfigStore), email: sender}
 	exec := &config.PurchaseExecution{ExecutionID: "e", Status: "failed", Error: "boom"}
@@ -120,6 +126,7 @@ func TestNotifyExecutionFailure_SendErrorAndNilSenderAreBestEffort(t *testing.T)
 // is already canceled (a disconnected approver or an exhausted budget).
 func TestNotifyExecutionFailure_SurvivesCanceledCallerContext(t *testing.T) {
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, sender)
 	var sendCtxErr error
 	sender.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { sendCtxErr = args.Get(0).(context.Context).Err() }).Return(nil)
@@ -151,6 +158,7 @@ func TestMultiAccountFailureNotifiesOncePerFailedAccountNotRoot(t *testing.T) {
 	rec := &failedEmailRecorder{}
 	rec.expect(sender)
 	factory, prov, svc := new(MockProviderFactory), new(MockProvider), new(MockServiceClient)
+	assertMocksOnCleanup(t, store, sender, factory, prov, svc)
 
 	accounts := []config.CloudAccount{
 		{ID: "acct-ok", Name: "OK", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},

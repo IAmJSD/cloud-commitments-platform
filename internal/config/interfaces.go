@@ -10,6 +10,15 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
+// PlanWriteGate decides whether a plan write may proceed. The store runs it with
+// the plan row locked, handing it the plan as stored and its account ids
+// (sorted), both read on the write's own transaction. It is pure on purpose: it
+// gets no context and no store, so it cannot take a second pool connection
+// while the transaction holds one. Whatever needs the database or the auth
+// service is resolved before the write and compared here against what the lock
+// shows. A non-nil error aborts the write and is returned unchanged.
+type PlanWriteGate func(locked *PurchasePlan, accountIDs []string) error
+
 // StoreInterface defines the methods required for configuration storage.
 type StoreInterface interface {
 	// Global configuration
@@ -131,6 +140,9 @@ type StoreInterface interface {
 	// UpdatePurchasePlanTx checks UpdatedAt and replaces it with the returned version.
 	// The caller must discard the transaction-local plan if the transaction rolls back.
 	UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error
+	// UpdatePurchasePlanGated is UpdatePurchasePlan with gate run under the
+	// plan's row lock, before the write (nil gate: plain update).
+	UpdatePurchasePlanGated(ctx context.Context, plan *PurchasePlan, gate PlanWriteGate) error
 	DeletePurchasePlan(ctx context.Context, planID string) error
 	ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error)
 
@@ -513,10 +525,12 @@ type StoreInterface interface {
 	// they are cleared because AWS created nothing reusable.
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
 
-	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
-	// marketplace status poller reads (issue #27): active listings, listings
-	// recorded as pending with no list attempt in flight (issue #1494), and
-	// closed/canceled ones it has seen whose proceeds are not recorded yet.
+	// ListMarketplaceListingsToPoll returns the AWS listings the marketplace
+	// status poller reads (issue #27): active listings, listings recorded as
+	// pending with no list attempt in flight (issue #1494), and
+	// closed/canceled ones it has seen whose proceeds are not recorded yet,
+	// both the RI's current listing and the listings it was relisted from
+	// (issue #1494).
 	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
 
 	// RecordMarketplaceListingActive records a listing AWS reports active:
@@ -528,11 +542,17 @@ type StoreInterface interface {
 	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
 
 	// SettleMarketplaceListing records a listing that closed or was canceled
-	// on AWS, with its proceeds and AWS fee when known. It applies once per
-	// listing, only while the row still holds it and is active, pending with
-	// no list attempt in flight, or already in the same terminal state.
-	// Reports whether the row was written.
+	// on AWS, with its proceeds and AWS fee when known, in the listing's own
+	// settlement row and, while the RI still holds the listing, on its
+	// purchase_history row (issue #1494). It applies once per listing, only
+	// while the listing is active, pending with no list attempt in flight, or
+	// already in the same terminal state. Reports whether a row was written.
 	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
+
+	// GetMarketplaceListingProceedsTotals sums each RI's marketplace proceeds
+	// and fees over all of its listings (issue #1494), one total per purchase
+	// and currency. RIs with no recorded listing are left out.
+	GetMarketplaceListingProceedsTotals(ctx context.Context, purchaseIDs []string) ([]MarketplaceListingProceedsTotal, error)
 
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
 	// submit, so a client that retries a timed-out execute request cannot
@@ -657,6 +677,9 @@ type StoreInterface interface {
 
 	// Plan ↔ account association
 	SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error
+	// SetPlanAccountsGated is SetPlanAccounts with gate run under the plan's
+	// row lock, before the write (nil gate: plain set).
+	SetPlanAccountsGated(ctx context.Context, planID string, accountIDs []string, gate PlanWriteGate) error
 	GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error)
 
 	// Recommendations cache (ADR: store recommendations in Postgres so the
@@ -668,18 +691,30 @@ type StoreInterface interface {
 	// SuccessfulCollect for the per-row semantics. There is deliberately no
 	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
+	// UpsertRecommendationsWithPartial is UpsertRecommendations that also
+	// records the collection's incomplete-sweep summary (nil clears it) in the
+	// same transaction, so the rows and the marker commit or roll back together.
+	UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect, partial *RecommendationsCollectionPartial) error
+	// PruneStaleRecommendations deletes the rows of every (provider,
+	// account) pair with no row collected in the last retentionDays days,
+	// leaving every pair that collected inside the window untouched, and
+	// returns the number of rows deleted (issue #120).
+	PruneStaleRecommendations(ctx context.Context, retentionDays int) (int64, error)
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	// ListStoredRecommendationsChunk is ListStoredRecommendations for a
 	// keyset walk: at most limit rows after the position after, in
 	// byte-wise ID order then primary-key order (issue #981).
 	ListStoredRecommendationsChunk(ctx context.Context, filter RecommendationFilter, after *RecommendationScanKey, limit int) (RecommendationChunk, error)
+	// ListStoredRecommendationTriples lists the distinct (account,
+	// provider, service) keys of the rows scope selects, for resolving
+	// account overrides before PageStoredRecommendations (issue #981).
+	ListStoredRecommendationTriples(ctx context.Context, scope RecommendationListScope) ([]RecommendationTriple, error)
+	// PageStoredRecommendations reads one page of the recommendations list
+	// and the summary of the whole filtered set with every list filter
+	// evaluated in SQL, in one snapshot (issue #981).
+	PageStoredRecommendations(ctx context.Context, q RecommendationPageQuery) (RecommendationPage, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
-	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
-	// most recent collection's incomplete-sweep summary.
-	// UpsertRecommendations clears it, so a later complete collection drops
-	// the marker.
-	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
 	// OR older than 5 minutes), and stamps a freshly generated owner token
@@ -771,7 +806,7 @@ type StoreInterface interface {
 	WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error
 
 	// Ladder configuration (per-account, per-provider).
-	// GetLadderConfigs returns all rows, newest first.
+	// GetLadderConfigs returns the rows newest first, capped at MaxListLimit.
 	// GetLadderConfig returns the single row for (cloudAccountID, provider),
 	// or (nil, nil) when no row exists.
 	// UpsertLadderConfig inserts or updates via the UNIQUE(cloud_account_id, provider)

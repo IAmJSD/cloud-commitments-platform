@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,14 +102,14 @@ func TestSavePurchaseHistory_ConcurrentSaveWaitsForUncommittedTwin(t *testing.T)
 		VALUES ('123456789012', 'ri-race', now(), 'aws', 'ec2', 'us-east-1', 'm5.large', 1, 'all-upfront')`)
 	require.NoError(t, err)
 
+	holderPID := testhelpers.BackendPID(ctx, t, tx)
+
 	done := make(chan error, 1)
 	go func() { done <- store.SavePurchaseHistory(ctx, historyFixture("123456789012", "ri-race")) }()
 
-	select {
-	case err := <-done:
+	if err, answered := testhelpers.AwaitBlockedBy(ctx, t, conn.Pool(), holderPID, done); answered {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("save returned (%v) while a twin was uncommitted; it must wait on the unique index", err)
-	case <-time.After(500 * time.Millisecond):
 	}
 	require.NoError(t, tx.Commit(ctx))
 	select {

@@ -68,7 +68,33 @@ func (s historyScope) allows(p *config.PurchaseHistoryRecord) bool {
 	if p.AccountID == "" {
 		return p.CreatedByUserID == s.userID
 	}
-	return s.allowed.Allows(p.AccountID, historyRowAccountName(s.accounts, *p))
+	return s.allowsRegisteredRow(p)
+}
+
+// allowsRegisteredRow judges a row with an account id against the allow-list
+// with the analytics rules (scopedAnalyticsAccountFilter), so a raw external-id
+// grant covers only the provider that owns the id. When the row resolves to a
+// registered account, other accounts sharing the external id are left out of
+// the lookup, so a name grant on the row's own account still matches.
+func (s historyScope) allowsRegisteredRow(p *config.PurchaseHistoryRecord) bool {
+	row := historyRowAccount(s.accounts, *p)
+	accounts := s.accounts
+	if row != nil {
+		accounts = make([]config.CloudAccount, 0, len(s.accounts))
+		for i := range s.accounts {
+			if s.accounts[i].ID == row.ID || s.accounts[i].ExternalID != p.AccountID {
+				accounts = append(accounts, s.accounts[i])
+			}
+		}
+	}
+	uuids, byProvider, ok := scopedAnalyticsAccountFilter(s.allowed, accounts, p.AccountID)
+	switch {
+	case !ok:
+		return false
+	case row != nil || slices.Contains(uuids, p.AccountID):
+		return true
+	}
+	return slices.Contains(byProvider[""], p.AccountID) || slices.Contains(byProvider[p.Provider], p.AccountID)
 }
 
 // filter returns the rows inside the scope. Admin/unrestricted scopes pass the
@@ -139,7 +165,8 @@ func (h *Handler) aggregateHistorySummary(ctx context.Context, filters historyFi
 
 // historySummaryFilter maps the parsed filters onto the aggregate's filter:
 // the purchase_history half gets the row fetch's filter, the executions half
-// gets every listed status and the date bound the row path checks in Go.
+// gets every listed status and the date bound the row path checks in Go,
+// except for actionable statuses, which the row path never date-filters.
 func historySummaryFilter(filters historyFilters) config.HistorySummaryFilter {
 	out := config.HistorySummaryFilter{
 		History:           filters.purchaseHistoryFilter(),
@@ -148,6 +175,7 @@ func historySummaryFilter(filters historyFilters) config.HistorySummaryFilter {
 	if filters.HasDate {
 		out.ExecutionStart = out.History.Start
 		out.ExecutionEnd = out.History.End
+		out.ExecutionDateExemptStatuses = actionableExecutionStatuses
 	}
 	return out
 }

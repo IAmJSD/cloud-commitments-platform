@@ -80,7 +80,7 @@ func TestCoverageHandlerUnknownUpfrontSameService(t *testing.T) {
 				return []config.CloudAccount{}, nil
 			}
 			scheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Savings: 100}}, nil)
-			auth, req := adminInventoryReq(ctx)
+			auth, req := adminInventoryReq(t, ctx)
 			handler := &Handler{auth: auth, config: store, scheduler: scheduler}
 			result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})
 			require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestMarketplaceUnknownUpfront(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, authSvc, ec2 := &MockConfigStore{}, &MockAuthService{}, &stubMarketplaceEC2{}
-			adminSession(authSvc)
+			adminSession(t, authSvc)
 			row := standardRow()
 			row.UpfrontCost = tc.cost
 			store.On("GetPurchaseHistoryByPurchaseID", mock.Anything, validMarketplacePurchaseID).Return(row, nil)

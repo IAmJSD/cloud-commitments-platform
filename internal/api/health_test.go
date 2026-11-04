@@ -22,6 +22,7 @@ type stubCredStore struct{ credentials.CredentialStore }
 func TestHandler_GetHealth_AllHealthy(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
@@ -71,6 +72,7 @@ func TestHandler_checkCredentialStore_DevKeyInUse(t *testing.T) {
 func TestHandler_GetHealth_DevKeyNotDisclosed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	handler := &Handler{
@@ -104,6 +106,7 @@ func TestHandler_checkCredentialStore_NotConfigured(t *testing.T) {
 func TestHandler_GetHealth_ConfigStoreUnhealthy(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, errors.New("database connection failed"))
@@ -127,6 +130,7 @@ func TestHandler_GetHealth_ConfigStoreUnhealthy(t *testing.T) {
 func TestHandler_GetHealth_AuthServiceUnhealthy(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
@@ -182,6 +186,7 @@ func TestHandler_GetHealth_ConfigStoreNotInitialized(t *testing.T) {
 func TestHandler_checkConfigStore_Healthy(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 
@@ -206,6 +211,7 @@ func TestHandler_checkConfigStore_NotInitialized(t *testing.T) {
 func TestHandler_checkConfigStore_AccessError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("connection timeout"))
 

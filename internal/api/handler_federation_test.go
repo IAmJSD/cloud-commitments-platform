@@ -807,6 +807,7 @@ func TestGetFederationIaC_TfvarsAutoLoadedByTerraform(t *testing.T) {
 func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 		Email:  "user+tag@example.com",
@@ -834,6 +835,7 @@ func TestGetFederationIaC_PreservesPlusInSessionEmail(t *testing.T) {
 func TestGetFederationIaC_NoSessionEmail_ShipsBundleWithEmptyContact(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
 		Email:  "", // empty — admin API key path
@@ -1791,6 +1793,7 @@ func TestGetFederationIaC_BundleTfvarsEscapesSessionEmail(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
 	const email = `"o\"q${x}%{y}"@example.com`
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
 		Email:  email,

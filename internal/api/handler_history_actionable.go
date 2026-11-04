@@ -13,6 +13,8 @@ import (
 // scope so the store applies them before the MaxListLimit cap. Each predicate
 // is a superset of the Go check the handler still runs (matchesExecution and
 // historyScope.allows), so pushing it down can only drop rows Go would drop.
+// The date range is deliberately not pushed down: actionable rows are never
+// date-filtered, so a future-scheduled approval stays in the queue (#1685).
 func actionableExecutionsQuery(filters *historyFilters, scope *historyScope) config.ExecutionsByStatusesQuery {
 	q := config.ExecutionsByStatusesQuery{
 		Statuses: actionableExecutionStatuses,
@@ -20,10 +22,6 @@ func actionableExecutionsQuery(filters *historyFilters, scope *historyScope) con
 		Provider: filters.Provider,
 		PlanID:   filters.PlanID,
 		Scope:    scope.executionScope(),
-	}
-	if filters.HasDate {
-		start, end := filters.Start, filters.End
-		q.Start, q.End = &start, &end
 	}
 	if len(filters.AccountIDs) > 0 || len(filters.ExternalIDsByProvider) > 0 {
 		q.AccountIDs = executionFilterAccountValues(filters)

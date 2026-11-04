@@ -43,7 +43,7 @@ func newStarvationStore(ctx context.Context) *MockConfigStore {
 
 func runStarvationHistory(t *testing.T, ctx context.Context, store *MockConfigStore) map[string]any {
 	t.Helper()
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: store}
 	result, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)
@@ -56,6 +56,7 @@ func TestHandler_getHistory_PendingNotStarvedByNewerTerminalRows(t *testing.T) {
 	execs := executionsWithStatus(150, "failed", now, "failed")
 	pending := executionsWithStatus(1, "pending", now.Add(-time.Hour), "pending")
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(append(execs, pending...), nil)
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(append(execs, pending...), nil)
 
@@ -77,6 +78,7 @@ func TestHandler_getHistory_ReturnsMoreThanDefaultLimitPendingRows(t *testing.T)
 	now := time.Now()
 	pending := executionsWithStatus(config.DefaultListLimit+50, "pending", now, "pending")
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 
 	body := runStarvationHistory(t, ctx, store)
@@ -89,6 +91,7 @@ func TestHandler_getHistory_ReturnsMoreThanDefaultLimitPendingRows(t *testing.T)
 func TestHandler_getHistory_FetchesDisjointClassesWithTheirLimits(t *testing.T) {
 	ctx := context.Background()
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.MatchedBy(isActionableCall), config.MaxListLimit).Return([]config.PurchaseExecution{}, nil).Once()
 	store.On("ListHistoryExecutionsPage", ctx, mock.MatchedBy(func(q config.HistoryExecutionsPageQuery) bool {
 		return isTerminalPage(q) && q.Limit == historyStreamBatch(config.DefaultListLimit) && q.After == nil
@@ -117,6 +120,7 @@ func TestHandler_getHistory_ClassListingErrorKeepsOtherClass(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			store := newStarvationStore(ctx)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			actionableRet := mock.Arguments{executionsWithStatus(1, "pending", now, "pending"), nil}
 			terminalRet := mock.Arguments{executionsWithStatus(1, "failed", now, "failed"), nil}
 			if tt.failActive {
@@ -143,6 +147,7 @@ func TestHandler_getHistory_ClassListingErrorKeepsOtherClass(t *testing.T) {
 func TestHandler_getHistory_BothClassListingsFailSetTruncated(t *testing.T) {
 	ctx := context.Background()
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("listing failed"))
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(nil, errors.New("listing failed"))
 
@@ -158,6 +163,7 @@ func TestHandler_getHistory_BothClassListingsFailSetTruncated(t *testing.T) {
 func TestHandler_getHistory_EmptyClassListingsNotTruncated(t *testing.T) {
 	ctx := context.Background()
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -185,6 +191,7 @@ func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
 			rows := append(executionsWithStatus(tt.actionable, "pending", now, "pending"),
 				executionsWithStatus(tt.terminal, "failed", now, "failed")...)
 			store := newStarvationStore(ctx)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(rows, nil)
 			store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(rows, nil)
 
@@ -199,11 +206,12 @@ func TestHandler_getHistory_StaleSweepBoundedToDefaultListLimit(t *testing.T) {
 	ctx := context.Background()
 	stale := executionsWithStatus(150, "pending", time.Now().Add(-8*24*time.Hour), "stale")
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(stale, nil)
 	store.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
 
 	// Lambda mode (synchronous sweep) so the call count is final on return.
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: store, isLambda: true}
 	_, err := handler.getHistory(ctx, req, map[string]string{})
 	require.NoError(t, err)
@@ -230,6 +238,7 @@ func TestHandler_getHistory_DueApprovalNotCrowdedOutByFutureRampSteps(t *testing
 	}
 	execs = append(execs, executionsWithStatus(1, "pending", now.Add(-time.Hour), "due")...)
 	store := newStarvationStore(ctx)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
 
 	body := runStarvationHistory(t, ctx, store)

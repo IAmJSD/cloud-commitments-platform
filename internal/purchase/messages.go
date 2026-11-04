@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 )
 
 // MessageType defines the types of async messages that can be processed.
@@ -263,11 +264,8 @@ func (m *Manager) matchActorAgainstApprovers(ctx context.Context, actor string, 
 	if len(approvers) == 0 {
 		return fmt.Errorf("no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
-	actorLower := strings.ToLower(strings.TrimSpace(actor))
-	for _, addr := range approvers {
-		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
-			return nil
-		}
+	if email.ContainsAddress(approvers, actor) {
+		return nil
 	}
 	return fmt.Errorf("actor email is not an authorized approver for this purchase")
 }

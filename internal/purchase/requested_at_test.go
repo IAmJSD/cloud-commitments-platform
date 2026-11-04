@@ -27,6 +27,7 @@ func runFanOutCapturingOpts(t *testing.T, service common.ServiceType, mk func(st
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockFactory, mockProviderInst, mockServiceClient)
 
 	exec := &config.PurchaseExecution{
 		ExecutionID: "root-exec", IdempotencyKey: "root-lineage", PlanID: "plan-x",
@@ -104,6 +105,7 @@ func TestExecuteSinglePurchase_EmptyTokenOptsOtherwiseUntouched(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockFactory, mockProviderInst, mockServiceClient)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
 	var got common.PurchaseOptions

@@ -50,6 +50,7 @@ func roleARNAccountBody(roleARN string) string {
 func TestCreateAccount_AWSChinaRoleARN_ReturnsUnsupportedPartitionNotice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
 
@@ -61,6 +62,7 @@ func TestCreateAccount_AWSChinaRoleARN_ReturnsUnsupportedPartitionNotice(t *test
 func TestCreateAccount_CommercialRoleARN_HasNoNotice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	handler := &Handler{auth: mockAuth, config: setupAdminMock(ctx)}
 
@@ -72,6 +74,7 @@ func TestCreateAccount_CommercialRoleARN_HasNoNotice(t *testing.T) {
 func TestUpdateAccount_AWSChinaRoleARN_ReturnsUnsupportedPartitionNotice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	existing := sampleAccount()
 	handler := &Handler{auth: mockAuth, config: &mockConfigStoreAccounts{MockConfigStore: setupAdminMock(ctx), getResult: &existing}}
@@ -84,6 +87,7 @@ func TestUpdateAccount_AWSChinaRoleARN_ReturnsUnsupportedPartitionNotice(t *test
 func TestGetAccount_AWSChinaRoleARN_ReturnsUnsupportedPartitionNotice(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	acct := sampleAccount()
 	acct.AWSAuthMode = "role_arn"
@@ -111,6 +115,7 @@ func TestListAccounts_PartitionNotices(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			setupAdminAuth(ctx, mockAuth)
 
 			cn := sampleAccount()

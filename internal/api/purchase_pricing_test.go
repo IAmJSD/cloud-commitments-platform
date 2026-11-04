@@ -959,6 +959,7 @@ func emptyIDExecuteHarness(t *testing.T, details string) (*config.PurchaseExecut
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
@@ -1040,6 +1041,7 @@ func emptyIDExecuteAgainst(t *testing.T, stored config.RecommendationRecord, rec
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
@@ -1132,7 +1134,9 @@ func TestHandler_executePurchase_EmptyIDIgnoresNonDiscriminatorDetails(t *testin
 func TestRouter_PurchasesExecute_EmptyIDMismatchedTenancyRefused(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "emptyid-token").Return(&Session{UserID: "22222222-2222-3333-4444-555555555555", Email: "emptyid@example.com"}, nil)
 	mockAuth.grantPermissions([]auth.Permission{
 		{Action: auth.ActionExecute, Resource: auth.ResourcePurchases, Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 100000}},
@@ -1181,7 +1185,9 @@ func TestAzureCommitmentUnitsRegression(t *testing.T) {
 func TestAzureCorrectedPriceExceedsOldUnitsCap(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	authService := new(MockAuthService)
+	t.Cleanup(func() { authService.AssertExpectations(t) })
 	authService.On("ValidateSession", ctx, "azure-cap").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "capped@example.com"}, nil)
 	authService.grantPermissions([]auth.Permission{{Action: auth.ActionExecute, Resource: auth.ResourcePurchases, Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 1000}}})
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()

@@ -61,6 +61,7 @@ func TestNotifiedTransition_OnlyAfterEmailSucceeds(t *testing.T) {
 	factory := new(MockProviderFactory)
 
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, sender)
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(errors.New("ses down")).Once()
 	manager := &Manager{config: store, email: sender, providerFactory: factory}
 	require.False(t, manager.sendPlanNotification(ctx, plan))

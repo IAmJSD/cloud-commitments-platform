@@ -60,8 +60,10 @@ func upcomingFilterAccount(id string) config.CloudAccount {
 //	exec-gcp         gcp plan, accounts [Analytics]
 //	exec-multi       aws plan-level parent, accounts [Production, Staging]
 //	exec-multi-stage aws fan-out child, cloud_account_id = Staging
-func upcomingFilterStore() *MockConfigStore {
+func upcomingFilterStore(t *testing.T) *MockConfigStore {
+	t.Helper()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	scheduled := time.Now().AddDate(0, 0, 7)
 	plan := func(id, name, provider, service string) config.PurchasePlan {
 		return config.PurchasePlan{
@@ -110,12 +112,18 @@ func upcomingFilterStore() *MockConfigStore {
 // allowed (nil = admin, unrestricted) with the given query parameters.
 func upcomingAsViewer(t *testing.T, allowed []string, params map[string]string) (*UpcomingPurchaseResponse, error) {
 	t.Helper()
+	return upcomingAsViewerWith(t, upcomingFilterStore(t), allowed, params)
+}
+
+// upcomingAsViewerWith is upcomingAsViewer against the given store.
+func upcomingAsViewerWith(t *testing.T, store *MockConfigStore, allowed []string, params map[string]string) (*UpcomingPurchaseResponse, error) {
+	t.Helper()
 	ctx := context.Background()
-	store := upcomingFilterStore()
 	var mockAuth *MockAuthService
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	var req *events.LambdaFunctionURLRequest
 	if allowed == nil {
-		mockAuth, req = adminDashboardReq(ctx)
+		mockAuth, req = adminDashboardReq(t, ctx)
 	} else {
 		mockAuth = new(MockAuthService)
 		mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{UserID: "viewer-1"}, nil)
@@ -171,7 +179,9 @@ func TestGetUpcomingPurchases_InvalidFilterIs400(t *testing.T) {
 		"non-uuid account_ids": {"account_ids": "not-a-uuid"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := upcomingAsViewer(t, nil, params)
+			// A store with no expectations: a bad filter is refused before
+			// anything is read, and any read would hit an unregistered method.
+			_, err := upcomingAsViewerWith(t, new(MockConfigStore), nil, params)
 			require.Error(t, err)
 			ce, ok := IsClientError(err)
 			require.True(t, ok, "want a client error, got %v", err)
@@ -241,7 +251,7 @@ func TestGetUpcomingPurchases_OutOfScopeAccount(t *testing.T) {
 // Through the real router: the query string reaches the handler.
 func TestHandleRequest_DashboardUpcomingAppliesQueryFilters(t *testing.T) {
 	ctx := context.Background()
-	handler := &Handler{config: upcomingFilterStore(), corsAllowedOrigin: "*", apiKey: "test-key"}
+	handler := &Handler{config: upcomingFilterStore(t), corsAllowedOrigin: "*", apiKey: "test-key"}
 	req := &events.LambdaFunctionURLRequest{
 		Headers:               map[string]string{"X-API-Key": "test-key"},
 		QueryStringParameters: map[string]string{"provider": "aws", "account_ids": upAcctStage},

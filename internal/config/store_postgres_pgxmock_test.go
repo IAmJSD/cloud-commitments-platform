@@ -2313,7 +2313,7 @@ func TestPGXMock_ListAccountServiceOverrides_Error(t *testing.T) {
 // ─── SetPlanAccounts ──────────────────────────────────────────────────────────
 
 func expectUnmanagedPlan(mock pgxmock.PgxPoolIface) {
-	mock.ExpectQuery("SELECT COALESCE.*FOR SHARE").WithArgs("plan-1").
+	mock.ExpectQuery("SELECT COALESCE.*FOR UPDATE").WithArgs("plan-1").
 		WillReturnRows(pgxmock.NewRows([]string{"managed"}).AddRow(false))
 }
 
@@ -2407,7 +2407,7 @@ func TestPGXMock_SetPlanAccounts_EmptyMissingPlanReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT COALESCE.*FOR SHARE").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
+	mock.ExpectQuery("SELECT COALESCE.*FOR UPDATE").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("SELECT services").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectRollback()
 

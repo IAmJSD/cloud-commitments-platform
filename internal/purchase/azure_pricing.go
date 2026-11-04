@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
@@ -48,7 +49,42 @@ func (m *Manager) staleAzurePricingRefusal(ctx context.Context, exec *config.Pur
 			return fmt.Errorf("%w: Azure recommendation %q no longer has the approved price", ErrStaleAzurePricing, rec.ID)
 		}
 	}
+	return m.heldAzurePricingRefusal(ctx, azure)
+}
+
+// heldAzurePricingRefusal refuses Azure recs whose account's stored rows are
+// held through a Retail Prices outage. Those rows are the previous cycle's, so
+// they match the approved execution while their price may be days old.
+// A rec without an account (an unresolved ambient identity) cannot be named in
+// the hold, so any current Azure hold refuses it. Fails closed when the
+// collection state cannot be read.
+func (m *Manager) heldAzurePricingRefusal(ctx context.Context, azure []config.RecommendationRecord) error {
+	fresh, err := m.config.GetRecommendationsFreshness(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: cannot read the latest collection state to confirm Azure prices are current: %w", ErrStaleAzurePricing, err)
+	}
+	if fresh == nil {
+		return fmt.Errorf("%w: the latest collection state is missing, so Azure prices cannot be confirmed current", ErrStaleAzurePricing)
+	}
+	if fresh.LastCollectionPartial == nil {
+		return nil
+	}
+	for _, sweep := range fresh.LastCollectionPartial.Providers {
+		if sweep.Provider != "azure" || sweep.Reasons[config.PartialReasonPricingUnavailable] == 0 {
+			continue
+		}
+		for i := range azure {
+			if azureAccountHeld(azure[i].CloudAccountID, sweep.HeldAccountIDs) {
+				return fmt.Errorf("%w: Azure prices for recommendation %q could not be refreshed (price catalog unavailable); "+
+					"refresh recommendations after prices recover and submit a new purchase", ErrStaleAzurePricing, azure[i].ID)
+			}
+		}
+	}
 	return nil
+}
+
+func azureAccountHeld(accountID *string, held []string) bool {
+	return accountID == nil || *accountID == "" || slices.Contains(held, *accountID)
 }
 
 func azurePricingMatches(rec, stored config.RecommendationRecord) bool {

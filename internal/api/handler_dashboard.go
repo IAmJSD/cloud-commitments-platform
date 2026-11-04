@@ -39,7 +39,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session, scope), config.RecommendationFilter{
 		Provider: provider,
 	})
 	if err != nil {

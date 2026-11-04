@@ -211,6 +211,13 @@ jobs:
           fi
           echo "Linting $count workflow files"
 
+      - name: Assert Terraform is installed only at the version in .terraform-version
+        # Issue #349: deploy workflows applied on 1.10.0 while ci.yml and
+        # pre-commit.yml validated on 1.10.5. Fast (grep only).
+        run: |
+          bash scripts/check-terraform-pin.sh
+          bash scripts/test-check-terraform-pin.sh
+
       - name: Assert shellcheck is available to actionlint
         # actionlint does not fail when shellcheck is missing from PATH: it
         # silently skips every run: block and still exits 0. That silent skip is
@@ -381,7 +388,7 @@ jobs:
           go tool cover -html="$RUNNER_TEMP/coverage.out" -o "$RUNNER_TEMP/coverage.html"
 
       - name: Upload coverage artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: |
@@ -428,7 +435,8 @@ jobs:
         # in the three-leg layout): api 87s, config 85s, auth 62s, server
         # 55s, purchase 53s, migrations 64s, and the rest 95s together
         # (testhelpers 32s, cleanup-lambda 15s, database 15s, scheduler 12s,
-        # analytics 12s, commitmentopts 9s). api is the floor, as one package
+        # analytics 12s, commitmentopts 9s; cleanup-lambda was deleted in
+        # #357, so the rest is about 80s now). api is the floor, as one package
         # is never split; migrations and the rest run side by side within it.
         include:
           - shard: api
@@ -700,20 +708,20 @@ jobs:
 
       - name: Save Go build cache
         if: ${{ !cancelled() && steps.go_build_prune.outcome == 'success' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gocache }}
           key: ${{ steps.go_cache.outputs.build_key }}
 
       - name: Save Go module cache
         if: ${{ !cancelled() && steps.go_mod_download.outcome == 'success' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gomodcache }}
           key: ${{ steps.go_cache.outputs.mod_key }}
 
       - name: Upload integration coverage
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # One artifact per shard; the integration-coverage job below merges
           # them into the single artifact this job used to upload. Short
@@ -776,7 +784,7 @@ jobs:
           echo "Merged ${#profiles[@]} coverage profile(s), $(( $(wc -l < "$merged") - 1 )) block(s)"
 
       - name: Upload integration coverage
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: integration-coverage
           path: ${{ runner.temp }}/coverage-integration.out
@@ -969,15 +977,22 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          # Must satisfy `required_version = ">= 1.10.0"` declared by every
-          # terraform/environments/*/main.tf -- pinning below 1.10 makes
+          # .terraform-version must satisfy `required_version = ">= 1.10.0"`
+          # declared by every terraform/environments/*/main.tf -- below 1.10
           # `terraform init`/`validate` abort with "Unsupported Terraform
-          # Core version". Matches the pin in pre-commit.yml so both
-          # workflows resolve to the same binary.
-          terraform_version: 1.10.5
+          # Core version". Every workflow that installs Terraform reads the
+          # same file, so validate here and apply in the deploy workflows
+          # run the same binary.
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Terraform Format Check
         # Must cover every SCAN_ROOTS entry in scripts/check-gcp-secret-scope.sh,
@@ -1342,7 +1357,7 @@ jobs:
         # it). If gosec ran and the file is still missing, fail loud instead
         # of masking it as a skip.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/gosec-results.sarif
 
@@ -1351,7 +1366,7 @@ jobs:
         # finding or a scan error). A pull_request run saves to its own
         # merge-ref scope, which main and other PRs cannot restore from.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec.outputs.clean_scan == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gosec-results.sarif
           key: ${{ steps.gosec_key.outputs.results_key }}
@@ -1360,7 +1375,7 @@ jobs:
         # Saved even when gosec reports findings: the binary depends only on
         # the gosec and Go versions in the key, not on the scan.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_bin.outputs.cache-hit != 'true' && steps.gosec.outputs.binary_ready == 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gosec_key.outputs.bin_dir }}
           key: ${{ steps.gosec_key.outputs.bin_key }}
@@ -1398,7 +1413,7 @@ jobs:
       - name: Upload Trivy results to GitHub Security
         # Tolerate a missing SARIF only when the Trivy fs step never ran.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.trivy_fs.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: '${{ runner.temp }}/trivy-results.sarif'
 
@@ -1433,7 +1448,7 @@ jobs:
       - name: Upload Trivy IaC results to GitHub Security
         # Tolerate a missing SARIF only when the Trivy IaC step never ran.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.trivy_iac.outcome != 'skipped'
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: '${{ runner.temp }}/trivy-config-results.sarif'
           # Distinct category so this IaC analysis does not overwrite the
@@ -1460,7 +1475,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run Snyk to check for vulnerabilities
-        uses: snyk/actions/golang@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
+        uses: snyk/actions/golang@9adf32b1121593767fc3c057af55b55db032dc04 # 1.0.0
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -1522,8 +1537,8 @@ jobs:
       - name: Run parity script self-tests
         run: bash scripts/test-azure-role-parity.sh
 
-  # Assert that the AWS IAM action lists are identical across the CFN stack,
-  # the TF lambda/fargate modules, and the federation CFN/TF/CLI templates.
+  # Assert that the AWS IAM action lists are identical across the TF
+  # lambda/fargate modules and across the federation CFN/TF/CLI templates.
   # Fast (shell only), so it always runs.
   aws-iam-parity:
     name: AWS IAM actions parity (CFN vs TF)

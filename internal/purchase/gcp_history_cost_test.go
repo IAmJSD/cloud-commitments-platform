@@ -60,6 +60,7 @@ func TestSavePurchaseHistory_GCPRecordsNoUpfront(t *testing.T) {
 	require.NoError(t, err)
 
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	var saved *config.PurchaseHistoryRecord
 	store.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseHistoryRecord) }).

@@ -15,11 +15,12 @@ import (
 const DefaultMaxDueRowAge = 24 * time.Hour
 
 // ErrDueRowTooOld marks a row the fire or process sweep refused because it was
-// due more than the due-row age cap ago (issue #712). The sweeps are opt-in on
-// most platforms, so the first tick after one is enabled can find a long
-// backlog of overdue rows whose recommendations and prices are stale; buying
-// them all at once is the outcome this cap prevents. The row ends failed with
-// no_submission set, so it can be retried deliberately from History.
+// due more than the due-row age cap ago (issue #712). The first tick after a
+// sweep is enabled (the fire sweep by default since #712, the process sweep
+// on opt-in) can find a long backlog of overdue rows whose recommendations
+// and prices are stale; buying them all at once is the outcome this cap
+// prevents. The row ends failed with no_submission set, so it can be retried
+// deliberately from History.
 var ErrDueRowTooOld = errors.New("scheduled purchase skipped: it was due too long ago")
 
 // dueRowMaxAge is the sweeps' age cap, DefaultMaxDueRowAge when unset.

@@ -91,6 +91,7 @@ func tokenCapture(t *testing.T, providerName string, exec *config.PurchaseExecut
 	ctx := context.Background()
 	store, sender, factory := new(MockConfigStore), new(MockEmailSender), new(MockProviderFactory)
 	prov, svc := new(MockProvider), new(MockServiceClient)
+	assertMocksOnCleanup(t, store, sender, factory, prov, svc)
 	store.SavePurchaseExecutionFn = func(context.Context, *config.PurchaseExecution) error { return nil }
 	store.On("SavePurchaseHistory", ctx, mock.Anything).Return(nil)
 	factory.On("CreateAndValidateProvider", mock.Anything, providerName, mock.Anything).Return(prov, nil)

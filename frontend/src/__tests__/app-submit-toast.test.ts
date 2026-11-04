@@ -26,6 +26,7 @@ jest.mock('../archera', () => ({ handleArcheraDeeplink: jest.fn(), openArcheraOf
 jest.mock('../modal', () => ({ closeModal: jest.fn() }));
 jest.mock('../recommendations', () => ({
   setupRecommendationsHandlers: jest.fn(),
+  getPurchaseModalSession: () => 1,
   getPurchaseModalRecommendations: () => [
     { service: 'ec2', provider: 'aws', region: 'us-east-1', resource_type: 'm5.large', count: 1, term: 1, payment: 'no-upfront', upfront_cost: 0 },
   ],

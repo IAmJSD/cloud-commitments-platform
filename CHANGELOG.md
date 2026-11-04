@@ -42,6 +42,51 @@ are the full record until the next release.
   actions, `ec2:DescribeRegions`, `rds:DescribeDBInstances`, and the
   new-style `es:*ReservedInstance*` OpenSearch actions (replacing the legacy
   `es:*ReservedElasticsearch*` names).
+- **Bastion accounts whose target role trusts the CUDly host now get
+  AccessDenied.** CUDly assumes a bastion account's target role with the
+  bastion's own credentials and no longer falls back to the CUDly host's.
+  A target role whose trust policy names the CUDly host instead of the
+  bastion fails at AssumeRole until the bastion is added as the trusted
+  principal in that role's trust policy
+  ([#1556](https://github.com/LeanerCloud/cloud-commitments-platform/pull/1556)).
+
+### Changed
+
+- **The fire_scheduled_purchases sweep is now on by default on every
+  Terraform platform** (Lambda, Fargate, Cloud Run, GKE, Container Apps and
+  AKS), every 15 minutes. It carries out every purchase a person approves
+  while a purchase delay is set (`purchase_delay_hours` > 0; the migrated
+  default is 0, which executes approvals immediately) once the delay ends;
+  until now those approvals never executed unless the operator turned the
+  sweep on. Keep it on unless `purchase_delay_hours` stays 0. GKE deployed from `terraform/environments/gcp` still gets no Cloud
+  Scheduler jobs, this one included (that environment doesn't pass
+  `enable_scheduled_tasks` to GKE). The server refuses (and sends the purchase-failed
+  alert for) any purchase due more than 24h ago, so the first run cannot buy
+  a stale backlog. Set `enable_fire_scheduled_purchases_schedule = false` to
+  opt out. The process_scheduled_purchases sweep stays opt-in (#712)
+- **AWS recommendation collection moves to 02:00 UTC daily**
+  (`recommendation_schedule = "cron(0 2 * * ? *)"`, was `rate(1 day)`), the
+  same time as GCP and Azure. With a fixed time the recommendations freshness
+  endpoint can report `next_collection_at` on AWS too. Deployments that set
+  their own `recommendation_schedule` are unaffected (#756)
+
+### Removed
+
+- The CloudFormation install stack (`cloudformation/stacks/CUDly`). It still
+  created DynamoDB tables and set no `DB_HOST`, so the Postgres-only server it
+  deployed failed at startup and the stack could not serve any request or
+  scheduled task. Install on AWS with Terraform (`terraform/environments/aws`,
+  Lambda or Fargate) instead; see `docs/DEPLOYMENT.md`. The target-account role
+  templates (`cloudformation/stacks/CUDly-CrossAccount` and the federation
+  CloudFormation templates under `iac/federation/`) are unchanged (#1432)
+- The standalone cleanup job `cmd/cleanup-lambda` and its three deploy modules
+  (`terraform/modules/compute/aws/cleanup-lambda`,
+  `terraform/modules/compute/gcp/cleanup-function` and
+  `terraform/modules/compute/azure/cleanup-function`). No environment root used
+  the modules. The job only deleted executions whose `expires_at` had passed,
+  and no code path sets that column, so it never deleted an execution. The server's
+  `cleanup` scheduled task (`CleanupOldExecutions`) already covers execution and
+  session retention; see "Database Cleanup Jobs" in `docs/DEPLOYMENT.md` (#357)
 
 ### Fixed
 

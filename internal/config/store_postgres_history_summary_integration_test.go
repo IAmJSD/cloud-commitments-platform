@@ -5,6 +5,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -194,12 +195,14 @@ func TestIntegration_HistorySummaryAggregate_MatchesRowFetch(t *testing.T) {
 		"date":             {Start: &start, End: &end},
 		"all":              {Provider: "aws", AccountIDs: []string{f.accountA}, Start: &start, End: &end},
 	}
+	actionableStatuses := []string{"pending", "notified", "scheduled", "approved", "running", "paused"}
 	statuses := []string{"pending", "notified", "scheduled", "approved", "running", "paused",
 		"completed", "partially_completed", "failed", "expired", StatusCanceled}
 	for name, filter := range filters {
 		t.Run(name, func(t *testing.T) {
 			agg, err := f.store.HistorySummaryAggregate(ctx, HistorySummaryFilter{
 				History: filter, ExecutionStatuses: statuses, ExecutionStart: filter.Start, ExecutionEnd: filter.End,
+				ExecutionDateExemptStatuses: actionableStatuses,
 			})
 			require.NoError(t, err)
 
@@ -216,7 +219,7 @@ func TestIntegration_HistorySummaryAggregate_MatchesRowFetch(t *testing.T) {
 			want := map[string]int{}
 			for i := range execs {
 				e := &execs[i]
-				if filter.Start != nil && (e.ScheduledDate.Before(*filter.Start) || e.ScheduledDate.After(*filter.End)) {
+				if filter.Start != nil && !slices.Contains(actionableStatuses, e.Status) && (e.ScheduledDate.Before(*filter.Start) || e.ScheduledDate.After(*filter.End)) {
 					continue
 				}
 				want[execGroupKey(e.Status, e.CloudAccountID, e.CreatedByUserID, e.Recommendations)]++
@@ -249,6 +252,27 @@ func TestIntegration_HistorySummaryAggregate_DateBoundsInclusive(t *testing.T) {
 	require.Len(t, agg.Executions, 1)
 	assert.Equal(t, 2, agg.Executions[0].Count)
 	assert.Empty(t, agg.Executions[0].Recommendations, "JSON null recommendations project to an empty list")
+}
+
+// TestIntegration_HistorySummaryAggregate_DateBoundExemptsActionable pins #1685:
+// a pending execution scheduled outside the range still counts, a failed one
+// does not.
+func TestIntegration_HistorySummaryAggregate_DateBoundExemptsActionable(t *testing.T) {
+	ctx := context.Background()
+	f := newHistorySummaryFixture(ctx, t)
+	start := f.base
+	end := f.base.Add(24*time.Hour - time.Second)
+	later := end.Add(72 * time.Hour)
+	f.saveExecution(ctx, t, later, "pending", "", &f.accountA, nil, nil)
+	f.saveExecution(ctx, t, later, "failed", "boom", &f.accountA, nil, nil)
+	agg, err := f.store.HistorySummaryAggregate(ctx, HistorySummaryFilter{
+		ExecutionStatuses: []string{"pending", "failed"}, ExecutionStart: &start, ExecutionEnd: &end,
+		ExecutionDateExemptStatuses: []string{"pending"},
+	})
+	require.NoError(t, err)
+	require.Len(t, agg.Executions, 1)
+	assert.Equal(t, "pending", agg.Executions[0].Status)
+	assert.Equal(t, 1, agg.Executions[0].Count)
 }
 
 // TestIntegration_HistorySummaryAggregate_SnapshotUnderConcurrentCompletion

@@ -155,8 +155,11 @@ describe('index.html tab semantics (issue #730)', () => {
     pages.forEach(page => {
       expect(page.getAttribute('role')).toBeNull();
       expect(page.getAttribute('aria-labelledby')).toBeNull();
-      const heading = page.firstElementChild as HTMLElement;
-      expect(heading.matches('h2.page-heading.sr-only')).toBe(true);
+      // The visible page header opens every page; its h2 is the heading.
+      const header = page.firstElementChild as HTMLElement;
+      expect(header.matches('.page-header')).toBe(true);
+      const heading = header.querySelector('h2.page-heading') as HTMLElement;
+      expect(heading).not.toBeNull();
       expect(heading.getAttribute('tabindex')).toBe('-1');
       expect(heading.textContent?.trim()).toBeTruthy();
     });

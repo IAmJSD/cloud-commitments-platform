@@ -45,13 +45,26 @@ func (h *Handler) awsResolverCredResult(ctx context.Context, acct *config.CloudA
 		base.Region = "us-east-1"
 	}
 	hostSTS := sts.NewFromConfig(base)
-	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, h.credStore, hostSTS,
-		credentials.AWSResolveOptions{AmbientProvider: base.Credentials, AmbientSTS: hostSTS})
+	opts := h.bastionResolveOptions(base)
+	opts.AmbientProvider, opts.AmbientSTS = base.Credentials, hostSTS
+	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, h.credStore, hostSTS, opts)
 	if err != nil {
 		logging.Warnf("account test %s: resolve AWS credentials: %v", acct.ID, err)
 		return AccountTestResult{OK: false, Message: classifyAWSResolveError(err)}
 	}
 	return probeAWSCallerIdentity(ctx, base, provider, acct)
+}
+
+// bastionResolveOptions returns resolver options carrying the config-store
+// bastion lookup and an STS client factory built on base, so a bastion-mode
+// account's target role is assumed with the bastion account's own
+// credentials, never the host's (issue #263). Every API path that resolves
+// AWS credentials for a cloud account passes these.
+func (h *Handler) bastionResolveOptions(base aws.Config) credentials.AWSResolveOptions {
+	return credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(h.config),
+		STSClientFactory: credentials.NewSTSClientFactory(base),
+	}
 }
 
 // roleARNNotHostMessage is the fixed 400 for an AWS role_arn account saved

@@ -64,21 +64,30 @@ func sameDate(a, b *time.Time) bool {
 	return a.Equal(*b)
 }
 
-// requireManagedAccountsTx refuses a changed account set on an editor-managed
-// plan. The plan row is read FOR SHARE, the lock SetPlanAccounts already takes
-// for its provider check, so an editor command holding FOR UPDATE makes the
-// writer wait and then see the committed marker. An identical set passes: the
-// legacy edit modal re-sends the unchanged selection after every rename.
-func requireManagedAccountsTx(ctx context.Context, tx pgx.Tx, planID string, accountIDs []string) error {
+// lockPlanManagedTx locks the plan row FOR UPDATE for the rest of tx and
+// reports whether the editor manages it. An editor command holding the row
+// makes the writer wait and then see the committed marker. A missing plan is
+// (false, nil); the provider check that follows reports it.
+func lockPlanManagedTx(ctx context.Context, tx pgx.Tx, planID string) (bool, error) {
 	var managed bool
 	err := tx.QueryRow(ctx,
-		`SELECT COALESCE(ramp_schedule->>'dates_managed' = 'true', false) FROM purchase_plans WHERE id = $1 FOR SHARE`,
+		`SELECT COALESCE(ramp_schedule->>'dates_managed' = 'true', false) FROM purchase_plans WHERE id = $1 FOR UPDATE`,
 		planID).Scan(&managed)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !managed) {
-		return nil
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("failed to check plan management: %w", err)
+		return false, fmt.Errorf("failed to check plan management: %w", err)
+	}
+	return managed, nil
+}
+
+// requireManagedAccountsTx refuses a changed account set on an editor-managed
+// plan (managed from lockPlanManagedTx). An identical set passes: the legacy
+// edit modal re-sends the unchanged selection after every rename.
+func requireManagedAccountsTx(ctx context.Context, tx pgx.Tx, planID string, accountIDs []string, managed bool) error {
+	if !managed {
+		return nil
 	}
 	rows, err := tx.Query(ctx, `SELECT account_id FROM plan_accounts WHERE plan_id = $1`, planID)
 	if err != nil {
