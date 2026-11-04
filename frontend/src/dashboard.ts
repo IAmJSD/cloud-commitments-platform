@@ -404,8 +404,10 @@ function renderDashboardSummary(
       // #180: count the same rows the range sums (and the Opportunities page
       // counts); the backend total ignores the Enabled Providers setting.
       detail: `${recsCount ?? data.total_recommendations ?? NO_VALUE} recommendations` },
+    // #1709: committed_monthly is the active commitments' estimated monthly
+    // savings, not what they cost.
     { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : NO_VALUE,
-      detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
+      detail: `${formatCurrency(data.committed_monthly)}/mo estimated savings` },
     { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
       detail: 'From commitment purchases' },

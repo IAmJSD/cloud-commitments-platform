@@ -6771,6 +6771,9 @@ components:
         committed_monthly:
           type: number
           format: double
+          description: >-
+            Estimated monthly savings of the active commitments (the sum of
+            their estimated savings), not what the commitments cost.
         current_coverage:
           type: number
           format: double

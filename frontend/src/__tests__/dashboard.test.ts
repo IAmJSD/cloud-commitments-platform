@@ -153,6 +153,23 @@ describe('Dashboard Module', () => {
   });
 
   describe('loadDashboard', () => {
+    // #1709: committed_monthly sums the active commitments' estimated monthly
+    // savings (handler_dashboard.go), not what they cost, so the card must not
+    // call it "committed".
+    test('Active Commitments detail names the figure as estimated savings', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 0, active_commitments: 3, committed_monthly: 500,
+        current_coverage: 70, target_coverage: 80, ytd_savings: 0, by_service: {},
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const tile = document.querySelector('#summary [data-kpi="commitments"]');
+      expect(tile?.textContent).toContain('$500/mo estimated savings');
+      expect(tile?.textContent).not.toContain('committed');
+    });
+
     test('fetches dashboard summary and upcoming purchases', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
