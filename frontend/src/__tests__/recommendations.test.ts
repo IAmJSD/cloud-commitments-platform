@@ -3564,6 +3564,54 @@ describe('Bundle B: column header filter triggers', () => {
       await load(variants, ['v1684-au']);
       expect(document.getElementById('recommendations-action-summary')?.textContent).toMatch(/across 1 row\)$/);
     });
+
+    // Issue #1705: the Savings Plans child rows use the same nesting rules.
+    test('Savings Plans children: a single plan keeps its type, variants of a multi-variant plan stay blank', async () => {
+      const sp = { provider: 'aws', cloud_account_id: 'a1705', region: 'us-east-1', count: 1, upfront_cost: 0 };
+      await load([
+        { ...sp, id: 'sp1705-compute', service: 'savings-plans-compute', resource_type: 'Compute SP', term: 1, payment: 'no-upfront', savings: 40 },
+        { ...sp, id: 'sp1705-ec2-1', service: 'savings-plans-ec2instance', resource_type: '', term: 1, payment: 'no-upfront', savings: 30 },
+        { ...sp, id: 'sp1705-ec2-3', service: 'savings-plans-ec2instance', resource_type: '', term: 3, payment: 'no-upfront', savings: 50 },
+      ]);
+      const spChevron = document.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
+      if (spChevron?.getAttribute('aria-expanded') !== 'true') spChevron!.click();
+
+      // The single-plan child is not a variant: it keeps its resource type.
+      const single = document.querySelector<HTMLTableRowElement>('tr.recommendation-row[data-rec-id="sp1705-compute"]')!;
+      expect(single.textContent).toContain('Compute SP');
+
+      // The multi-variant child's summary skips its blank resource type.
+      const childSummary = document.querySelector<HTMLTableRowElement>('tr.rec-sp-group-child')!;
+      expect(childSummary.querySelector('.rec-cell-identity')?.textContent?.trim()).toBe('us-east-1 \u2014 2 variants');
+
+      const childChevron = childSummary.querySelector<HTMLButtonElement>('.rec-cell-chevron')!;
+      if (childChevron.getAttribute('aria-expanded') !== 'true') childChevron.click();
+      const variant = document.querySelector<HTMLTableRowElement>('tr.rec-variant-row[data-rec-id="sp1705-ec2-3"]')!;
+      expect(Array.from(variant.cells).slice(1, 5).map((td) => td.textContent?.trim())).toEqual(['', '', '', '']);
+      expect(variant.textContent).not.toContain('us-east-1');
+    });
+
+    test('payback card treats a lower bound that rounds to 0.0 as no payback', async () => {
+      const tiny = { ...base, resource_type: 'db.r6g.large' };
+      // Best end: 1 / 100 = 0.01 months, which rounds to "0.0"; worst end: 600 / 100 = 6 months.
+      await load([
+        { ...tiny, id: 'v1705-tiny', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 1 },
+        { ...tiny, id: 'v1705-full', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('0.0 \u2013');
+    });
+
+    test('payback card treats a negative lower bound as no payback', async () => {
+      const credit = { ...base, resource_type: 'db.r6g.xlarge' };
+      // A negative upfront (a credit) gives -1 / 100 = -0.01 months, which rounds to "-0.0".
+      await load([
+        { ...credit, id: 'v1705-credit', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: -1 },
+        { ...credit, id: 'v1705-paid', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('-0.0');
+    });
   });
 
   // Issue #164: cross-column-aware (cascading) distinct values.

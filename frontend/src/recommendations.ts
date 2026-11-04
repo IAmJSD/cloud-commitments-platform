@@ -1607,7 +1607,9 @@ function formatPaybackRange(min: number, max: number): string {
   const lo = min.toFixed(1);
   const hi = max.toFixed(1);
   if (lo === hi) return `${lo} months`;
-  return min > 0 ? `${lo} – ${hi} months` : `Up to ${hi} months`;
+  // Decide on the rounded value: a positive bound under 0.05 prints "0.0" and a
+  // negative one "-0.0" or below, and none of them is a payback period (#1705).
+  return Number(lo) <= 0 ? `Up to ${hi} months` : `${lo} – ${hi} months`;
 }
 
 /** Format a term range, collapsing "1 yr – 1 yr" to "1 yr". */
