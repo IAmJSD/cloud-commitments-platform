@@ -105,6 +105,8 @@ func TestGetCurrentUserPermissions_UserAPIKey_ReportsOwnerScope(t *testing.T) {
 			m.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, meScopeKeyID, meScopeKeyOwnerID).
 				Return([]auth.APIPermission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}}, nil).Once()
 			m.On("GetAllowedAccountsAPI", mock.Anything, meScopeKeyOwnerID).Return(tc.accounts, nil).Once()
+			m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, meScopeKeyID, meScopeKeyOwnerID,
+				auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(true, nil).Maybe()
 			h := &Handler{auth: m}
 
 			got := routeMePermissions(t, h, &events.LambdaFunctionURLRequest{
@@ -197,6 +199,8 @@ func TestGetCurrentUserPermissions_UserAPIKey_FlagMatchesRefreshGate(t *testing.
 			m.On("HasAPIKeyPermissionAPI", mock.Anything, meScopeRawKey, auth.ActionView, auth.ResourceRecommendations).
 				Return(meScopeKeyOwnerID, meScopeKeyID, true, nil).Maybe()
 			m.On("GetAllowedAccountsAPI", mock.Anything, meScopeKeyOwnerID).Return(accounts, nil).Maybe()
+			m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, meScopeKeyID, meScopeKeyOwnerID,
+				auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(true, nil).Maybe()
 			f := newRefreshFixtureWithAuth(t, m)
 			keyRequest := func() *events.LambdaFunctionURLRequest {
 				return &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": meScopeRawKey}}

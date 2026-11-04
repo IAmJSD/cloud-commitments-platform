@@ -428,6 +428,43 @@ func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, p
 	return args.Error(0)
 }
 
+// runPlanGate gives gate the plan and account ids the mock holds for planID,
+// the way the real store reads them under the lock (ids only when withIDs).
+func (m *MockConfigStore) runPlanGate(ctx context.Context, planID string, fallback *config.PurchasePlan, withIDs bool, gate config.PlanWriteGate) error {
+	if gate == nil {
+		return nil
+	}
+	locked := fallback
+	if isExpected(&m.Mock, "GetPurchasePlan") {
+		if p, err := m.GetPurchasePlan(ctx, planID); err == nil && p != nil {
+			locked = p
+		}
+	}
+	var accounts []config.CloudAccount
+	if withIDs && (m.GetPlanAccountsFn != nil || isExpected(&m.Mock, "GetPlanAccounts")) {
+		var err error
+		if accounts, err = m.GetPlanAccounts(ctx, planID); err != nil {
+			return err
+		}
+	}
+	ids := make([]string, 0, len(accounts))
+	for i := range accounts {
+		ids = append(ids, accounts[i].ID)
+	}
+	sort.Strings(ids)
+	return gate(locked, ids)
+}
+
+// UpdatePurchasePlanGated runs gate, then delegates to UpdatePurchasePlan, the
+// order the real store uses under the plan lock.
+func (m *MockConfigStore) UpdatePurchasePlanGated(ctx context.Context, plan *config.PurchasePlan, gate config.PlanWriteGate) error {
+	m.record("UpdatePurchasePlanGated", ctx, plan)
+	if err := m.runPlanGate(ctx, plan.ID, plan, true, gate); err != nil {
+		return err
+	}
+	return m.UpdatePurchasePlan(ctx, plan)
+}
+
 // DeletePurchasePlan mocks the DeletePurchasePlan operation.
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	m.record("DeletePurchasePlan", ctx, planID)
@@ -1783,6 +1820,15 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 	}
 	args := m.Called(ctx, planID, accountIDs)
 	return args.Error(0)
+}
+
+// SetPlanAccountsGated runs gate, then delegates to SetPlanAccounts.
+func (m *MockConfigStore) SetPlanAccountsGated(ctx context.Context, planID string, accountIDs []string, gate config.PlanWriteGate) error {
+	m.record("SetPlanAccountsGated", ctx, planID, accountIDs)
+	if err := m.runPlanGate(ctx, planID, &config.PurchasePlan{ID: planID}, false, gate); err != nil {
+		return err
+	}
+	return m.SetPlanAccounts(ctx, planID, accountIDs)
 }
 
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {

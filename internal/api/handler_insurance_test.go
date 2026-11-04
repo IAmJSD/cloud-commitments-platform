@@ -96,6 +96,7 @@ func TestInsuranceStatus_UnrestrictedSessionAllowed(t *testing.T) {
 	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, "u1", "view", "recommendations").Return(true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, "u1").Return([]string(nil), nil)
+	m.On("HasPermissionForConstraintsAPI", mock.Anything, "u1", "view", "recommendations", mock.MatchedBy(isGlobalSet)).Return(true, nil)
 	h := &Handler{auth: m, insurance: insuranceProvider(t, archera.Settings{})}
 	st, err := h.getInsuranceStatus(sessionPrincipalCtx(), &events.LambdaFunctionURLRequest{})
 	require.NoError(t, err)

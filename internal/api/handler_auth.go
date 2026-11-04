@@ -218,14 +218,14 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 }
 
 // unrestrictedAccountAccess reports whether session passes
-// requireUnrestrictedAccountScope, the gate on POST
+// requireGlobalScope on view:recommendations, the gate on POST
 // /api/recommendations/refresh, by running that same check rather than a
 // copy of it. A scope lookup failure is logged and reported as false: the flag
 // only steers the UI (false skips an automatic refresh), the refresh endpoint
 // still enforces the scope itself, and failing the whole permissions response
 // would drop the frontend to its coarser group-based gating.
 func (h *Handler) unrestrictedAccountAccess(ctx context.Context, session *Session) bool {
-	err := h.requireUnrestrictedAccountScope(ctx, session)
+	err := h.requireGlobalScope(ctx, session, auth.ActionView, auth.ResourceRecommendations, refreshScopeMsg)
 	if err == nil {
 		return true
 	}

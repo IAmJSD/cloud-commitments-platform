@@ -391,7 +391,7 @@ func adminGrantSatisfies(perm Permission, action, resource string) bool {
 }
 
 // UserHasAdminCapability reports whether the user's effective (group-derived)
-// permissions include the full-access {admin, *} capability, i.e. the user is
+// permissions include the unconstrained full-access {admin, *} capability, i.e. the user is
 // a member of the Administrators group (or any group granted equivalent
 // permission). This is the group-membership replacement for the old
 // role == "admin" short-circuit. Fail closed: any lookup error returns
@@ -420,6 +420,9 @@ func checkPermissionMatch(perm Permission, action, resource string) bool {
 }
 
 func checkPermissionConstraints(perm Permission, constraints *PermissionConstraints) bool {
+	if constraints != nil && constraints.Global {
+		return !perm.Constraints.restricts()
+	}
 	if constraints != nil && perm.Constraints != nil {
 		return matchConstraints(perm.Constraints, constraints)
 	}

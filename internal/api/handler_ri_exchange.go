@@ -2273,7 +2273,7 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 	}
 	// Resolved before the transaction: the closure below runs while it holds a
 	// pooled connection and must not need a second one (issue #1517).
-	riExchangeGrant := h.resolveGrant(ctx, req, auth.ResourceRIExchange)
+	riExchangeGrant := h.resolveGrant(ctx, req, auth.ResourceRIExchange, riExchangeAutoModeScopeMsg)
 
 	// Route through the serialized read-modify-write so this partial update
 	// (only the ri_exchange_* columns) shares the advisory lock with other

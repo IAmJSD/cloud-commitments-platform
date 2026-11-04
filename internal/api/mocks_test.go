@@ -533,6 +533,9 @@ func (m *MockAuthService) grantPermissions(perms []auth.Permission) {
 func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accounts []string) {
 	authCtx := &auth.AuthContext{Permissions: perms}
 	decide := func(action, resource string) bool {
+		if action == auth.ActionAdmin && resource == auth.ResourceAll {
+			return holdsUnconstrainedAdmin(perms)
+		}
 		return authCtx.HasPermission(action, resource)
 	}
 	m.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -562,6 +565,19 @@ func (m *MockAuthService) grantPermissionsScoped(perms []auth.Permission, accoun
 		Return(decideConstrained, nil).Maybe()
 	m.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).
 		Return(accounts, nil).Maybe()
+}
+
+// holdsUnconstrainedAdmin mirrors the service: the admin capability itself
+// (admin, *) is answered only by an {admin, *} grant with no constraint.
+func holdsUnconstrainedAdmin(perms []auth.Permission) bool {
+	for _, p := range perms {
+		c := p.Constraints
+		if p.Action == auth.ActionAdmin && p.Resource == auth.ResourceAll &&
+			(c == nil || len(c.AccountIDs)+len(c.Providers)+len(c.Services)+len(c.Regions) == 0 && c.MaxPurchaseAmount == 0) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {

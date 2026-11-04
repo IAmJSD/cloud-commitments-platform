@@ -94,6 +94,7 @@ func TestRouterAuthUser_SessionPrincipalAvoidsSecondValidation(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
 	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "session-user").Return([]auth.APIPermission{}, nil).Once()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "session-user").Return([]string{}, nil).Once()
+	mockAuth.On("HasPermissionForConstraintsAPI", mock.Anything, "session-user", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(false, nil).Once()
 	h := &Handler{auth: mockAuth}
 	r := NewRouter(h)
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer session-token"}}
@@ -112,6 +113,7 @@ func TestRouterAuthUser_UserAPIKeyPrincipalAvoidsSecondValidation(t *testing.T) 
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
 	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, "key-1", "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "api-key-user").Return([]string{}, nil).Once()
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, "key-1", "api-key-user", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(false, nil).Once()
 	h := &Handler{auth: mockAuth}
 	r := NewRouter(h)
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
@@ -147,6 +149,7 @@ func TestHandleRequest_SessionPrincipalValidatedOnce(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "session-token").Return(session, nil).Once()
 	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "session-user").Return([]auth.APIPermission{}, nil).Once()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "session-user").Return([]string{}, nil).Once()
+	mockAuth.On("HasPermissionForConstraintsAPI", mock.Anything, "session-user", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(false, nil).Once()
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer session-token"},
@@ -170,6 +173,7 @@ func TestHandleRequest_UserAPIKeyPrincipalValidatedOnce(t *testing.T) {
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
 	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, "key-1", "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "api-key-user").Return([]string{}, nil).Once()
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, "key-1", "api-key-user", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(false, nil).Once()
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"X-API-Key": "user-key"},

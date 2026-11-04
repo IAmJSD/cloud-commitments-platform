@@ -802,31 +802,62 @@ func (s *PostgresStore) persistRampPosition(ctx context.Context, tx pgx.Tx, plan
 
 // UpdatePurchasePlan publishes the new version only after the transaction commits.
 func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePlan) error {
+	return s.UpdatePurchasePlanGated(ctx, plan, nil)
+}
+
+// UpdatePurchasePlanGated is UpdatePurchasePlan with gate (may be nil) run after
+// the plan row is locked and before the write. A missing plan skips the gate and
+// reports ErrNotFound from the update.
+func (s *PostgresStore) UpdatePurchasePlanGated(ctx context.Context, plan *PurchasePlan, gate PlanWriteGate) error {
 	pending := *plan
 	if err := s.WithTx(ctx, func(tx pgx.Tx) error {
 		old, err := s.LockPurchasePlanTx(ctx, tx, pending.ID)
 		if err != nil {
 			return err
 		}
+		if gate != nil && old != nil {
+			if gateErr := s.runPlanGateTx(ctx, tx, old, gate); gateErr != nil {
+				return gateErr
+			}
+		}
 		if updErr := s.updatePurchasePlanGuardedTx(ctx, tx, old, &pending); updErr != nil {
 			return updErr
 		}
-		if old == nil || !rampBaselineStale(old, &pending) {
-			return nil
-		}
-		// After the update, never before: clearing bumps updated_at, which
-		// would fail the update's own optimistic-lock check.
-		err = tx.QueryRow(ctx,
-			`UPDATE purchase_plans SET ramp_baseline = NULL WHERE id = $1 AND ramp_baseline IS NOT NULL RETURNING updated_at`,
-			pending.ID).Scan(&pending.UpdatedAt)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("failed to clear ramp baseline of plan %s: %w", pending.ID, err)
-		}
-		return nil
+		return clearStaleRampBaselineTx(ctx, tx, old, &pending)
 	}); err != nil {
 		return err
 	}
 	plan.UpdatedAt = pending.UpdatedAt
+	return nil
+}
+
+// runPlanGateTx hands gate the locked plan and its sorted account ids, read on
+// tx.
+func (s *PostgresStore) runPlanGateTx(ctx context.Context, tx pgx.Tx, locked *PurchasePlan, gate PlanWriteGate) error {
+	rows, err := tx.Query(ctx, `SELECT account_id::text FROM plan_accounts WHERE plan_id = $1 ORDER BY 1`, locked.ID)
+	if err != nil {
+		return fmt.Errorf("failed to read plan accounts: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("failed to read plan accounts: %w", err)
+	}
+	return gate(locked, ids)
+}
+
+// clearStaleRampBaselineTx drops the ramp baseline an update made stale. It runs
+// after the update, never before: clearing bumps updated_at, which would fail
+// the update's own optimistic-lock check.
+func clearStaleRampBaselineTx(ctx context.Context, tx pgx.Tx, old, pending *PurchasePlan) error {
+	if old == nil || !rampBaselineStale(old, pending) {
+		return nil
+	}
+	err := tx.QueryRow(ctx,
+		`UPDATE purchase_plans SET ramp_baseline = NULL WHERE id = $1 AND ramp_baseline IS NOT NULL RETURNING updated_at`,
+		pending.ID).Scan(&pending.UpdatedAt)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to clear ramp baseline of plan %s: %w", pending.ID, err)
+	}
 	return nil
 }
 
@@ -4151,7 +4182,7 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 // #1072) in this order: the plans that target the account, then the account
 // row, then any plan that gained the account meanwhile. The plan locks
 // serialize the delete with a concurrent delete of another of the plan's
-// accounts and with SetPlanAccounts (which reads the plan FOR SHARE), so the
+// accounts and with SetPlanAccounts (which locks the plan FOR UPDATE), so the
 // plan disable decides on committed plan_accounts rows. The account lock waits
 // for a writer still attaching the account to a plan (it holds KEY SHARE on
 // the row through the plan_accounts FK until it commits); the second plan lock
@@ -4497,13 +4528,39 @@ func (s *PostgresStore) ListAccountServiceOverrides(ctx context.Context, account
 
 // SetPlanAccounts replaces the full account list for a plan atomically.
 func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error {
+	return s.SetPlanAccountsGated(ctx, planID, accountIDs, nil)
+}
+
+// SetPlanAccountsGated is SetPlanAccounts with gate (may be nil) run while the
+// plan row is locked FOR UPDATE, before any write. Plan writers that decide on
+// the plan's accounts (the auto-purchase arming gate) lock the same row, so the
+// gate's decision cannot be overtaken by a concurrent arm or retarget. The plan
+// is locked before the account rows the inserts touch, the order
+// DeleteCloudAccount uses.
+func (s *PostgresStore) SetPlanAccountsGated(ctx context.Context, planID string, accountIDs []string, gate PlanWriteGate) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer rollbackTx(ctx, tx, "SetPlanAccounts")
 
-	if guardErr := requireManagedAccountsTx(ctx, tx, planID, accountIDs); guardErr != nil {
+	managed, err := lockPlanManagedTx(ctx, tx, planID)
+	if err != nil {
+		return err
+	}
+	if gate != nil {
+		locked, lockErr := s.LockPurchasePlanTx(ctx, tx, planID)
+		if lockErr != nil {
+			return lockErr
+		}
+		if locked == nil {
+			return fmt.Errorf("%w: plan %s", ErrNotFound, planID)
+		}
+		if gateErr := s.runPlanGateTx(ctx, tx, locked, gate); gateErr != nil {
+			return gateErr
+		}
+	}
+	if guardErr := requireManagedAccountsTx(ctx, tx, planID, accountIDs, managed); guardErr != nil {
 		return guardErr
 	}
 	if setErr := s.setPlanAccountsTx(ctx, tx, planID, accountIDs); setErr != nil {

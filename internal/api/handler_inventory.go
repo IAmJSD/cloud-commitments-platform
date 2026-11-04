@@ -249,7 +249,7 @@ func (h *Handler) fetchCoverageOnDemandRecs(ctx context.Context, session *Sessio
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	recs, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), buildCoverageRecFilter(params))
+	recs, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session, scope), buildCoverageRecFilter(params))
 	if err != nil {
 		// Non-fatal: recommendations are best-effort for coverage display.
 		// An empty rec list is treated as "no uncovered gap": coverage

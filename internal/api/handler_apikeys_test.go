@@ -939,6 +939,9 @@ func TestGetRecommendations_UserAPIKey(t *testing.T) {
 	// Account scoping resolves against the key's owning user.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-123").
 		Return([]string(nil), nil)
+	// The unrestricted read probes whether it may kick a collection.
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-abc", "user-123", "view", "recommendations", mock.Anything).
+		Return(true, nil)
 
 	mockScheduler := new(MockScheduler)
 	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })

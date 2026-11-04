@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -195,7 +197,7 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	plan := req.toPurchasePlan()
 
 	// Validate the plan
-	if err := h.validateAndGatePlan(ctx, httpReq, session, nil, plan); err != nil {
+	if err := h.validateAndGatePlan(ctx, httpReq, session, nil, plan, req.TargetAccounts); err != nil {
 		return nil, err
 	}
 
@@ -328,15 +330,67 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	if err := h.requirePlanArmGrant(ctx, httpReq, session, existingPlan, plan); err != nil {
+	if err := h.updatePlanGated(ctx, httpReq, session, existingPlan, plan, "updatePlan"); err != nil {
 		return nil, err
 	}
 
-	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
-		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to update plan", "updatePlan: UpdatePurchasePlan failed")
-	}
-
 	return plan, nil
+}
+
+// updatePlanGated writes plan with the arming gate decided against the plan's
+// accounts as the plan row lock shows them. The grant lookups (auth service,
+// store) run first, outside any transaction, so a locked transaction never waits
+// on a second pool connection; the gate under the lock only confirms the
+// accounts it was decided for are still the plan's (setPlanAccounts takes the
+// same lock). before is the snapshot plan was built from; if the row moved on,
+// the write fails its optimistic check instead.
+func (h *Handler) updatePlanGated(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, session *Session, before, plan *config.PurchasePlan, op string) error {
+	if !planArmEscalates(before, plan) {
+		return h.mapPlanUpdateError(h.config.UpdatePurchasePlan(ctx, plan), op)
+	}
+	for attempt := 0; attempt < planGateAttempts; attempt++ {
+		accountIDs, err := h.planArmAccountIDs(ctx, plan, nil)
+		if err != nil {
+			return err
+		}
+		if grantErr := h.requirePlanArmGrantFor(ctx, httpReq, session, before, plan, accountIDs); grantErr != nil {
+			return grantErr
+		}
+		err = h.config.UpdatePurchasePlanGated(ctx, plan, func(_ *config.PurchasePlan, lockedIDs []string) error {
+			if !sameIDSet(lockedIDs, accountIDs) {
+				return errPlanMovedUnderGate
+			}
+			return nil
+		})
+		if !errors.Is(err, errPlanMovedUnderGate) {
+			return h.mapPlanUpdateError(err, op)
+		}
+	}
+	return errPlanGateContended
+}
+
+func (h *Handler) mapPlanUpdateError(err error, op string) error {
+	if err == nil {
+		return nil
+	}
+	if ce, ok := IsClientError(err); ok {
+		return ce
+	}
+	return mapCreatePlanStorageError(err, "plan not found", "failed to update plan", "%s: UpdatePurchasePlan failed", op)
+}
+
+// sameIDSet reports whether a and b hold the same ids, ignoring order, case and
+// duplicates.
+func sameIDSet(a, b []string) bool {
+	norm := func(ids []string) []string {
+		out := make([]string, len(ids))
+		for i, id := range ids {
+			out[i] = strings.ToLower(id)
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	return slices.Equal(norm(a), norm(b))
 }
 
 func (h *Handler) loadPlanForUpdate(ctx context.Context, planID string, expectedUpdatedAt *string) (*config.PurchasePlan, error) {
@@ -877,12 +931,12 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if err := h.validateAndGatePlan(ctx, httpReq, session, &before, plan); err != nil {
-		return nil, err
+	if err := plan.Validate(); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 
-	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {
-		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to update plan", "patchPlan: UpdatePurchasePlan failed")
+	if err := h.updatePlanGated(ctx, httpReq, session, &before, plan, "patchPlan"); err != nil {
+		return nil, err
 	}
 
 	return plan, nil

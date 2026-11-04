@@ -32,20 +32,20 @@ func (h *Handler) getRecommendationsPage(ctx context.Context, scope auth.Account
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.getRecommendationsPageFromSQL(ctx, scope, rows, page)
+	resp, err := h.getRecommendationsPageFromSQL(ctx, rows, page)
 	if !errors.Is(err, scheduler.ErrRecommendationsPageNeedsScan) {
 		return resp, err
 	}
 	logging.Warnf("paginated recommendations: %v; serving the page from the scan", err)
-	return h.getRecommendationsPageByScan(ctx, scope, filter, rows.keep, page)
+	return h.getRecommendationsPageByScan(ctx, filter, rows.keep, page)
 }
 
 // getRecommendationsPageFromSQL reads the page and the full-set summary from
 // the scheduler's SQL page read. The rows are checked against the handler's
 // own filters and the page order once more; a disagreement returns
 // scheduler.ErrRecommendationsPageNeedsScan rather than a wrong page.
-func (h *Handler) getRecommendationsPageFromSQL(ctx context.Context, scope auth.AccountScope, rows recommendationsRowScope, page recommendationsPage) (*RecommendationsResponse, error) {
-	pg, err := h.scheduler.PageRecommendations(recommendationsReadContext(ctx, scope), rows.sql, page.afterID, page.limit+1)
+func (h *Handler) getRecommendationsPageFromSQL(ctx context.Context, rows recommendationsRowScope, page recommendationsPage) (*RecommendationsResponse, error) {
+	pg, err := h.scheduler.PageRecommendations(ctx, rows.sql, page.afterID, page.limit+1)
 	if err != nil {
 		if errors.Is(err, scheduler.ErrRecommendationsPageNeedsScan) {
 			return nil, err
@@ -68,9 +68,9 @@ func (h *Handler) getRecommendationsPageFromSQL(ctx context.Context, scope auth.
 // the survivors to a collector that keeps only the requested page while
 // totaling every row for the summary. Each request reads the whole filtered
 // set; only the memory held stays bounded.
-func (h *Handler) getRecommendationsPageByScan(ctx context.Context, scope auth.AccountScope, filter config.RecommendationFilter, keep func([]config.RecommendationRecord) []config.RecommendationRecord, page recommendationsPage) (*RecommendationsResponse, error) {
+func (h *Handler) getRecommendationsPageByScan(ctx context.Context, filter config.RecommendationFilter, keep func([]config.RecommendationRecord) []config.RecommendationRecord, page recommendationsPage) (*RecommendationsResponse, error) {
 	collector := newRecommendationsPageCollector(page)
-	err := h.scheduler.ScanRecommendations(recommendationsReadContext(ctx, scope), filter, recommendationsScanChunkSize,
+	err := h.scheduler.ScanRecommendations(ctx, filter, recommendationsScanChunkSize,
 		func(chunk []config.RecommendationRecord) error {
 			return collector.add(keep(chunk))
 		})

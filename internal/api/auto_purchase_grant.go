@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -55,7 +57,29 @@ func planArmEscalates(before, after *config.PurchasePlan) bool {
 	if !planArmed(before) {
 		return true
 	}
-	return capCents(after.MaxStepCommitment) > capCents(before.MaxStepCommitment)
+	if capCents(after.MaxStepCommitment) > capCents(before.MaxStepCommitment) {
+		return true
+	}
+	// New providers or services widen what the armed plan buys, so the grant's
+	// provider and service constraints must be checked again.
+	// A plan whose provider cannot be derived fails closed as an escalation;
+	// requirePlanArmGrant then refuses it.
+	afterProviders, errAfter := config.DerivePlanProviders(after)
+	beforeProviders, errBefore := config.DerivePlanProviders(before)
+	if errAfter != nil || errBefore != nil {
+		return true
+	}
+	return !subsetOf(afterProviders, beforeProviders) ||
+		!subsetOf(config.DerivePlanServices(after), config.DerivePlanServices(before))
+}
+
+func subsetOf(sub, super []string) bool {
+	for _, v := range sub {
+		if !slices.Contains(super, v) {
+			return false
+		}
+	}
+	return true
 }
 
 // credentialKind labels the credential behind a session for logs and stamps.
@@ -70,7 +94,8 @@ func credentialKind(ctx context.Context, session *Session) string {
 }
 
 // requireAutoPurchaseGrant refuses the admin API key and otherwise requires
-// execute:purchases, evaluated against the credential presented.
+// execute:purchases, evaluated against the credential presented. It checks the
+// verb only; callers that know the target accounts use requireAutoPurchaseGrantFor.
 func (h *Handler) requireAutoPurchaseGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session) error {
 	if err := refuseAutoPurchaseCredential(session); err != nil {
 		return err
@@ -86,6 +111,49 @@ func refuseAutoPurchaseCredential(session *Session) error {
 		return NewClientError(403, autoPurchaseGrantDenied)
 	}
 	return nil
+}
+
+// requireAutoPurchaseGrantFor is requireAutoPurchaseGrant plus the grant's own
+// account and provider constraints, checked against the accounts and providers
+// the arming write targets. Regions are never sent: a plan's region filters
+// are optional, so a regions-constrained grant cannot be shown to cover it and
+// fails closed under StrictScope. An empty accountIDs is a request with no known
+// account, which only an unconstrained grant covers.
+func (h *Handler) requireAutoPurchaseGrantFor(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, accountIDs, providers, services []string) error {
+	if err := h.requireAutoPurchaseGrant(ctx, req, session); err != nil {
+		return err
+	}
+	return h.requirePermissionConstraints(ctx, session, auth.ActionExecute, auth.ResourcePurchases,
+		[]auth.PermissionConstraints{{AccountIDs: accountIDs, Providers: providers, Services: services, StrictScope: true}})
+}
+
+// requireAutoPurchaseGrantForPlan is requireAutoPurchaseGrantFor for the
+// providers and services the plan targets. A plan whose providers cannot be
+// derived fails closed: an empty provider set would read as no restriction.
+func (h *Handler) requireAutoPurchaseGrantForPlan(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, accountIDs []string, plan *config.PurchasePlan) error {
+	providers, err := config.DerivePlanProviders(plan)
+	if err != nil {
+		logging.Errorf("requireAutoPurchaseGrantForPlan: %v", err)
+		return NewClientError(500, "failed to check the arming grant")
+	}
+	return h.requireAutoPurchaseGrantFor(ctx, req, session, accountIDs, providers, config.DerivePlanServices(plan))
+}
+
+// planArmAccountIDs returns the accounts the plan targets: the request's own
+// list on create (the plan has no id yet), the stored association otherwise.
+func (h *Handler) planArmAccountIDs(ctx context.Context, plan *config.PurchasePlan, targets []string) ([]string, error) {
+	if len(targets) > 0 {
+		return targets, nil
+	}
+	accounts, err := h.config.GetPlanAccounts(ctx, plan.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get plan accounts: %w", err)
+	}
+	ids := make([]string, 0, len(accounts))
+	for i := range accounts {
+		ids = append(ids, accounts[i].ID)
+	}
+	return ids, nil
 }
 
 // armingGrants holds the outcome (nil = granted) of the two requirePermission
@@ -113,23 +181,38 @@ type armingGrants struct {
 // effective permissions just as the in-transaction checks did.
 func (h *Handler) resolveArmingGrants(ctx context.Context, req *events.LambdaFunctionURLRequest) armingGrants {
 	return armingGrants{
-		purchases:  h.resolveGrant(ctx, req, auth.ResourcePurchases),
-		riExchange: h.resolveGrant(ctx, req, auth.ResourceRIExchange),
+		purchases:  h.resolveGrant(ctx, req, auth.ResourcePurchases, autoPurchaseSwitchScopeMsg),
+		riExchange: h.resolveGrant(ctx, req, auth.ResourceRIExchange, riExchangeAutoModeScopeMsg),
 	}
 }
 
-// resolveGrant returns the requirePermission outcome for execute on resource.
-func (h *Handler) resolveGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, resource string) error {
-	_, err := h.requirePermission(ctx, req, auth.ActionExecute, resource)
-	return err
+// resolveGrant returns the outcome of an unconstrained execute grant on
+// resource (requireGlobalPermission): both gated writes arm unattended spend
+// across every account. msg is the 403 text for a restricted scope.
+func (h *Handler) resolveGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, resource, msg string) error {
+	return h.requireGlobalPermission(ctx, req, auth.ActionExecute, resource, msg)
 }
 
-// requirePlanArmGrant gates a plan write. before is nil on create.
-func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan) error {
+const riExchangeAutoModeScopeMsg = "permission denied: enabling RI exchange auto mode requires unrestricted account access"
+const autoPurchaseSwitchScopeMsg = "permission denied: arming a global switch requires unrestricted account access"
+
+// requirePlanArmGrant gates a plan write. before is nil on create. targets is
+// the request's target_accounts on create and nil when the plan already exists.
+func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan, targets []string) error {
 	if !planArmEscalates(before, after) {
 		return nil
 	}
-	if err := h.requireAutoPurchaseGrant(ctx, req, session); err != nil {
+	accountIDs, err := h.planArmAccountIDs(ctx, after, targets)
+	if err != nil {
+		return err
+	}
+	return h.requirePlanArmGrantFor(ctx, req, session, before, after, accountIDs)
+}
+
+// requirePlanArmGrantFor is requirePlanArmGrant for an escalating write whose
+// target accounts are already resolved.
+func (h *Handler) requirePlanArmGrantFor(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan, accountIDs []string) error {
+	if err := h.requireAutoPurchaseGrantForPlan(ctx, req, session, accountIDs, after); err != nil {
 		return err
 	}
 	var oldCap *float64
@@ -143,11 +226,11 @@ func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFun
 
 // validateAndGatePlan validates the plan (400) and then applies the arming
 // gate (403), in that order so a malformed write never reveals grant state.
-func (h *Handler) validateAndGatePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan) error {
+func (h *Handler) validateAndGatePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan, targets []string) error {
 	if err := after.Validate(); err != nil {
 		return NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
-	return h.requirePlanArmGrant(ctx, req, session, before, after)
+	return h.requirePlanArmGrant(ctx, req, session, before, after, targets)
 }
 
 func formatCap(v *float64) string {
@@ -193,3 +276,29 @@ func logAutoPurchaseSwitchChange(ctx context.Context, session *Session, before b
 	}
 	logging.Infof("auto-purchase kill switch changed: actor=%s via=%s %t -> %t", session.UserID, credentialKind(ctx, session), before, after.AutoPurchaseEnabled)
 }
+
+// requireRetargetOfArmedPlan gates PUT /api/plans/{id}/accounts: moving an
+// armed plan to other accounts changes where it buys without an approver, so
+// the caller needs the arming grant for the new account set. Unarmed plans
+// need only the ordinary update:plans check. It runs as the gate of
+// SetPlanAccountsGated, so the plan and its armed state are read under the
+// plan's row lock.
+func (h *Handler) requireRetargetOfArmedPlan(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, planID string, accountIDs []string) (*config.PurchasePlan, error) {
+	plan, err := h.getPlanForAccountProviderValidation(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	if !planArmed(plan) {
+		return plan, nil
+	}
+	return plan, h.requireAutoPurchaseGrantForPlan(ctx, req, session, accountIDs, plan)
+}
+
+// errPlanMovedUnderGate means the plan changed between the grant check and the
+// plan row lock, so the check no longer describes what would be written.
+var errPlanMovedUnderGate = errors.New("plan changed under the arming gate")
+
+// planGateAttempts bounds the re-checks after errPlanMovedUnderGate.
+const planGateAttempts = 3
+
+var errPlanGateContended = NewClientError(409, "plan changed; refresh the plan and try again")

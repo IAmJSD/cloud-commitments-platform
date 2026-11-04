@@ -203,16 +203,36 @@ func requireSwitchGrants(ctx context.Context, session *Session, purchasesGrant e
 	return requireLadderExecutionSwitchGrant(ctx, session, purchasesGrant, ladderBefore, cfg)
 }
 
+const globalConfigScopeMsg = "permission denied: global configuration requires unrestricted account access"
+
 func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session) error {
+	return h.requireGlobalScope(ctx, session, auth.ActionUpdate, auth.ResourceConfig, globalConfigScopeMsg)
+}
+
+// requireGlobalScope gates a deployment-wide action for a session that already
+// holds action:resource (callers keep their own validation order by calling
+// requirePermission first). It needs an unrestricted account scope and a grant
+// with no constraints on any dimension, checked on the key and the owner for
+// user API keys. msg is the 403 text for a restricted account scope.
+func (h *Handler) requireGlobalScope(ctx context.Context, session *Session, action, resource, msg string) error {
 	scope, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return err
 	}
 	if !scope.AllowsAll() {
-		return NewClientError(403, "permission denied: global configuration requires unrestricted account access")
+		return NewClientError(403, msg)
 	}
-	return h.requirePermissionConstraints(ctx, session, auth.ActionUpdate, auth.ResourceConfig,
-		[]auth.PermissionConstraints{{StrictScope: true}})
+	return h.requirePermissionConstraints(ctx, session, action, resource,
+		[]auth.PermissionConstraints{auth.GlobalConstraints()})
+}
+
+// requireGlobalPermission is requirePermission followed by requireGlobalScope.
+func (h *Handler) requireGlobalPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource, msg string) error {
+	session, err := h.requirePermission(ctx, req, action, resource)
+	if err != nil {
+		return err
+	}
+	return h.requireGlobalScope(ctx, session, action, resource, msg)
 }
 
 // checkCommitmentOptionCombo rejects saves that carry a (term, payment)

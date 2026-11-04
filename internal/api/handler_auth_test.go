@@ -1490,6 +1490,7 @@ func TestHandler_getCurrentUserPermissions_RegularUser(t *testing.T) {
 	}
 	mockAuth.On("GetUserPermissionsAPI", ctx, "user-1").Return(perms, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-1").Return([]string{}, nil).Once()
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(true, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
@@ -1517,6 +1518,7 @@ func TestHandler_getCurrentUserPermissions_Admin(t *testing.T) {
 	}
 	mockAuth.On("GetUserPermissionsAPI", ctx, "admin-1").Return(perms, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "admin-1").Return([]string{}, nil).Once()
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "admin-1", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(true, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-tok"}}
@@ -1610,6 +1612,7 @@ func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
 	}
 	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", ctx, "key-42", "user-42").Return(perms, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-42").Return([]string{}, nil).Once()
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-42", "user-42", auth.ActionView, auth.ResourceRecommendations, mock.Anything).Return(true, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}

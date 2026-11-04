@@ -107,11 +107,12 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
+	readCtx := h.recommendationsReadContext(ctx, session, scope)
 	if page.enabled {
-		return h.getRecommendationsPage(ctx, scope, filter, page)
+		return h.getRecommendationsPage(readCtx, scope, filter, page)
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), filter)
+	recommendations, err := h.scheduler.ListRecommendations(readCtx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}

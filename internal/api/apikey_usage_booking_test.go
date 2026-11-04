@@ -72,6 +72,8 @@ func TestHandleRequest_SessionAuthBooksNoAPIKeyUsage(t *testing.T) {
 		Return([]auth.APIPermission{}, nil).Once()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "session-user").
 		Return([]string{}, nil).Once()
+	mockAuth.On("HasPermissionForConstraintsAPI", mock.Anything, "session-user", auth.ActionView, auth.ResourceRecommendations, mock.Anything).
+		Return(false, nil).Once()
 
 	h := &Handler{auth: mockAuth}
 	resp, err := h.HandleRequest(ctx,

@@ -1453,23 +1453,55 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		return nil, err
 	}
 
-	// Provider-match validation (issue #209). Extracted to keep
-	// setPlanAccounts under the gocyclo budget (10).
+	// Provider-match validation (issue #209), before the arming gate so a
+	// malformed request is a 400 whatever the plan's armed state. Extracted to
+	// keep setPlanAccounts under the gocyclo budget (10).
 	if err := h.validatePlanAccountProviders(ctx, id, body.AccountIDs); err != nil {
 		return nil, err
 	}
 
-	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
-		if errors.Is(err, config.ErrNotFound) {
-			return nil, NewClientError(404, err.Error())
-		}
-		if errors.Is(err, config.ErrEditorReconciliationRequired) {
-			return nil, editorReconciliationError()
-		}
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
+	return nil, h.storePlanAccounts(ctx, httpReq, session, id, body.AccountIDs)
+}
 
-	return nil, nil
+// storePlanAccounts writes the plan's accounts. The retarget grant is decided
+// first, outside any transaction, against the plan as read then; the gate under
+// the plan's row lock only confirms the plan has not changed since (an arm via
+// updatePlan / patchPlan takes the same lock), and the decision is redone if it
+// has.
+func (h *Handler) storePlanAccounts(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, session *Session, id string, accountIDs []string) error {
+	for attempt := 0; attempt < planGateAttempts; attempt++ {
+		seen, err := h.requireRetargetOfArmedPlan(ctx, httpReq, session, id, accountIDs)
+		if err != nil {
+			return err
+		}
+		err = h.config.SetPlanAccountsGated(ctx, id, accountIDs, func(locked *config.PurchasePlan, _ []string) error {
+			if !locked.UpdatedAt.Equal(seen.UpdatedAt) {
+				return errPlanMovedUnderGate
+			}
+			return nil
+		})
+		if errors.Is(err, errPlanMovedUnderGate) {
+			continue
+		}
+		return mapSetPlanAccountsError(err)
+	}
+	return errPlanGateContended
+}
+
+func mapSetPlanAccountsError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if ce, ok := IsClientError(err); ok {
+		return ce
+	}
+	if errors.Is(err, config.ErrNotFound) {
+		return NewClientError(404, err.Error())
+	}
+	if errors.Is(err, config.ErrEditorReconciliationRequired) {
+		return editorReconciliationError()
+	}
+	return fmt.Errorf("accounts: %w", err)
 }
 
 // validatePlanAccountIDs rejects a missing/empty account_ids payload and

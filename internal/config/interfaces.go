@@ -10,6 +10,15 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
+// PlanWriteGate decides whether a plan write may proceed. The store runs it with
+// the plan row locked, handing it the plan as stored and its account ids
+// (sorted), both read on the write's own transaction. It is pure on purpose: it
+// gets no context and no store, so it cannot take a second pool connection
+// while the transaction holds one. Whatever needs the database or the auth
+// service is resolved before the write and compared here against what the lock
+// shows. A non-nil error aborts the write and is returned unchanged.
+type PlanWriteGate func(locked *PurchasePlan, accountIDs []string) error
+
 // StoreInterface defines the methods required for configuration storage.
 type StoreInterface interface {
 	// Global configuration
@@ -131,6 +140,9 @@ type StoreInterface interface {
 	// UpdatePurchasePlanTx checks UpdatedAt and replaces it with the returned version.
 	// The caller must discard the transaction-local plan if the transaction rolls back.
 	UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error
+	// UpdatePurchasePlanGated is UpdatePurchasePlan with gate run under the
+	// plan's row lock, before the write (nil gate: plain update).
+	UpdatePurchasePlanGated(ctx context.Context, plan *PurchasePlan, gate PlanWriteGate) error
 	DeletePurchasePlan(ctx context.Context, planID string) error
 	ListPurchasePlans(ctx context.Context, filter PurchasePlanFilter) ([]PurchasePlan, error)
 
@@ -666,6 +678,9 @@ type StoreInterface interface {
 
 	// Plan ↔ account association
 	SetPlanAccounts(ctx context.Context, planID string, accountIDs []string) error
+	// SetPlanAccountsGated is SetPlanAccounts with gate run under the plan's
+	// row lock, before the write (nil gate: plain set).
+	SetPlanAccountsGated(ctx context.Context, planID string, accountIDs []string, gate PlanWriteGate) error
 	GetPlanAccounts(ctx context.Context, planID string) ([]CloudAccount, error)
 
 	// Recommendations cache (ADR: store recommendations in Postgres so the
