@@ -44,7 +44,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 
 # Download dependencies
-RUN go mod download
+RUN for i in 1 2 3; do go mod download && exit 0; echo "go mod download failed (attempt $i/3)" >&2; [ "$i" -lt 3 ] && sleep 5; done; exit 1
 
 # Build golang-migrate from source on this stage's pinned Go toolchain, the same
 # way `make install-tools` does. Upstream's prebuilt release tarballs carry
