@@ -18,6 +18,7 @@ import (
 func TestService_GetUser_MissingUserIsErrUserNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 	mockStore.On("GetUserByID", ctx, "missing").Return(nil, pgx.ErrNoRows).Once()
 
@@ -35,6 +36,7 @@ func TestService_GetGroupAPI_MissingGroupIsErrGroupNotFound(t *testing.T) {
 
 	t.Run("store returns ErrNoRows", func(t *testing.T) {
 		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		service := createTestService(mockStore, new(MockEmailSender))
 		mockStore.On("GetGroup", ctx, "missing").Return(nil, pgx.ErrNoRows).Once()
 
@@ -46,6 +48,7 @@ func TestService_GetGroupAPI_MissingGroupIsErrGroupNotFound(t *testing.T) {
 
 	t.Run("store returns nil group", func(t *testing.T) {
 		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		service := createTestService(mockStore, new(MockEmailSender))
 		mockStore.On("GetGroup", ctx, "missing").Return(nil, nil).Once()
 
@@ -65,6 +68,7 @@ func TestService_APIKeyAccess_NotFoundAndNotOwnedSentinels(t *testing.T) {
 	for name, act := range actions {
 		t.Run(name+" missing key", func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(nil, pgx.ErrNoRows).Once()
 
 			err := act(&Service{store: mockStore})
@@ -74,6 +78,7 @@ func TestService_APIKeyAccess_NotFoundAndNotOwnedSentinels(t *testing.T) {
 
 		t.Run(name+" nil key", func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			mockStore.On("GetAPIKeyByID", ctx, "key-1").Return(nil, nil).Once()
 
 			err := act(&Service{store: mockStore})
@@ -83,6 +88,7 @@ func TestService_APIKeyAccess_NotFoundAndNotOwnedSentinels(t *testing.T) {
 
 		t.Run(name+" another user's key", func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			mockStore.On("GetAPIKeyByID", ctx, "key-1").
 				Return(&UserAPIKey{ID: "key-1", UserID: "user-456", IsActive: true}, nil)
 			mockStore.On("GetUserByID", ctx, "user-123").Return(&User{ID: "user-123"}, nil)

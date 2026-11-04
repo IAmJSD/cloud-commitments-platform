@@ -44,6 +44,7 @@ func TestGroupWrite_RejectsExplicitZeroMaxAmount(t *testing.T) {
 
 		t.Run("update "+raw, func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			svc := newCeilingService(t, mockStore)
 			stubTargetGroup(ctx, mockStore, &Group{ID: ceilingTargetID, Name: "Team"})
 			stubActorPermissionsMaybe(ctx, mockStore, adminOnly)
@@ -86,6 +87,7 @@ func TestGroupWrite_AbsentNullAndPositiveMaxAmountAreNotRejected(t *testing.T) {
 	for constraints, want := range cases {
 		t.Run(constraints, func(t *testing.T) {
 			mockStore := new(MockStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			svc := newCeilingService(t, mockStore)
 			stubActorPermissions(ctx, mockStore, adminOnly)
 			var saved *Group

@@ -240,3 +240,101 @@ describe('loadAutomationSettings: number fields are escaped into value attribute
     expect(value('ri-exchange-lookback')).toBe('30');
   });
 });
+
+// Issue #1689: the caps showed a bare 0 with no help text, which reads as
+// "no limit" while 0 refuses approved exchanges and skips automated ones.
+describe('loadAutomationSettings: every field explains itself (issue #1689)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const fieldIDs = [
+    'ri-exchange-enabled',
+    'ri-exchange-mode',
+    'ri-exchange-threshold',
+    'ri-exchange-max-per-exchange',
+    'ri-exchange-max-daily',
+    'ri-exchange-lookback',
+  ];
+
+  const hintFor = (id: string): string => {
+    const describedBy = document.getElementById(id)?.getAttribute('aria-describedby') ?? '';
+    return describedBy ? document.getElementById(describedBy)?.textContent ?? '' : '';
+  };
+
+  const loadWithZeroCaps = async (): Promise<void> => {
+    setupContainer();
+    (api.getRIExchangeConfig as jest.Mock).mockResolvedValueOnce({
+      auto_exchange_enabled: false,
+      mode: 'manual',
+      utilization_threshold: 95,
+      max_payment_per_exchange_usd: 0,
+      max_payment_daily_usd: 0,
+      lookback_days: 30,
+    });
+    await loadAutomationSettings();
+  };
+
+  test.each(fieldIDs)('%s has a visible hint linked by aria-describedby', async (id) => {
+    await loadWithZeroCaps();
+    expect(hintFor(id).trim().length).toBeGreaterThan(20);
+  });
+
+  // The hints are built by concatenation; a dropped space ran two sentences
+  // together ("exchange.A recommendation").
+  test.each(fieldIDs)('%s hint separates its sentences with a space', async (id) => {
+    await loadWithZeroCaps();
+    expect(hintFor(id)).not.toMatch(/[.!?][A-Z]/);
+    expect(hintFor(id)).not.toMatch(/\s{2,}/);
+  });
+
+  test('the Fully Automated warning names the 4-eyes override and keeps the cap guidance', async () => {
+    setupContainer();
+    (api.getRIExchangeConfig as jest.Mock).mockResolvedValueOnce({
+      auto_exchange_enabled: true, mode: 'auto', utilization_threshold: 95,
+      max_payment_per_exchange_usd: 100, max_payment_daily_usd: 500, lookback_days: 30,
+    });
+    await loadAutomationSettings();
+    const banner = document.querySelector('#ri-exchange-warning-slot .warning-message')?.textContent ?? '';
+    expect(banner).toContain('without manual approval, unless Require different approver (4-eyes mode) is on.');
+    expect(banner).toContain('Ensure spending caps are configured properly.');
+  });
+
+  test('the Enable hint says the mode decides whether exchanges are proposed or run', async () => {
+    await loadWithZeroCaps();
+    expect(hintFor('ri-exchange-enabled')).toMatch(/propose or run exchanges/);
+  });
+
+  test.each(['ri-exchange-max-per-exchange', 'ri-exchange-max-daily'])(
+    '%s says what 0 means and that dialog exchanges use their own limit',
+    async (id) => {
+      await loadWithZeroCaps();
+      const hint = hintFor(id);
+      expect(hint).toMatch(/\b0\b/);
+      expect(hint).toMatch(/refused/);
+      expect(hint).toMatch(/Exchange dialog/);
+    },
+  );
+
+  test('the daily cap names its window', async () => {
+    await loadWithZeroCaps();
+    expect(hintFor('ri-exchange-max-daily')).toContain('UTC day');
+  });
+
+  // fourEyesExchangeMode runs every mode as manual while 4-eyes is on.
+  test('the Mode hint says 4-eyes mode overrides Fully Automated', async () => {
+    await loadWithZeroCaps();
+    const hint = hintFor('ri-exchange-mode');
+    expect(hint).toContain('4-eyes');
+    expect(hint).toMatch(/every exchange waits for approval in either mode/);
+  });
+
+  // The per-exchange cap is checked before the mode branch (pkg/exchange
+  // auto.go), so it limits proposals in Manual Approval mode too.
+  test('the per-exchange hint says a higher payment is not proposed in either mode', async () => {
+    await loadWithZeroCaps();
+    const hint = hintFor('ri-exchange-max-per-exchange');
+    expect(hint).toMatch(/not proposed in either mode/);
+    expect(hint).toMatch(/At 0, no exchange with a payment due is proposed/);
+  });
+});

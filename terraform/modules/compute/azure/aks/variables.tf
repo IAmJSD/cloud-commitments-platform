@@ -277,9 +277,9 @@ variable "analytics_collect_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Schedule the fire_scheduled_purchases sweep, which fires delayed auto-approved purchases. Opt-in: default false."
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {
@@ -367,7 +367,7 @@ variable "task_timeout" {
   default     = 900
 
   validation {
-    condition     = var.task_timeout >= 60 && floor(var.task_timeout) == var.task_timeout
-    error_message = "task_timeout must be a whole number of seconds, at least 60."
+    condition     = var.task_timeout >= 300 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 300 (one purchase can run 270s; a shorter task deadline defers every delayed purchase)."
   }
 }

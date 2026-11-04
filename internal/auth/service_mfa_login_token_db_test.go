@@ -125,6 +125,45 @@ func TestIntegration_MFALoginToken(t *testing.T) {
 		assert.Equal(t, 1, b.sessionCount(), "no session beyond the fixture's")
 	})
 
+	// The token's user is found by the token, not by the submitted email, so
+	// a mismatched email gets the same answer whether it names no account, an
+	// inactive one or another active one. So does the token's own user once
+	// it is inactive or locked.
+	t.Run("every-mismatch-same-answer", func(t *testing.T) {
+		owner := newCredentialRaceFixture(t, store, "mfa-token-mismatch-owner@example.com")
+		owner.enrollMFA()
+		other := newCredentialRaceFixture(t, store, "mfa-token-mismatch-other@example.com")
+		inactive := newCredentialRaceFixture(t, store, "mfa-token-mismatch-inactive@example.com")
+		_, err := store.db.Exec(t.Context(), `UPDATE users SET active = false WHERE id = $1`, inactive.user.ID)
+		require.NoError(t, err)
+
+		refusal := func(email string) error {
+			t.Helper()
+			_, loginErr := owner.tokenLogin(owner.svc, email, owner.mfaChallenge(), owner.currentTOTP())
+			require.Error(t, loginErr)
+			return loginErr
+		}
+		answers := map[string]error{
+			"non-existent email":  refusal("mfa-token-mismatch-nobody@example.com"),
+			"inactive user email": refusal(inactive.user.Email),
+			"other user email":    refusal(other.user.Email),
+		}
+
+		lockedToken, inactiveToken := owner.mfaChallenge(), owner.mfaChallenge()
+		_, err = store.db.Exec(t.Context(), `UPDATE users SET locked_until = NOW() + interval '1 hour' WHERE id = $1`, owner.user.ID)
+		require.NoError(t, err)
+		_, answers["token user locked"] = owner.tokenLogin(owner.svc, owner.user.Email, lockedToken, owner.currentTOTP())
+		_, err = store.db.Exec(t.Context(), `UPDATE users SET locked_until = NULL, active = false WHERE id = $1`, owner.user.ID)
+		require.NoError(t, err)
+		_, answers["token user inactive"] = owner.tokenLogin(owner.svc, owner.user.Email, inactiveToken, owner.currentTOTP())
+
+		for name, got := range answers {
+			assert.ErrorIs(t, got, ErrInvalidMFAToken, name)
+		}
+		assert.Zero(t, owner.stored().FailedLoginAttempts, "no code was checked")
+		assert.Equal(t, 1, owner.sessionCount(), "no session beyond the fixture's")
+	})
+
 	t.Run("too-many-attempts", func(t *testing.T) {
 		f := newCredentialRaceFixture(t, store, "mfa-token-attempts@example.com")
 		f.enrollMFA()

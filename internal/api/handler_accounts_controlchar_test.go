@@ -52,8 +52,10 @@ func TestCreateAccount_RejectsControlChars(t *testing.T) {
 		for _, field := range []string{"name", "external_id"} {
 			t.Run(field+"/"+label, func(t *testing.T) {
 				mockAuth := new(MockAuthService)
+				t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 				setupAdminAuth(ctx, mockAuth)
 				store := new(MockConfigStore)
+				t.Cleanup(func() { store.AssertExpectations(t) })
 				handler := &Handler{auth: mockAuth, config: store}
 
 				name, ext := "Acme", "acme-prod"
@@ -80,8 +82,10 @@ func TestUpdateAccount_RejectsControlChars(t *testing.T) {
 		for _, field := range []string{"name", "external_id"} {
 			t.Run(field+"/"+label, func(t *testing.T) {
 				mockAuth := new(MockAuthService)
+				t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 				setupAdminAuth(ctx, mockAuth)
 				store := new(MockConfigStore)
+				t.Cleanup(func() { store.AssertExpectations(t) })
 				handler := &Handler{auth: mockAuth, config: store}
 
 				name, ext := "Acme", "acme-prod"
@@ -108,6 +112,7 @@ func TestCreateAccount_AcceptsPrintableNames(t *testing.T) {
 	ctx := context.Background()
 	for _, name := range []string{"Acme Production", "Acme (EU) – Zürich #2", "日本 本番"} {
 		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		setupAdminAuth(ctx, mockAuth)
 		handler := &Handler{auth: mockAuth, config: new(MockConfigStore)}
 		result, err := handler.createAccount(ctx, adminRequest(accountBody(t, name, "acme-prod")))
@@ -125,6 +130,7 @@ func TestSubmitRegistration_RejectsControlChars(t *testing.T) {
 	submit := func(t *testing.T, name, ext string) error {
 		t.Helper()
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		h := &Handler{config: store}
 		b, err := json.Marshal(map[string]string{
 			"provider": "azure", "external_id": ext, "account_name": name, "contact_email": "ops@example.com",

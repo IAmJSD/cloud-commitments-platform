@@ -56,8 +56,8 @@ func TestPlanRequest_toPurchasePlan(t *testing.T) {
 			Enabled:        true,
 			Provider:       "aws",
 			Service:        "ec2",
-			Term:           1,
-			Payment:        "all-upfront",
+			Term:           ptr(1),
+			Payment:        ptr("all-upfront"),
 			TargetCoverage: ptr(90),
 		}
 

@@ -11,11 +11,12 @@
 // and the external ID are read off the same record, so a wrong selection
 // supplies both consistently.
 //
-// The grant lives in three independently maintained copies (two Terraform
-// modules and the shipped CloudFormation hub), which is why this guard
-// DISCOVERS them by walking the tree instead of opening a list of three paths.
-// A list of paths is the same defect one level up: a fourth copy added later is
-// invisible to a sweep that only opens the files someone remembered to name.
+// The grant lives in two independently maintained copies (the Lambda and
+// Fargate Terraform modules; the CloudFormation hub was retired in #1432),
+// which is why this guard DISCOVERS them by walking the tree instead of
+// opening a list of paths. A list of paths is the same defect one level up:
+// a third copy added later is invisible to a sweep that only opens the files
+// someone remembered to name.
 //
 // The walking and the trust/identity classification live in
 // cross_account_sts_discovery_test.go; this file holds what is asserted about
@@ -32,12 +33,11 @@ import (
 
 // knownGrantSites must all be found by the walk. Not the guard's input (the
 // walk is), but its floor: if a refactor moves or renames a file, the walk
-// silently inspects two sites instead of three and still reports "no
+// silently inspects one site instead of two and still reports "no
 // violations", which is how a sweep passes by looking at nothing.
 var knownGrantSites = []string{
 	filepath.Join("terraform", "modules", "compute", "aws", "lambda", "main.tf"),
 	filepath.Join("terraform", "modules", "compute", "aws", "fargate", "main.tf"),
-	filepath.Join("cloudformation", "stacks", "CUDly", "template.yaml"),
 }
 
 // accountConditionKey pins the grant to declared accounts; externalIDCondition
@@ -99,7 +99,7 @@ var (
 // green. This is a heuristic, not a parse. The honest alternative is an HCL
 // parser and a YAML parser for a check whose whole value is being cheap enough
 // to live in the module's own test package. It assumes Condition follows
-// Action, which is true at all three sites and is the conventional ordering.
+// Action, which is true at both sites and is the conventional ordering.
 const conditionProximityWindow = 800
 
 // identityGrantRegion returns the slice of code running from the file's first
@@ -121,7 +121,7 @@ func TestCrossAccountAssumeRoleIsPinnedToDeclaredAccounts(t *testing.T) {
 
 	for _, want := range knownGrantSites {
 		if _, ok := sites[want]; !ok {
-			t.Fatalf("%s grants no identity-policy sts:AssumeRole, but it is one of the three sites this guard exists to cover. Either the grant moved (point knownGrantSites at its new home) or it was deleted; a walk that no longer reaches it reports a clean result for a file it never opened. Found: %v", want, sortedKeys(sites))
+			t.Fatalf("%s grants no identity-policy sts:AssumeRole, but it is one of the sites this guard exists to cover. Either the grant moved (point knownGrantSites at its new home) or it was deleted; a walk that no longer reaches it reports a clean result for a file it never opened. Found: %v", want, sortedKeys(sites))
 		}
 	}
 
@@ -164,9 +164,8 @@ func assertGrantPinned(t *testing.T, path, code string) {
 // so a wildcard denies everything rather than allowing everything -- it fails
 // closed, which is not the direction this guard defends. Format is already
 // enforced where an operator can actually get it wrong: the variable
-// validation blocks in {lambda,fargate}/variables.tf and the AllowedPattern on
-// the CloudFormation parameter. Asserting it a third time here bought a
-// fragile regex protecting an unreachable bypass.
+// validation blocks in {lambda,fargate}/variables.tf. Asserting it again here
+// bought a fragile regex protecting an unreachable bypass.
 
 // TestAssumeRoleResourcePatternDoesNotRestrictTheAccount pins WHY the
 // condition above is load-bearing, by evaluating the Resource pattern the

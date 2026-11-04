@@ -428,6 +428,43 @@ func (m *MockConfigStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, p
 	return args.Error(0)
 }
 
+// runPlanGate gives gate the plan and account ids the mock holds for planID,
+// the way the real store reads them under the lock (ids only when withIDs).
+func (m *MockConfigStore) runPlanGate(ctx context.Context, planID string, fallback *config.PurchasePlan, withIDs bool, gate config.PlanWriteGate) error {
+	if gate == nil {
+		return nil
+	}
+	locked := fallback
+	if isExpected(&m.Mock, "GetPurchasePlan") {
+		if p, err := m.GetPurchasePlan(ctx, planID); err == nil && p != nil {
+			locked = p
+		}
+	}
+	var accounts []config.CloudAccount
+	if withIDs && (m.GetPlanAccountsFn != nil || isExpected(&m.Mock, "GetPlanAccounts")) {
+		var err error
+		if accounts, err = m.GetPlanAccounts(ctx, planID); err != nil {
+			return err
+		}
+	}
+	ids := make([]string, 0, len(accounts))
+	for i := range accounts {
+		ids = append(ids, accounts[i].ID)
+	}
+	sort.Strings(ids)
+	return gate(locked, ids)
+}
+
+// UpdatePurchasePlanGated runs gate, then delegates to UpdatePurchasePlan, the
+// order the real store uses under the plan lock.
+func (m *MockConfigStore) UpdatePurchasePlanGated(ctx context.Context, plan *config.PurchasePlan, gate config.PlanWriteGate) error {
+	m.record("UpdatePurchasePlanGated", ctx, plan)
+	if err := m.runPlanGate(ctx, plan.ID, plan, true, gate); err != nil {
+		return err
+	}
+	return m.UpdatePurchasePlan(ctx, plan)
+}
+
 // DeletePurchasePlan mocks the DeletePurchasePlan operation.
 func (m *MockConfigStore) DeletePurchasePlan(ctx context.Context, planID string) error {
 	m.record("DeletePurchasePlan", ctx, planID)
@@ -1029,6 +1066,21 @@ func (m *MockConfigStore) SettleMarketplaceListing(ctx context.Context, settleme
 	m.record("SettleMarketplaceListing", ctx, settlement)
 	args := m.Called(ctx, settlement)
 	return args.Bool(0), args.Error(1)
+}
+
+// GetMarketplaceListingProceedsTotals mocks the per-RI marketplace proceeds totals (issue #1494).
+func (m *MockConfigStore) GetMarketplaceListingProceedsTotals(ctx context.Context, purchaseIDs []string) ([]config.MarketplaceListingProceedsTotal, error) {
+	m.record("GetMarketplaceListingProceedsTotals", ctx, purchaseIDs)
+	args := m.Called(ctx, purchaseIDs)
+	var totals []config.MarketplaceListingProceedsTotal
+	if v := args.Get(0); v != nil {
+		t, ok := v.([]config.MarketplaceListingProceedsTotal)
+		if !ok {
+			m.reporter.wrongReturnType("GetMarketplaceListingProceedsTotals", "[]config.MarketplaceListingProceedsTotal", v)
+		}
+		totals = t
+	}
+	return totals, args.Error(1)
 }
 
 // ClaimRIExchangeIdempotencyKey mocks the atomic RI exchange submit claim
@@ -1770,6 +1822,15 @@ func (m *MockConfigStore) SetPlanAccounts(ctx context.Context, planID string, ac
 	return args.Error(0)
 }
 
+// SetPlanAccountsGated runs gate, then delegates to SetPlanAccounts.
+func (m *MockConfigStore) SetPlanAccountsGated(ctx context.Context, planID string, accountIDs []string, gate config.PlanWriteGate) error {
+	m.record("SetPlanAccountsGated", ctx, planID, accountIDs)
+	if err := m.runPlanGate(ctx, planID, &config.PurchasePlan{ID: planID}, false, gate); err != nil {
+		return err
+	}
+	return m.SetPlanAccounts(ctx, planID, accountIDs)
+}
+
 func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([]config.CloudAccount, error) {
 	m.record("GetPlanAccounts", ctx, planID)
 	if m.GetPlanAccountsFn != nil {
@@ -1815,6 +1876,28 @@ func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, partial *config.RecommendationsCollectionPartial) error {
+	m.record("UpsertRecommendationsWithPartial", ctx, collectedAt, recs, successfulCollects, partial)
+	if !isExpected(&m.Mock, "UpsertRecommendationsWithPartial") {
+		return nil
+	}
+	args := m.Called(ctx, collectedAt, recs, successfulCollects, partial)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) PruneStaleRecommendations(ctx context.Context, retentionDays int) (int64, error) {
+	m.record("PruneStaleRecommendations", ctx, retentionDays)
+	if !isExpected(&m.Mock, "PruneStaleRecommendations") {
+		return 0, nil
+	}
+	args := m.Called(ctx, retentionDays)
+	v, ok := args.Get(0).(int64)
+	if !ok {
+		m.reporter.wrongReturnType("PruneStaleRecommendations", "int64", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	m.record("ListStoredRecommendations", ctx, filter)
 	if !isExpected(&m.Mock, "ListStoredRecommendations") {
@@ -1844,6 +1927,37 @@ func (m *MockConfigStore) ListStoredRecommendationsChunk(ctx context.Context, fi
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) ListStoredRecommendationTriples(ctx context.Context, scope config.RecommendationListScope) ([]config.RecommendationTriple, error) {
+	m.record("ListStoredRecommendationTriples", ctx, scope)
+	if !isExpected(&m.Mock, "ListStoredRecommendationTriples") {
+		return nil, nil
+	}
+	args := m.Called(ctx, scope)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RecommendationTriple)
+	if !ok {
+		m.reporter.wrongReturnType("ListStoredRecommendationTriples", "[]config.RecommendationTriple", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
+// PageStoredRecommendations defaults to an empty cache: an empty page with a
+// zero summary.
+func (m *MockConfigStore) PageStoredRecommendations(ctx context.Context, q config.RecommendationPageQuery) (config.RecommendationPage, error) {
+	m.record("PageStoredRecommendations", ctx, q)
+	if !isExpected(&m.Mock, "PageStoredRecommendations") {
+		return config.RecommendationPage{}, nil
+	}
+	args := m.Called(ctx, q)
+	v, ok := args.Get(0).(config.RecommendationPage)
+	if !ok {
+		m.reporter.wrongReturnType("PageStoredRecommendations", "config.RecommendationPage", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
 	m.record("GetRecommendationsFreshness", ctx)
 	if !isExpected(&m.Mock, "GetRecommendationsFreshness") {
@@ -1866,15 +1980,6 @@ func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context,
 		return nil
 	}
 	args := m.Called(ctx, errMsg)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) SetRecommendationsCollectionPartial(ctx context.Context, partial *config.RecommendationsCollectionPartial) error {
-	m.record("SetRecommendationsCollectionPartial", ctx, partial)
-	if !isExpected(&m.Mock, "SetRecommendationsCollectionPartial") {
-		return nil
-	}
-	args := m.Called(ctx, partial)
 	return args.Error(0)
 }
 

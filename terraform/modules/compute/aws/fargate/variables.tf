@@ -196,9 +196,9 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "Schedule expression for recommendation collection"
+  description = "EventBridge schedule expression for recommendation collection. Default: daily at 02:00 UTC, the same time as GCP and Azure. A cron() schedule lets the API report next_collection_at; a rate() schedule leaves it null because its phase is unknown (#756)."
   type        = string
-  default     = "rate(1 day)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -226,9 +226,9 @@ variable "ladder_run_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Enable the scheduled fire_scheduled_purchases sweep. Default false until auto-approve (L9) is promoted to GA."
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {
@@ -312,9 +312,14 @@ variable "cleanup_schedule" {
 }
 
 variable "task_timeout" {
-  description = "Timeout in seconds for one-off scheduled tasks"
+  description = "Timeout in seconds for one-off scheduled tasks (TASK_TIMEOUT)"
   type        = number
   default     = 900
+
+  validation {
+    condition     = var.task_timeout >= 300 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 300 (one purchase can run 270s; a shorter task deadline defers every delayed purchase)."
+  }
 }
 
 variable "additional_env_vars" {

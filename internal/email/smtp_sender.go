@@ -472,13 +472,20 @@ func (s *SMTPSender) SendNewRecommendationsNotification(ctx context.Context, dat
 }
 
 // SendScheduledPurchaseNotification sends a notification about scheduled purchase.
+// The body embeds a live cancel token, so it goes to data.RecipientEmail (plus
+// data.CCEmails, honored for SES parity though the real caller sends none),
+// never the shared notify inbox. Returns ErrNoRecipient when RecipientEmail is
+// empty, matching the SES sender.
 func (s *SMTPSender) SendScheduledPurchaseNotification(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
 	subject := fmt.Sprintf("CUDly Purchase Scheduled: %s", data.PlanName)
 	body, err := RenderScheduledPurchaseEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render scheduled purchase email: %w", err)
 	}
-	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
 // SendPurchaseConfirmation sends a confirmation email after successful purchase.

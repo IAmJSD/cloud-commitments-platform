@@ -2116,7 +2116,9 @@ paths:
         '200':
           description: >
             Convertible RI list. Empty when the deployment's AWS account is
-            outside the session's allowed accounts.
+            outside the session's allowed accounts. Each entry in `instances`
+            carries `account_id`, the AWS account the RI belongs to; it is
+            omitted when that account could not be resolved.
           content:
             application/json:
               schema:
@@ -3222,7 +3224,8 @@ paths:
             which case resend password + mfa_code), `invalid_mfa_code`
             (wrong code),
             `invalid_mfa_token` (the token is unknown, expired, used, out of
-            attempts or not this account's; start again from the password),
+            attempts or not this account's, or the account can no longer
+            sign in; start again from the password),
             or `invalid credentials` for every other failure.
           content:
             application/json:
@@ -6713,6 +6716,7 @@ components:
       properties:
         enabled_providers:
           type: array
+          description: A write that carries this key must list at least one provider; an empty list or null returns 400. A GET on a fresh install can return an empty list.
           items:
             type: string
             enum: [aws, azure, gcp]
@@ -6852,6 +6856,9 @@ components:
         committed_monthly:
           type: number
           format: double
+          description: >-
+            Estimated monthly savings of the active commitments (the sum of
+            their estimated savings), not what the commitments cost.
         current_coverage:
           type: number
           format: double
@@ -7066,8 +7073,11 @@ components:
       nullable: true
       description: >
         Non-null when the most recent persisted collection kept rows from
-        at least one incomplete sweep. Cleared by the next collection whose
-        sweeps are all complete. Carries counts and reason categories only.
+        at least one incomplete sweep, or while a pricing hold carries
+        forward from an earlier collection. Cleared by the next collection
+        whose sweeps are all complete and that leaves no hold. Carries counts
+        and reason categories, plus held_account_ids filtered to the
+        caller's account scope.
       required: [providers]
       properties:
         providers:
@@ -7107,12 +7117,25 @@ components:
           description: >
             Failure count per reason category. Keys are drawn from a closed
             set: permission_denied, throttled, timeout, canceled, not_found,
-            provider_unavailable, other.
+            provider_unavailable, pricing_unavailable, other.
           additionalProperties:
             type: integer
           example:
             permission_denied: 2
             throttled: 1
+        held_account_ids:
+          type: array
+          description: >
+            Platform cloud-account IDs (not cloud account numbers) whose
+            previous-cycle Azure Advisor rows are held because the price
+            catalog was unreachable (reason pricing_unavailable). Their
+            reservations cannot be purchased until a collection re-prices them.
+            The nil UUID (00000000-0000-0000-0000-000000000000) stands for the
+            ambient identity, which has no registered account. It is returned
+            only to callers with an unrestricted account scope.
+          items:
+            type: string
+            format: uuid
 
     # -- Plans --------------------------------------------------------------
     PlansResponse:

@@ -27,10 +27,14 @@ type STSClient interface {
 
 // ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
-	AmbientAWSCreds        aws.CredentialsProvider
-	EmailSender            email.SenderInterface
-	STSClient              STSClient
-	AssumeRoleSTS          credentials.STSClient
+	AmbientAWSCreds aws.CredentialsProvider
+	EmailSender     email.SenderInterface
+	STSClient       STSClient
+	AssumeRoleSTS   credentials.STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory      credentials.STSClientFactory
 	CredentialStore        credentials.CredentialStore
 	ProviderFactory        provider.FactoryInterface
 	ConfigStore            config.StoreInterface
@@ -54,6 +58,7 @@ type Manager struct {
 	email           email.SenderInterface
 	stsClient       STSClient
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
 	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
@@ -123,6 +128,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		email:           cfg.EmailSender,
 		stsClient:       cfg.STSClient,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
 		ambientAWSCreds: cfg.AmbientAWSCreds,
 		credStore:       cfg.CredentialStore,
 		providerFactory: factory,
@@ -263,13 +269,18 @@ func isMultiAccountAckable(execErr error) bool {
 }
 
 const (
-	// The two budgets run back to back (270s), and on AWS Lambda the function
-	// timeout ends the invocation whatever these deadlines say, so the Lambda
-	// timeout must cover their sum plus a 30s margin (lambda_timeout >= 300,
-	// enforced by Terraform validation and TestLambdaTimeoutCoversPurchaseBudget,
-	// #913).
-	purchaseExecutionTimeout = 4 * time.Minute
+	// The two budgets run back to back, and for a failed or partial row the
+	// failure alert follows them with its own failureNotifyTimeout (30s), so a
+	// run can take 3m30s + 30s + 30s = 270s. On AWS Lambda the function timeout
+	// ends the invocation whatever these deadlines say, so the Lambda timeout
+	// must cover that sum plus a 30s margin (lambda_timeout >= 300, enforced by
+	// Terraform validation and TestLambdaTimeoutCoversPurchaseBudget, #913,
+	// #1434).
+	purchaseExecutionTimeout = 3*time.Minute + 30*time.Second
 	terminalSaveTimeout      = 30 * time.Second
+	// purchaseRunBudget is the longest one purchase can run end to end; the
+	// fire sweep starts a row only while this much time remains (#1582).
+	purchaseRunBudget = purchaseExecutionTimeout + terminalSaveTimeout + failureNotifyTimeout
 	// perRecPurchaseTimeout caps one recommendation's provider calls; see
 	// executeSinglePurchase.
 	perRecPurchaseTimeout = 30 * time.Second
@@ -576,6 +587,12 @@ func RedriveRefusalReason(exec *config.PurchaseExecution) string {
 	return ""
 }
 
+// Fixed refusal texts, shared with the stored-error allowlist (errnotes.go).
+const (
+	redriveReasonAWSNoGuard       = "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+	redriveReasonAzureSavingsPlan = "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+)
+
 // recRedriveRefusalReason returns the reason a single recommendation cannot be
 // safely re-driven, or "" when it can. Extracted from RedriveRefusalReason to
 // keep that function under the gocyclo budget and to make per-rec exclusions
@@ -590,7 +607,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// "purchase outcome unknown". The commitment may exist, so a second
 		// attempt must not be made until someone has checked the account.
 		if awsPurchaseHasNoDuplicateGuard(rec.Service) {
-			return "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+			return redriveReasonAWSNoGuard
 		}
 		return ""
 	case "azure":
@@ -599,7 +616,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// re-drive may create a duplicate. All other Azure services use
 		// DoIdempotentPurchaseTwoStep (#729).
 		if rec.Service == "savingsplans" || rec.Service == "savings-plans" {
-			return "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+			return redriveReasonAzureSavingsPlan
 		}
 		return ""
 	case "gcp":
@@ -1041,4 +1058,11 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	}
 
 	return result, nil
+}
+
+// enoughTimeFor reports whether ctx has at least budget left. A context
+// without a deadline always has enough.
+func enoughTimeFor(ctx context.Context, budget time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) >= budget
 }

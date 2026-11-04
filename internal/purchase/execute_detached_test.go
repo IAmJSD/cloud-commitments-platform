@@ -18,11 +18,13 @@ import (
 )
 
 // TestLambdaTimeoutCoversPurchaseBudget keeps every shipped AWS Lambda timeout
-// above the detached purchase budget (execution, then the terminal save).
+// above the detached purchase budget: execution, then the terminal save, then
+// (for a failed or partial row) the failure alert, each with its own deadline.
 // Lambda ends the invocation at its timeout whatever the context deadline
-// says, so a shorter timeout cuts a purchase off mid-flight (#913).
+// says, so a shorter timeout cuts a purchase or its failure email off
+// mid-flight (#913, #1434).
 func TestLambdaTimeoutCoversPurchaseBudget(t *testing.T) {
-	lambdatimeout.AssertCovers(t, "../..", purchaseExecutionTimeout+terminalSaveTimeout)
+	lambdatimeout.AssertCovers(t, "../..", purchaseRunBudget)
 }
 
 // detachFixture wires a direct single-account AWS purchase (issue #706).
@@ -162,7 +164,7 @@ func TestExecuteAndFinalize_ExpiredCallerDeadline_UsesOwnBudgets(t *testing.T) {
 	require.NoError(t, f.manager.executeAndFinalize(ctx, f.exec))
 	require.NoError(t, provContextErr)
 
-	// per-rec cap (30s) still bounds the provider call inside the 4m run budget.
+	// per-rec cap (30s) still bounds the provider call inside the 3m30s run budget.
 	assert.WithinDuration(t, time.Now(), provDeadline, 30*time.Second)
 	assert.Greater(t, time.Until(provDeadline), 29*time.Second)
 	_, ok := f.saveCtx.Deadline()
@@ -174,8 +176,8 @@ func TestExecuteAndFinalize_ExpiredCallerDeadline_UsesOwnBudgets(t *testing.T) {
 	// SavePurchaseHistory runs inside executePurchase, so it sees the run ctx.
 	_, ok = f.histCtx.Deadline()
 	require.True(t, ok, "run ctx needs a deadline")
-	assert.LessOrEqual(t, f.historyRemaining, 4*time.Minute)
-	assert.Greater(t, f.historyRemaining, 3*time.Minute+59*time.Second)
+	assert.LessOrEqual(t, f.historyRemaining, 3*time.Minute+30*time.Second)
+	assert.Greater(t, f.historyRemaining, 3*time.Minute+29*time.Second)
 	assert.Equal(t, []string{"completed"}, f.saved)
 }
 
@@ -195,4 +197,16 @@ func TestExecuteAndFinalize_ProviderErrorWithCanceledCaller_PersistsFailed(t *te
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, config.ErrAuditLoss)
 	assert.Equal(t, []string{"failed"}, f.saved)
+}
+
+func TestEnoughTimeFor(t *testing.T) {
+	assert.True(t, enoughTimeFor(context.Background(), time.Hour), "no deadline means enough time")
+
+	long, cancelLong := context.WithTimeout(context.Background(), time.Hour)
+	defer cancelLong()
+	assert.True(t, enoughTimeFor(long, time.Minute))
+
+	short, cancelShort := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShort()
+	assert.False(t, enoughTimeFor(short, time.Minute))
 }

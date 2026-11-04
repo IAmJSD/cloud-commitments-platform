@@ -219,13 +219,14 @@ func TestCSRFToken_CrossSessionRejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #1027 — RecordUsageAsync uses singleflight (no panic under concurrency)
+// #1027 — RecordUsageAsync dedupes flushes per key (no panic under concurrency)
 // ---------------------------------------------------------------------------
 
 // TestRecordUsageAsync_Singleflight verifies that a usage booking does not
-// panic, and that the background counter write completes without errors. The
-// singleflight fix ensures concurrent requests for the same key do not spawn
-// unbounded goroutines.
+// panic, and that the background counter write completes without errors.
+// RecordUsageAsync runs at most one flusher per key, so concurrent requests
+// for the same key do not spawn unbounded goroutines (issue #104; see
+// TestService_RecordUsageAsync_OneFlusherPerKey).
 //
 // Booking used to hang off ValidateUserAPIKey, which is why this test was
 // originally written against it; usage is now booked once per request by the

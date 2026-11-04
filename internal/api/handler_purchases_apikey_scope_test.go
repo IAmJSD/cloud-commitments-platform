@@ -83,6 +83,10 @@ var keyScopeOwnerPerms = purchasesPerms(auth.ActionUpdateAny, auth.ActionCancelA
 	auth.ActionDelete, auth.ActionUpdate, auth.ActionExecute)
 
 func newKeyScopeAuth(keyPerms []auth.Permission) *keyScopeAuth {
+	return newKeyScopeAuthWithGroup(keyPerms, keyScopeOwnerPerms)
+}
+
+func newKeyScopeAuthWithGroup(keyPerms, groupPerms []auth.Permission) *keyScopeAuth {
 	sum := sha256.Sum256([]byte(keyScopeRawKey))
 	expires := time.Now().Add(24 * time.Hour)
 	key := &auth.UserAPIKey{
@@ -96,7 +100,7 @@ func newKeyScopeAuth(keyPerms []auth.Permission) *keyScopeAuth {
 		ID: keyScopeOwnerID, Email: "owner@example.com", Active: true, GroupIDs: []string{keyScopeGroupID},
 	}, nil).Maybe()
 	store.On("GetGroup", mock.Anything, keyScopeGroupID).Return(&auth.Group{
-		ID: keyScopeGroupID, Permissions: keyScopeOwnerPerms,
+		ID: keyScopeGroupID, Permissions: groupPerms,
 	}, nil).Maybe()
 
 	m := new(MockAuthService)
@@ -159,6 +163,7 @@ func ownerHeaders() map[string]string {
 func serveKeyScope(t *testing.T, rt keyScopeRoute, a *keyScopeAuth, creator string, headers map[string]string) (int, bool) {
 	t.Helper()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	purchaseMgr := new(MockPurchaseManager)
 	store.On("GetExecutionByID", mock.Anything, keyScopeExecID).Return(keyScopeExec(rt.status, creator), nil)
 	store.On("TransitionExecutionStatus", mock.Anything, keyScopeExecID, mock.Anything, mock.Anything, mock.Anything).
@@ -247,6 +252,7 @@ func TestPlannedPurchaseRoutes_APIKeyFullScopeProbeErrorRefuses(t *testing.T) {
 			store.On("TransitionExecutionStatus", mock.Anything, keyScopeExecID, mock.Anything, mock.Anything, mock.Anything).
 				Return(nil, errKeyScopeReached).Maybe()
 			m := new(MockAuthService)
+			t.Cleanup(func() { m.AssertExpectations(t) })
 			m.On("HasAPIKeyPermissionAPI", mock.Anything, keyScopeRawKey, tc.entryVerb, auth.ResourcePurchases).
 				Return(keyScopeOwnerID, keyScopeKeyID, true, nil)
 			m.On("GetAllowedAccountsAPI", mock.Anything, keyScopeOwnerID).Return([]string{}, nil)

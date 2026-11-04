@@ -30,6 +30,7 @@ jest.mock('../dashboard', () => ({
 }));
 jest.mock('../recommendations', () => ({
   setupRecommendationsHandlers: jest.fn(),
+  getPurchaseModalSession: () => 1,
   getPurchaseModalRecommendations: jest.fn(),
   clearPurchaseModalRecommendations: jest.fn(),
   getFanOutBuckets: jest.fn(),

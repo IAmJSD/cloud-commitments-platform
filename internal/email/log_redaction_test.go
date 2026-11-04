@@ -31,6 +31,7 @@ func captureDebugLogs(t *testing.T) *bytes.Buffer {
 func TestCreateVerificationRequest_RedactsAddressInLog(t *testing.T) {
 	logs := captureDebugLogs(t)
 	ses := new(MockSESClient)
+	t.Cleanup(func() { ses.AssertExpectations(t) })
 	ses.On("CreateEmailIdentity", mock.Anything, mock.AnythingOfType("*sesv2.CreateEmailIdentityInput")).
 		Return(&sesv2.CreateEmailIdentityOutput{}, nil)
 	s := &Sender{sesClient: ses, fromEmail: "noreply@example.com"}

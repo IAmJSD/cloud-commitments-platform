@@ -33,7 +33,10 @@ type FinalizeResult struct {
 // (handleHTTPRequest in internal/server/http.go), Lambda ends an invocation at
 // its function timeout, and past the flip the revoke handler runs the Return
 // and the writes recording it detached under their own budgets (3m and 30s,
-// issue #1527). 2h is a wide margin over all of these. Correctness does not
+// issue #1527). 2h is a wide margin over all of these. It is also how a row
+// whose Return failed without a definite answer gets released: the revoke
+// handler keeps that row flagged and records no Return (issue #1529), so the
+// sweep releases it here and logs it for an operator. Correctness does not
 // depend on it (issue #1525): a Return recorded after the release is still
 // finalized, flag or not, and if the user revokes again while the first
 // Return is in flight, Azure refuses a second Return of the same reservation,

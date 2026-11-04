@@ -222,3 +222,69 @@ func TestResolveRIExchange_RouteIsAuthUser(t *testing.T) {
 	}
 	t.Fatal("POST /api/ri-exchange/resolve/{id} is not registered")
 }
+
+func riCapped(max float64) []auth.Permission {
+	return []auth.Permission{{Action: auth.ActionExecute, Resource: "ri-exchange",
+		Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: max}}}
+}
+
+func riHoldStore(paymentDue string) *resolveRIStore {
+	store := &resolveRIStore{MockConfigStore: new(MockConfigStore)}
+	store.On("GetRIExchangeRecord", mock.Anything, resolveRIID).
+		Return(&config.RIExchangeRecord{ID: resolveRIID, PaymentDue: paymentDue}, nil).Maybe()
+	return store
+}
+
+// A grant with an amount cap must cover the hold's payment_due.
+func TestResolveRIExchange_AmountCapCoversHold(t *testing.T) {
+	tests := []struct {
+		name  string
+		perms []auth.Permission
+		want  int // 0 = allowed
+	}{
+		{"cap below the hold", riCapped(999.99), 403},
+		{"cap equal to the hold", riCapped(1000), 0},
+		{"cap above the hold", riCapped(5000), 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := riHoldStore("1000.000000")
+			_, err := riResolveCall(t, apgCaller{perms: tc.perms}, store, riResolveFailedBody)
+			if tc.want == 0 {
+				require.NoError(t, err)
+				assert.Equal(t, 1, store.called)
+				return
+			}
+			assert.Equal(t, tc.want, clientCode(t, err))
+			assert.Zero(t, store.called, "a refused caller must not reach the store")
+		})
+	}
+}
+
+func TestResolveRIExchange_UncappedGrantDoesNoLookup(t *testing.T) {
+	mockStore := new(MockConfigStore)
+	store := &resolveRIStore{MockConfigStore: mockStore}
+	_, err := riResolveCall(t, apgCaller{perms: riExecute}, store, riResolveFailedBody)
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.called)
+	mockStore.AssertNotCalled(t, "GetRIExchangeRecord", mock.Anything, mock.Anything)
+}
+
+func TestResolveRIExchange_CappedGrantRefusesUnreadableAmount(t *testing.T) {
+	for _, due := range []string{"", "abc", "-1.000000", "NaN", "+Inf"} {
+		t.Run(due, func(t *testing.T) {
+			store := riHoldStore(due)
+			_, err := riResolveCall(t, apgCaller{perms: riCapped(5000)}, store, riResolveFailedBody)
+			require.Error(t, err)
+			assert.Zero(t, store.called)
+		})
+	}
+}
+func TestResolveRIExchange_CappedGrantMissingHoldIsNotFound(t *testing.T) {
+	store := &resolveRIStore{MockConfigStore: new(MockConfigStore)}
+	store.On("GetRIExchangeRecord", mock.Anything, resolveRIID).
+		Return(nil, fmt.Errorf("ri exchange record %s: %w", resolveRIID, config.ErrNotFound))
+	_, err := riResolveCall(t, apgCaller{perms: riCapped(5000)}, store, riResolveFailedBody)
+	require.ErrorIs(t, err, errNotFound)
+	assert.Zero(t, store.called)
+}

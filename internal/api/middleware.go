@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/clientip"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -465,6 +466,12 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 	return session, nil
 }
 
+// allowClientIP is the single place the per-IP limiter is consulted. It keys
+// on the normalised client address; callers log the raw SourceIP.
+func (h *Handler) allowClientIP(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) (bool, error) {
+	return h.rateLimiter.AllowWithIP(ctx, clientip.RateLimitKey(req.RequestContext.HTTP.SourceIP), endpoint)
+}
+
 // checkRateLimit checks if the request is allowed based on IP-based rate limiting.
 // Returns nil if allowed, or an error if rate limited.
 //
@@ -478,7 +485,7 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 	}
 
 	clientIP := req.RequestContext.HTTP.SourceIP
-	allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, endpoint)
+	allowed, err := h.allowClientIP(ctx, req, endpoint)
 	if err != nil {
 		logging.Warnf("Rate limiter error for IP %s: %v", clientIP, err)
 		// Continue on rate limiter errors to avoid blocking legitimate requests
@@ -499,13 +506,18 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 // can induce DB pressure would otherwise unlock unlimited password guessing on
 // these endpoints (02-M1). A high-severity error log is emitted so monitoring
 // can detect and alert on the fail-closed window.
+//
+// A handler with no rate limiter at all is refused the same way (issue #104):
+// every production handler is built with one, so a nil limiter is a wiring
+// bug, and allowing the request would silently drop brute-force protection.
 func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) error {
 	if h.rateLimiter == nil {
-		return nil
+		logging.Errorf("ALERT: no rate limiter configured for credential endpoint %s; request denied (02-M1)", endpoint)
+		return NewClientError(503, "service temporarily unavailable, please try again later")
 	}
 
 	clientIP := req.RequestContext.HTTP.SourceIP
-	allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, endpoint)
+	allowed, err := h.allowClientIP(ctx, req, endpoint)
 	if err != nil {
 		// High-severity alert: rate limiter unavailable on a credential endpoint.
 		// Fail closed to preserve brute-force protection.
@@ -532,11 +544,9 @@ func (h *Handler) requireMFASession(ctx context.Context, req *events.LambdaFunct
 	if err != nil {
 		return nil, err
 	}
+	// checkRateLimitStrict refuses a nil limiter, so h.rateLimiter is set below.
 	if limitErr := h.checkRateLimitStrict(ctx, req, endpoint); limitErr != nil {
 		return nil, limitErr
-	}
-	if h.rateLimiter == nil {
-		return session, nil
 	}
 	allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, endpoint)
 	if err != nil {

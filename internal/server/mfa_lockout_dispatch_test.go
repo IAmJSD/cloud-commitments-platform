@@ -53,7 +53,7 @@ func TestHandleRequest_MFADisableWrongCodesLockAccount(t *testing.T) {
 	})
 
 	service := auth.NewService(auth.ServiceConfig{Store: mockStore, SessionDuration: time.Hour, CSRFKey: auth.TestCSRFKey()})
-	handler := api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(service)})
+	handler := api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(service), RateLimiter: api.NewInMemoryRateLimiter()})
 
 	disable := func(code string) *events.LambdaFunctionURLResponse {
 		body, err := json.Marshal(map[string]string{

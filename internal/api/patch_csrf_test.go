@@ -62,6 +62,7 @@ func patchPlanCSRFFixture(t *testing.T) patchCSRFFixture {
 	const session = "patch-csrf-admin"
 	store := new(MockConfigStore)
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("ValidateSession", mock.Anything, session).
 		Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}, nil)
 	m.grantAdmin()

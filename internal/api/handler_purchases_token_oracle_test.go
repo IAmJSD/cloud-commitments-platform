@@ -41,8 +41,8 @@ func TestHandleRequest_TokenActions_UnauthenticatedCannotTellMissingFromExisting
 					}
 
 					exec := &config.PurchaseExecution{Status: "pending", ApprovalToken: hash, ApprovalTokenExpiresAt: &future}
-					existingH := tokenErrHandler(t, exec, nil)
-					missingH := tokenErrHandler(t, nil, config.ErrNotFound)
+					existingH := tokenErrHandlerFor(t, exec, nil, false)
+					missingH := tokenErrHandlerFor(t, nil, config.ErrNotFound, false)
 					for _, h := range []*Handler{existingH, missingH} {
 						h.auth.(*MockAuthService).On("ValidateSession", mock.Anything, "bad-tok").Return(nil, errors.New("invalid session")).Maybe()
 					}
@@ -98,11 +98,17 @@ func oracleHandler(t *testing.T, caller oracleCaller, exec *config.PurchaseExecu
 	accountID := "acct-1"
 	creator := "creator-user-id"
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, Name: id, ContactEmail: "contact@example.com"}, nil
 	}
+	// The row lookup and the session read are Maybe: whether they run depends
+	// on the caller and the route. A caller without a session or a CSRF token
+	// is refused before the lookup (issues #435 and #597), which the tests pin
+	// by comparing the existing and missing answers and, where it matters,
+	// with an explicit AssertNotCalled.
 	if exec == nil {
-		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(nil, config.ErrNotFound)
+		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(nil, config.ErrNotFound).Maybe()
 	} else {
 		exec.ExecutionID = tokenErrExecID
 		exec.CloudAccountID = &accountID
@@ -112,7 +118,7 @@ func oracleHandler(t *testing.T, caller oracleCaller, exec *config.PurchaseExecu
 			exec.CloudAccountID = nil
 			exec.Recommendations = []config.RecommendationRecord{{ID: "r1", Provider: "azure", UpfrontCost: 100}}
 		}
-		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(exec, nil)
+		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(exec, nil).Maybe()
 		store.On("TransitionExecutionStatus", mock.Anything, tokenErrExecID, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil, config.ErrExecutionNotInExpectedStatus).Maybe()
 		store.On("CancelExecutionAtomic", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything).
@@ -121,7 +127,8 @@ func oracleHandler(t *testing.T, caller oracleCaller, exec *config.PurchaseExecu
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 
 	m := new(MockAuthService)
-	m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: "caller-user-id", Email: caller.email}, nil)
+	t.Cleanup(func() { m.AssertExpectations(t) })
+	m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: "caller-user-id", Email: caller.email}, nil).Maybe()
 	m.On("ValidateCSRFToken", mock.Anything, "sess-tok", oracleCSRF).Return(nil).Maybe()
 	m.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(errors.New("missing CSRF token")).Maybe()
 	caller.grant(m)

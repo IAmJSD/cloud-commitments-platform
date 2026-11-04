@@ -31,6 +31,9 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
+	"time"
+
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 )
 
 // p256SigComponentLen is the fixed byte length of each of the R and S
@@ -196,29 +199,73 @@ func (s *LocalSigner) KeyID(_ context.Context) (string, error) {
 	return s.kid, nil
 }
 
-// publicKeyCache memoizes a KMS-backed signer's public key and kid.
+// publicKeyCacheTTL is how long a resolved public key and kid are served
+// before the next caller re-fetches them. The AWS signer signs through a key
+// alias and the Azure signer through the key's current version, so after a
+// KMS / Key Vault rotation Sign already uses the new key; without a TTL the
+// JWKS kept publishing the old key, and Mint kept stamping the old kid, until
+// the instance recycled. One hour bounds that window to an hour plus the
+// JWKS response's own Cache-Control. GCP pins an explicit key version, so a
+// refresh there returns the same key.
+const publicKeyCacheTTL = time.Hour
+
+// publicKeyRefreshRetryInterval is how long a stale key is served after a
+// failed refresh before the next caller tries again, so an outage of the key
+// service is not hit by every request.
+const publicKeyRefreshRetryInterval = time.Minute
+
+// publicKeyCache memoizes a KMS-backed signer's public key and kid for
+// publicKeyCacheTTL.
 //
-// Only a successful resolution is cached. A failed fetch (a throttle, a
+// Only a successful resolution is cached. A failed first fetch (a throttle, a
 // network blip, or a caller whose ctx was already canceled) is returned to
 // that caller and the next call fetches again; caching the error as well, as
 // the earlier sync.Once did, poisoned the process-wide signer until the
-// instance recycled (audit finding A03-014). The mutex serializes first
-// callers, so concurrent callers never issue parallel fetches and a success
-// is fetched exactly once.
+// instance recycled (audit finding A03-014). A failed refresh of an expired
+// key keeps serving the stale key, so a transient error or a canceled caller
+// cannot take down minting, and retries after publicKeyRefreshRetryInterval.
+// The mutex serializes callers, so concurrent callers never issue parallel
+// fetches.
 type publicKeyCache struct {
-	pubKey *ecdsa.PublicKey
-	kid    string
-	mu     sync.Mutex
+	refreshAt time.Time
+	pubKey    *ecdsa.PublicKey
+	now       func() time.Time // nil means time.Now; tests inject a clock
+	kid       string
+	mu        sync.Mutex
 }
 
 // get returns the cached key and kid, calling fetch to resolve them when
-// nothing has been cached yet.
+// nothing has been cached yet or the cached key is due for a refresh.
 func (c *publicKeyCache) get(ctx context.Context, fetch func(context.Context) (*ecdsa.PublicKey, error)) (*ecdsa.PublicKey, string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.pubKey != nil {
+	now := c.clock()
+	if c.pubKey != nil && now.Before(c.refreshAt) {
 		return c.pubKey, c.kid, nil
 	}
+	pub, kid, err := resolvePublicKey(ctx, fetch)
+	if err != nil {
+		if c.pubKey == nil {
+			return nil, "", err
+		}
+		logging.Warnf("oidc: refreshing the signing public key failed, serving the cached key (kid %s) and retrying in %s: %v",
+			c.kid, publicKeyRefreshRetryInterval, err)
+		c.refreshAt = now.Add(publicKeyRefreshRetryInterval)
+		return c.pubKey, c.kid, nil
+	}
+	c.pubKey, c.kid, c.refreshAt = pub, kid, now.Add(publicKeyCacheTTL)
+	return pub, kid, nil
+}
+
+func (c *publicKeyCache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// resolvePublicKey fetches the public key and derives its kid.
+func resolvePublicKey(ctx context.Context, fetch func(context.Context) (*ecdsa.PublicKey, error)) (*ecdsa.PublicKey, string, error) {
 	pub, err := fetch(ctx)
 	if err != nil {
 		return nil, "", err
@@ -227,7 +274,6 @@ func (c *publicKeyCache) get(ctx context.Context, fetch func(context.Context) (*
 	if err != nil {
 		return nil, "", err
 	}
-	c.pubKey, c.kid = pub, kid
 	return pub, kid, nil
 }
 

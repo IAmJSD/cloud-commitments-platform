@@ -433,6 +433,7 @@ func TestService_Login_MFA(t *testing.T) {
 func TestLogin_WithMFA(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
@@ -475,6 +476,7 @@ func TestLogin_WithMFA(t *testing.T) {
 func TestLogin_WithMFA_ClaimFailureFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	service := createTestService(mockStore, new(MockEmailSender))
 
 	mfaSecret := "JBSWY3DPEHPK3PXP"
@@ -497,6 +499,7 @@ func TestLogin_WithMFA_ClaimFailureFailsClosed(t *testing.T) {
 func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 
@@ -531,6 +534,7 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockEmail := new(MockEmailSender)
 	service := createTestService(mockStore, mockEmail)
 

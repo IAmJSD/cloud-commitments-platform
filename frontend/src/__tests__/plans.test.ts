@@ -248,7 +248,8 @@ describe('Plans Module', () => {
 
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Test Plan');
-      expect(list?.innerHTML).toContain('ec2');
+      // #1683: the Service field shows the display name.
+      expect(list?.innerHTML).toContain('EC2');
     });
 
     test.each([
@@ -341,8 +342,11 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      // The Service field shows "ec2" — the slug pass-through case.
-      expect(list?.innerHTML).toContain('ec2');
+      // #1683: the Service field shows the display name, not the slug.
+      const values = Array.from(list?.querySelectorAll('.plan-detail') ?? [])
+        .filter((d) => d.querySelector('.plan-detail-label')?.textContent === 'Service')
+        .map((d) => d.querySelector('.plan-detail-value')?.textContent);
+      expect(values).toEqual(['EC2']);
     });
 
     test('shows empty message when no plans', async () => {
@@ -730,6 +734,26 @@ describe('Plans Module', () => {
       expect(container?.innerHTML).toContain('us-east-1');
     });
 
+    // #1683: the Service cell shows the display name, not the slug.
+    test('shows the service display name in the planned purchases table', async () => {
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
+        purchases: [{
+          id: 'purchase-rds', plan_id: 'plan-1', plan_name: 'RDS plan', scheduled_date: '2024-02-20',
+          provider: 'aws', service: 'rds', resource_type: 'db.t3.micro', region: 'us-east-1', count: 1,
+          term: 1, payment: 'no-upfront', upfront_cost: 0, estimated_savings: 5, status: 'pending',
+          step_number: 1, total_steps: 1,
+        }],
+      });
+
+      await loadPlans();
+
+      const cells = Array.from(document.querySelectorAll('#planned-purchases-list tbody td'))
+        .map((td) => td.textContent?.trim());
+      expect(cells).toContain('RDS');
+      expect(cells).not.toContain('rds');
+    });
+
     test('labels a step with no recommendations instead of rendering zeros (#609)', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
       (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
@@ -763,6 +787,56 @@ describe('Plans Module', () => {
       expect(html).not.toContain('Various');
       expect(html).not.toContain('Multiple');
       expect(html).not.toContain('$0');
+    });
+
+    describe('Run now on a step with no recommendations (#1695)', () => {
+      const bare = {
+        id: 'purchase-bare',
+        plan_id: 'plan-1',
+        plan_name: 'Azure compute 80% weekly',
+        scheduled_date: '2026-10-07',
+        provider: 'azure',
+        service: 'compute',
+        resource_type: 'Various',
+        region: 'Multiple',
+        count: 0,
+        term: 1,
+        payment: 'monthly',
+        upfront_cost: 0,
+        estimated_savings: 0,
+        has_recommendations: false,
+        status: 'pending',
+        step_number: 1,
+        total_steps: 4
+      };
+
+      beforeEach(async () => {
+        (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [bare] });
+        await loadPlans();
+      });
+
+      test('renders the run button disabled with an explanatory title', () => {
+        const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
+        expect(runBtn.disabled).toBe(true);
+        expect(runBtn.title).toBe('Run now: this step has no recommendations, so there is nothing to run');
+        expect(runBtn.getAttribute('aria-label')).toBe('Run now: this step has no recommendations, so there is nothing to run');
+        expect(runBtn.getAttribute('data-id')).toBe('purchase-bare');
+      });
+
+      test('the run action never calls the API or opens a confirm', async () => {
+        const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
+        runBtn.disabled = false;
+        runBtn.click();
+        await flushPromises();
+
+        expect(api.runPlannedPurchase).not.toHaveBeenCalled();
+        expect(mockConfirmDialog).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'This step has no recommendations attached, so there is nothing to run.',
+          kind: 'info',
+        }));
+      });
     });
 
     test('shows empty message when no planned purchases', async () => {

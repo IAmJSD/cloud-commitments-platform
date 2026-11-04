@@ -148,6 +148,21 @@ describe('plan modal service ids (#608)', () => {
     expect(showToast).not.toHaveBeenCalled();
   });
 
+  // The card shows display names (#1683); the edit flow must still select the
+  // option by slug. Before, the card's "Compute SP" label was also used as the
+  // id, so a Savings Plans plan opened with "no longer supported".
+  test.each([
+    ['aws', 'ec2'],
+    ['aws', 'rds'],
+    ['aws', 'savings-plans-compute'],
+  ])('edit flow of a saved %s plan with service %s selects its option without an error', async (provider, saved) => {
+    await editSavedPlan(provider, saved);
+
+    const select = document.getElementById('plan-service') as HTMLSelectElement;
+    expect(select.selectedOptions[0]!.value).toBe(saved);
+    expect(showToast).not.toHaveBeenCalled();
+  });
+
   test.each([
     ['azure', 'cosmosdb'],
     ['gcp', 'cloudstorage'],

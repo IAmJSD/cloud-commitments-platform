@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -74,22 +75,78 @@ func TestGetEnvInt(t *testing.T) {
 }
 
 func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
-	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
-	req.Header.Set("User-Agent", "TestAgent/1.0")
+	newReq := func(lines ...string) *http.Request {
+		req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
+		req.RemoteAddr = "10.0.0.9:4444"
+		for _, l := range lines {
+			req.Header.Add("X-Forwarded-For", l)
+		}
+		req.Header.Set("User-Agent", "TestAgent/1.0")
+		return req
+	}
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	convert := func(req *http.Request, hops int) *events.LambdaFunctionURLRequest {
+		lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, hops)
+		testutil.AssertNoError(t, err)
+		return lambdaReq
+	}
+	t.Run("one trusted hop takes rightmost", func(t *testing.T) {
+		lambdaReq := convert(newReq("1.2.3.4, 5.6.7.8"), 1)
+		testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
+		testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
+	})
+	t.Run("two trusted hops", func(t *testing.T) {
+		lambdaReq := convert(newReq("9.9.9.9, 1.2.3.4, 5.6.7.8"), 2)
+		testutil.AssertEqual(t, "1.2.3.4", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+	t.Run("zero hops ignores the header and strips the port", func(t *testing.T) {
+		lambdaReq := convert(newReq("6.6.6.6"), 0)
+		testutil.AssertEqual(t, "10.0.0.9", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+	t.Run("separate header lines count as one list", func(t *testing.T) {
+		// Only the configured trusted hops are honored, counted across all header lines.
+		lambdaReq := convert(newReq("6.6.6.6", "5.6.7.8"), 1)
+		testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
+		lambdaReq = convert(newReq("6.6.6.6", "5.6.7.8"), 2)
+		testutil.AssertEqual(t, "6.6.6.6", lambdaReq.RequestContext.HTTP.SourceIP)
+	})
+}
+
+func TestParseTrustedProxyHops(t *testing.T) {
+	for raw, want := range map[string]int{"": 0, "0": 0, "1": 1, "2": 2, "8": 8} {
+		got, err := parseTrustedProxyHops(raw)
+		testutil.AssertNoError(t, err)
+		testutil.AssertEqual(t, want, got)
+	}
+	for _, raw := range []string{"-1", "x", "9", "1.5", " 1", "99999999999999999999"} {
+		if _, err := parseTrustedProxyHops(raw); err == nil || !strings.Contains(err.Error(), "CUDLY_TRUSTED_PROXY_HOPS") {
+			t.Fatalf("parseTrustedProxyHops(%q): expected CUDLY_TRUSTED_PROXY_HOPS error, got %v", raw, err)
+		}
+	}
+}
+
+func TestLoadApplicationConfig_TrustedProxyHops(t *testing.T) {
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "")
+	cfg, err := LoadApplicationConfig()
 	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 0, cfg.TrustedProxyHops)
 
-	testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
-	testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "1")
+	cfg, err = LoadApplicationConfig()
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 1, cfg.TrustedProxyHops)
+
+	t.Setenv("CUDLY_TRUSTED_PROXY_HOPS", "-1")
+	if _, err = LoadApplicationConfig(); err == nil || !strings.Contains(err.Error(), "CUDLY_TRUSTED_PROXY_HOPS") {
+		t.Fatalf("expected startup error for negative hops, got %v", err)
+	}
 }
 
 func TestHttpToLambdaRequest_NilBody(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Body = nil
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, 0)
 	testutil.AssertNoError(t, err)
 
 	testutil.AssertEqual(t, "", lambdaReq.Body)

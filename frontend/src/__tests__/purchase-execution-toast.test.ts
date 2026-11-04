@@ -43,6 +43,7 @@ jest.mock('../navigation', () => ({
 jest.mock('../recommendations', () => ({
   setupRecommendationsHandlers: jest.fn(),
   getPurchaseModalRecommendations: jest.fn(),
+  getPurchaseModalSession: jest.fn().mockReturnValue(1),
   clearPurchaseModalRecommendations: jest.fn(),
   getFanOutBuckets: jest.fn(),
   clearFanOutBuckets: jest.fn(),
@@ -283,6 +284,79 @@ describe('handleExecutePurchase — single-record path', () => {
 
     expect(archera.openArcheraOfferModal).toHaveBeenCalledTimes(1);
     expect(archera.openArcheraOfferModal).toHaveBeenCalledWith('purchase');
+  });
+
+  // Issue #1694: a recorded failed execution must not leave Execute armed.
+  test('definite failure with an execution_id closes the modal', async () => {
+    const err = Object.assign(new Error('AWS refused the purchase'), {
+      status: 403, details: { execution_id: 'exec-failed' },
+    });
+    (api.executePurchase as jest.Mock).mockRejectedValue(err);
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(plans.closePurchaseModal).toHaveBeenCalledTimes(1);
+    expect(recs.clearPurchaseModalRecommendations).toHaveBeenCalled();
+    expect(lastToastKind()).toBe('error');
+  });
+
+  // A 5xx (e.g. a run whose final status could not be saved) or a 409 after the
+  // row was claimed may follow a real purchase: never leave Execute armed.
+  test.each([
+    ['audit-loss 500', 500],
+    ['stale-pricing 409', 409],
+  ])('%s without an execution_id closes the modal', async (_name, status) => {
+    (api.executePurchase as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('execution ran but its final status could not be saved'), { status }),
+    );
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(plans.closePurchaseModal).toHaveBeenCalledTimes(1);
+    expect(recs.clearPurchaseModalRecommendations).toHaveBeenCalled();
+  });
+
+  test('a 400 validation refusal keeps the modal open so the user can fix the input', async () => {
+    (api.executePurchase as jest.Mock).mockRejectedValue(
+      Object.assign(new Error('capacity must be between 1 and 100'), { status: 400 }),
+    );
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(plans.closePurchaseModal).not.toHaveBeenCalled();
+  });
+
+  test('a late failure does not close a purchase modal opened after the request was sent', async () => {
+    let reject: (e: unknown) => void = () => {};
+    (api.executePurchase as jest.Mock).mockReturnValue(new Promise((_res, rej) => { reject = rej; }));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    // The user closed the modal and opened a new purchase while the first was in flight.
+    (recs.getPurchaseModalSession as jest.Mock).mockReturnValue(2);
+    reject(Object.assign(new Error('refused'), { status: 403, details: { execution_id: 'exec-old' } }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(plans.closePurchaseModal).not.toHaveBeenCalled();
+    expect(recs.clearPurchaseModalRecommendations).not.toHaveBeenCalled();
+    expect(lastToastKind()).toBe('error');
+  });
+
+  test('failure without an execution_id keeps the modal open for retry', async () => {
+    (api.executePurchase as jest.Mock).mockRejectedValue(new Error('network down'));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(plans.closePurchaseModal).not.toHaveBeenCalled();
   });
 
   test('does NOT open Archera offer modal when the approval submission throws', async () => {

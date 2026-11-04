@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -411,13 +412,24 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 		// fixing the config makes Retry work). Same call and input as the
 		// retry handler's gate so the two cannot disagree (issue #161).
 		if reason := purchase.RedriveRefusalReason(&exec); reason != "" {
-			row.OpsHint = reason
 			row.RedriveUnsafe = true
+			// Only a proven pre-send AWS refusal on every rec means nothing was
+			// bought; for any other outcome the duplicate-purchase warning stays.
+			// ops_hint stays set either way: the History UI hides Retry on it.
+			if purchase.IsDefiniteAWSRefusal(exec.Recommendations, exec.Error) {
+				row.OpsHint = definiteRefusalOpsHint
+			} else {
+				row.OpsHint = reason
+			}
 		}
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row
 }
+
+// definiteRefusalOpsHint replaces the duplicate-purchase warning when AWS
+// refused the purchase before making it.
+const definiteRefusalOpsHint = "AWS refused this purchase before it was made; start a new purchase after fixing the cause"
 
 // annotateHistoryRowByStatus fills in Approver + StatusDescription on the
 // row based on exec.Status. Split from executionToHistoryRow to keep the
@@ -427,7 +439,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 	case "pending", "notified":
 		row.Approver = approver
 	case "failed":
-		row.StatusDescription = exec.Error
+		row.StatusDescription = purchase.SanitizeStoredError(exec.Error)
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case config.StatusCanceled, config.LegacyStatusCanceled:
@@ -481,7 +493,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		// double-count guard as the audit-gap completed case below.
 		row.IsAuditGap = true
 		annotateApproved(row, exec, approver)
-		row.StatusDescription = "partially completed — some commitments succeeded, others failed: " + exec.Error
+		row.StatusDescription = "partially completed — some commitments succeeded, others failed: " + purchase.SanitizeStoredError(exec.Error)
 	case "completed":
 		// Only audit-gap completed executions reach here (fetchExecutionsAsHistory
 		// skips clean completed rows). exec.Error carries why the history write
@@ -493,7 +505,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		row.IsAuditGap = true
 		annotateApproved(row, exec, approver)
 		if exec.Error != "" {
-			row.StatusDescription = "purchase completed but its history record could not be saved: " + exec.Error
+			row.StatusDescription = "purchase completed but its history record could not be saved: " + purchase.SanitizeStoredError(exec.Error)
 		}
 	}
 }
@@ -909,7 +921,9 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //     An execution whose effective account ID is "" (nil exec field AND recs
 //     disagree or have no account) is excluded once account_ids is non-empty.
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
-//     both sides; End is the end-of-day for YYYY-MM-DD inputs.
+//     both sides; End is the end-of-day for YYYY-MM-DD inputs. Actionable
+//     statuses skip this check so a pending approval scheduled after the
+//     range end still reaches the approval queue (#1685).
 func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if !f.matchesExecutionProviderAndAccount(exec) {
 		return false
@@ -917,7 +931,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if f.PlanID != "" && exec.PlanID != f.PlanID {
 		return false
 	}
-	if f.HasDate {
+	if f.HasDate && !slices.Contains(actionableExecutionStatuses, exec.Status) {
 		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
 			return false
 		}
@@ -1129,34 +1143,51 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	return scope.filter(purchases), nil
 }
 
-// historyRowAccountName returns the registered account name for a history row,
-// or "" when it cannot be determined unambiguously. Without CloudAccountID it
+// historyRowAccount returns the registered account a history row belongs to,
+// or nil when it cannot be determined unambiguously. Without CloudAccountID it
 // tries the account UUID first (in-flight rows store the UUID in AccountID),
 // then provider plus external id, since external ids are unique only per
 // provider. A legacy row without a provider matches only when exactly one
 // account across all providers has that external id.
-func historyRowAccountName(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) string {
+func historyRowAccount(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) *config.CloudAccount {
 	if p.CloudAccountID != nil {
-		return accountNameByID(accounts, *p.CloudAccountID)
+		return accountByID(accounts, *p.CloudAccountID)
 	}
-	if name := accountNameByID(accounts, p.AccountID); name != "" {
-		return name
+	if a := accountByID(accounts, p.AccountID); a != nil {
+		return a
 	}
 	if p.Provider != "" {
-		return accountNameByExternalID(accounts, p.Provider, p.AccountID)
+		return uniqueAccountByExternalID(accounts, p.Provider, p.AccountID)
 	}
-	var name string
-	matches := 0
+	var found *config.CloudAccount
 	for i := range accounts {
-		if accounts[i].ExternalID == p.AccountID {
-			name = accounts[i].Name
-			matches++
+		if accounts[i].ExternalID != p.AccountID {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = &accounts[i]
+	}
+	return found
+}
+
+func accountByID(accounts []config.CloudAccount, id string) *config.CloudAccount {
+	for i := range accounts {
+		if accounts[i].ID == id {
+			return &accounts[i]
 		}
 	}
-	if matches != 1 {
-		return ""
+	return nil
+}
+
+// historyRowAccountName returns the registered account name for a history row,
+// or "" when it cannot be determined unambiguously (see historyRowAccount).
+func historyRowAccountName(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) string {
+	if a := historyRowAccount(accounts, p); a != nil {
+		return a.Name
 	}
-	return name
+	return ""
 }
 
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {

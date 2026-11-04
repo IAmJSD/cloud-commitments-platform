@@ -1,40 +1,12 @@
 /* Commitment Laddering per-account config modal (issue #742 review).
  * Labels stack above their inputs, the short fields pair up in a two-column
  * grid, and qualifiers such as ranges live in a muted hint under the input.
- * The header stays fixed and the body scrolls on short viewports, with the
- * Cancel / Save footer pinned to the bottom of the scroll area. */
+ * On short viewports the body scrolls between the pinned header and the
+ * Cancel / Save footer (shared dialog chrome, modals.css). */
 
 .ladder-config-dialog {
     width: 680px;
     max-width: 95vw;
-    max-height: 90vh;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.ladder-config-dialog .modal-header {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--cudly-sp-4);
-    padding: var(--cudly-sp-4) var(--cudly-sp-5);
-    border-bottom: 1px solid var(--cudly-border);
-}
-
-.ladder-config-dialog .modal-header h3 {
-    margin: 0;
-    font-size: var(--cudly-fs-lg);
-    color: var(--cudly-text);
-}
-
-.ladder-config-dialog .modal-body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    padding: var(--cudly-sp-5) var(--cudly-sp-5) 0;
 }
 
 .ladder-form-grid {
@@ -55,7 +27,9 @@
     grid-column: 1 / -1;
 }
 
-.ladder-config-dialog .ladder-field > label {
+.ladder-config-dialog .ladder-field > label,
+.ladder-config-dialog .ramp-json > label,
+.ladder-config-dialog .ramp-editor-label {
     margin: 0;
     font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
@@ -63,14 +37,23 @@
 
 .ladder-config-dialog .ladder-field input:not([type="checkbox"]),
 .ladder-config-dialog .ladder-field select,
-.ladder-config-dialog .ladder-field textarea {
+.ladder-config-dialog .ladder-field textarea,
+.ladder-config-dialog .ramp-editor input,
+.ladder-config-dialog .ramp-editor textarea {
     width: 100%;
     min-height: 2.25rem;
     margin: 0;
 }
 
-.ladder-config-dialog .ladder-field textarea {
-    min-height: 6rem;
+/* .modal-content input outranks the global [aria-invalid] border. */
+.ladder-config-dialog .ramp-editor [aria-invalid="true"] {
+    border-color: var(--cudly-error);
+}
+
+.ladder-config-dialog .ramp-editor textarea {
+    /* Room for a two-step schedule without scrolling. */
+    min-height: 10rem;
+    line-height: 1.45;
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
     font-size: 0.85rem;
 }
@@ -106,6 +89,189 @@
     cursor: pointer;
 }
 
+/* Ramp schedule step editor (ladder-ramp-editor.ts): a proportional bar and
+ * summary, one compact row per step, then Add step and presets. The JSON
+ * textarea sits behind "Edit as JSON". */
+.ramp-editor {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-2);
+    min-width: 0;
+}
+
+.ramp-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-3);
+}
+
+.ladder-config-dialog .ramp-editor .btn-link {
+    padding: 0.125rem 0.375rem;
+    font-size: var(--cudly-fs-sm);
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.ramp-editor-head .ramp-json-toggle {
+    margin-right: -0.375rem;
+}
+
+.ramp-bar {
+    display: flex;
+    gap: 2px;
+    height: 1.5rem;
+    overflow: hidden;
+    border-radius: 4px;
+}
+
+.ramp-bar.is-invalid {
+    outline: 1px solid var(--cudly-error);
+    outline-offset: 1px;
+}
+
+.ramp-bar-seg,
+.ramp-bar-rest {
+    flex: 0 1 0;
+}
+
+.ramp-bar-seg {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 var(--cudly-sp-2);
+    background: var(--cudly-primary);
+    color: var(--cudly-primary-fg);
+    font-size: var(--cudly-fs-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.ramp-bar-rest {
+    border: 1px dashed var(--cudly-border-strong);
+    border-radius: 0 4px 4px 0;
+    background: var(--cudly-surface-muted);
+}
+
+.ramp-bar-rest:first-child {
+    border-radius: 4px;
+}
+
+.ramp-bar-seg:nth-child(even) {
+    background: var(--cudly-primary-hover);
+}
+
+.ramp-bar-seg > span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.ladder-config-dialog .ramp-summary {
+    margin: 0;
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
+
+.ladder-config-dialog .ramp-summary.is-invalid {
+    color: var(--cudly-error-fg);
+}
+
+.ramp-steps-head,
+.ramp-step {
+    display: grid;
+    /* Trailing 1fr: room for a row's message under its inputs. */
+    grid-template-columns: 2rem minmax(0, 9rem) minmax(0, 9rem) 2.25rem minmax(0, 1fr);
+    gap: var(--cudly-sp-1) var(--cudly-sp-2);
+    align-items: center;
+}
+
+.ramp-steps-head {
+    margin-top: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-medium);
+    color: var(--cudly-text-muted);
+    white-space: nowrap;
+}
+
+.ramp-steps {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ramp-step-num {
+    font-size: var(--cudly-fs-sm);
+    font-variant-numeric: tabular-nums;
+    color: var(--cudly-text-muted);
+    text-align: center;
+}
+
+.ladder-config-dialog button.ramp-remove {
+    width: 2.25rem;
+    height: 2.25rem;
+    color: var(--cudly-text-muted);
+}
+
+.ladder-config-dialog button.ramp-remove:hover:not(:disabled) {
+    color: var(--cudly-error-fg);
+    border-color: var(--cudly-error);
+    background: var(--cudly-error-bg);
+}
+
+.ladder-config-dialog button.ramp-remove:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.ladder-config-dialog .ramp-step-error {
+    grid-column: 2 / -1;
+    margin: 0;
+    font-size: var(--cudly-fs-xs);
+}
+
+.ramp-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-2) var(--cudly-sp-4);
+    margin-top: var(--cudly-sp-2);
+}
+
+.ladder-config-dialog .ramp-add {
+    padding: 0.375rem var(--cudly-sp-3);
+}
+
+.ramp-presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.ramp-json {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: var(--cudly-sp-2);
+}
+
+/* .field-error sets display: block, which would beat the hidden attribute. */
+.ramp-json[hidden],
+.ramp-editor .field-error[hidden] {
+    display: none;
+}
+
+.ladder-config-dialog .ramp-json .field-error {
+    margin: 0;
+    font-size: var(--cudly-fs-xs);
+}
+
 .ladder-config-dialog .warning-message {
     margin: 0;
     padding: var(--cudly-sp-3) var(--cudly-sp-4);
@@ -124,19 +290,6 @@
     color: var(--cudly-text-muted);
 }
 
-.ladder-config-dialog .modal-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--cudly-sp-3);
-    margin: 0 calc(-1 * var(--cudly-sp-5));
-    padding: var(--cudly-sp-4) var(--cudly-sp-5);
-    background: var(--cudly-surface);
-    border-top: 1px solid var(--cudly-border);
-}
-
 @media (max-width: 640px) {
     .ladder-form-grid {
         grid-template-columns: minmax(0, 1fr);
@@ -146,4 +299,64 @@
         align-self: auto;
         min-height: 0;
     }
+}
+
+/* Commitment Laddering section and Planned purchases card on Admin >
+ * Purchasing policies: room between the kill-switch row, the per-account
+ * table and the buttons around it, and quieter status / caption text so
+ * the stat line and the table read as the content. */
+.ladder-configs-heading {
+    margin: var(--cudly-sp-5) 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+    color: var(--cudly-text);
+}
+
+#ladder-configs-section > #ladder-add-config-btn {
+    margin-top: var(--cudly-sp-4);
+}
+
+#ladder-configs-table-container > .settings-help {
+    margin: 0;
+}
+
+.ladder-timeline .ladder-timeline-state {
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.ladder-timeline .ladder-timeline-state:empty {
+    display: none;
+}
+
+.ladder-timeline [data-content] > .ladder-timeline-controls {
+    margin-bottom: var(--cudly-sp-2);
+}
+
+.ladder-timeline .ladder-timeline-stat {
+    margin-top: var(--cudly-sp-5);
+}
+
+.ladder-timeline .ladder-timeline-chart {
+    margin: var(--cudly-sp-4) 0 var(--cudly-sp-5);
+}
+
+.ladder-timeline [data-table] caption {
+    caption-side: top;
+    padding: 0 0 var(--cudly-sp-3);
+    text-align: left;
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text-muted);
+}
+
+.ladder-timeline [data-table] + .ladder-timeline-note {
+    margin: var(--cudly-sp-3) 0 0;
+}
+
+/* Why a tranche can only be selected, on its own muted line under the button. */
+.ladder-timeline [data-table] td > button[data-event] + span {
+    display: block;
+    margin-top: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
 }

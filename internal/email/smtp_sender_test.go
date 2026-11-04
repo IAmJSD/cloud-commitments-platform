@@ -192,6 +192,7 @@ func TestSMTPSender_SendScheduledPurchaseNotification_NoFromEmail(t *testing.T) 
 	data := NotificationData{
 		DashboardURL:      "https://dashboard.example.com",
 		PlanName:          "Test Plan",
+		RecipientEmail:    "approver@example.com",
 		DaysUntilPurchase: 7,
 	}
 

@@ -91,8 +91,9 @@ func countPendingRows(t *testing.T, pg *testhelpers.PostgresContainer) int {
 // deadlock (40P01). Rounds alternate which side starts first.
 //
 // The forced case holds each transaction at its INSERT until both have
-// arrived (or 300ms pass), so without the lock both pass their checks before
-// either inserts; its 50ms head start makes each side win half the rounds.
+// arrived or the other is parked on the per-creator lock, so without the lock
+// both pass their checks before either inserts; its 50ms head start makes
+// each side win half the rounds.
 // The free case races with a sub-millisecond random lag.
 func TestRetrySuccessorRacesFreshSubmit(t *testing.T) {
 	pg, store := setupSubmitDB(t)
@@ -111,7 +112,7 @@ func TestRetrySuccessorRacesFreshSubmit(t *testing.T) {
 		lag        func() time.Duration
 		bothOrders bool
 	}{
-		{"forced interleaving", &Handler{config: &insertBarrierStore{PostgresStore: store, arrived: make(chan struct{}, 2), parties: 2, wait: 300 * time.Millisecond}},
+		{"forced interleaving", &Handler{config: &insertBarrierStore{PostgresStore: store, db: pg.DB.Pool(), arrived: make(chan struct{}, 2), parties: 2}},
 			8, func() time.Duration { return 50 * time.Millisecond }, true},
 		{"free race", &Handler{config: store}, 100, func() time.Duration { return time.Duration(rand.IntN(500)) * time.Microsecond }, false},
 	} {

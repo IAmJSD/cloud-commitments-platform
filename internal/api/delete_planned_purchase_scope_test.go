@@ -246,7 +246,11 @@ func TestRouterDispatch_DeletePlannedPurchase_OutOfScopeExecutionRefusedBeforeAn
 func TestRouterDispatch_DeletePlannedPurchase_PermissionRefusedBeforeScope(t *testing.T) {
 	f := newPlannedDeleteFixture(t, []config.CloudAccount{inScopeAccount(), outOfScopeAccount()}, scopedInAccount)
 	store := f.store
+	// The refusal comes before the lookup the fixture stubs; the
+	// AssertNotCalled below pins that.
+	relaxUnreachedStubs(&store.Mock, "GetExecutionByID")
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, scopedToken).Return(&Session{UserID: scopedUserID}, nil).Maybe()
 	mockAuth.grantPermissionsScoped([]auth.Permission{{Action: auth.ActionView, Resource: auth.ResourcePurchases}}, []string{scopedInAccount})
 	f.h.auth = mockAuth

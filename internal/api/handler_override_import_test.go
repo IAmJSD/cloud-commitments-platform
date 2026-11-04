@@ -194,6 +194,7 @@ func TestImportOverrides_CSVRejectsNaNCoverage(t *testing.T) {
 
 func TestImportOverrides_RequiresUpdateAccounts(t *testing.T) {
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", context.Background(), "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantPermissions(nil)
 	h := &Handler{auth: mockAuth, config: newOverrideTransferStore()}

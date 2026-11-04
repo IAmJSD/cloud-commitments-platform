@@ -10,11 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	"golang.org/x/sync/singleflight"
 )
 
 // Configuration constants.
@@ -48,13 +46,13 @@ const (
 type Service struct {
 	store       StoreInterface
 	emailSender EmailSenderInterface
-	lastUsedSFG singleflight.Group
 	// pendingUsage accumulates per-API-key request counts that have not yet
-	// been flushed to the store, keyed by API key ID. pendingUsageMu guards
-	// the map itself; the counters are incremented and drained atomically
-	// without it. See Service.RecordUsageAsync for why the count is buffered
-	// instead of incremented once per flush.
-	pendingUsage       map[string]*atomic.Int64
+	// been flushed to the store, keyed by API key ID, with a flag marking the
+	// key's single in-flight flusher. pendingUsageMu guards the map itself;
+	// the entries are updated atomically without it. See
+	// Service.RecordUsageAsync for why the count is buffered instead of
+	// incremented once per flush.
+	pendingUsage       map[string]*apiKeyUsageEntry
 	pendingUsageMu     sync.Mutex
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
 	dashboardURL       string
@@ -201,7 +199,7 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
-	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+	if accountLocked(user) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
@@ -216,6 +214,11 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	// previously-locked user, with no security benefit.
 
 	return user, nil
+}
+
+// accountLocked reports whether the user's lockout window is still open.
+func accountLocked(user *User) bool {
+	return user.LockedUntil != nil && time.Now().Before(*user.LockedUntil)
 }
 
 // verifyPasswordAndMFA verifies password and MFA code if enabled.

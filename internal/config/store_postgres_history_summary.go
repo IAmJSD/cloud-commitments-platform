@@ -34,6 +34,9 @@ type HistorySummaryFilter struct {
 	// nil leaves that side open.
 	ExecutionStart *time.Time
 	ExecutionEnd   *time.Time
+	// ExecutionDateExemptStatuses are not bounded by ExecutionStart/End: the
+	// History row path never date-filters actionable executions (#1685).
+	ExecutionDateExemptStatuses []string
 }
 
 // HistorySummaryGroups is the result of HistorySummaryAggregate: row counts and
@@ -100,6 +103,15 @@ const executionSummaryRecsKey = `CASE WHEN jsonb_typeof(recommendations) = 'arra
 		            FROM jsonb_array_elements(recommendations) WITH ORDINALITY AS r)
 		       ELSE '[]'::jsonb END`
 
+// executionDatePredicate renders one date bound; exemptIdx is the bind index of
+// the status list that skips the bound, or 0 for none.
+func executionDatePredicate(bound string, exemptIdx, argIdx int) string {
+	if exemptIdx == 0 {
+		return fmt.Sprintf(" AND %s $%d", bound, argIdx)
+	}
+	return fmt.Sprintf(" AND (status = ANY($%d) OR %s $%d)", exemptIdx, bound, argIdx)
+}
+
 // executionSummaryQuery builds the grouped purchase_executions query and its
 // bind args.
 func executionSummaryQuery(filter HistorySummaryFilter) (query string, args []any) {
@@ -109,13 +121,18 @@ func executionSummaryQuery(filter HistorySummaryFilter) (query string, args []an
 		args = append(args, filter.History.PlanID)
 		where += fmt.Sprintf(" AND plan_id = $%d", len(args))
 	}
+	exemptIdx := 0
+	if len(filter.ExecutionDateExemptStatuses) > 0 && (filter.ExecutionStart != nil || filter.ExecutionEnd != nil) {
+		args = append(args, filter.ExecutionDateExemptStatuses)
+		exemptIdx = len(args)
+	}
 	if filter.ExecutionStart != nil {
 		args = append(args, *filter.ExecutionStart)
-		where += fmt.Sprintf(" AND scheduled_date >= $%d", len(args))
+		where += executionDatePredicate("scheduled_date >=", exemptIdx, len(args))
 	}
 	if filter.ExecutionEnd != nil {
 		args = append(args, *filter.ExecutionEnd)
-		where += fmt.Sprintf(" AND scheduled_date <= $%d", len(args))
+		where += executionDatePredicate("scheduled_date <=", exemptIdx, len(args))
 	}
 	query = fmt.Sprintf(`
 		SELECT status, cloud_account_id, created_by_user_id, %s AS recs_key, COUNT(*)

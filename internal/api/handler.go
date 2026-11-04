@@ -46,9 +46,13 @@ type Handler struct {
 	issuerURL          string                          // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
 	isLambda           bool                            // Lambda mode from HandlerConfig.IsLambda; gates background goroutines
 
-	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
+	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config; load it through getBaseAWSConfig
 	awsCfg     aws.Config // cached base AWS config (no region override)
 	awsCfgErr  error      // error from loading the base config, if any
+	// loadAWSCfg loads the base AWS config for getBaseAWSConfig. Nil (the
+	// production default) means loadDefaultAWSConfig in provider_wiring.go;
+	// tests inject a stub to observe the context the load runs under.
+	loadAWSCfg func(context.Context) (aws.Config, error)
 
 	sourceIdentityOnce sync.Once       // guards one-time source identity resolution
 	sourceID           *sourceIdentity // cached source cloud identity
@@ -1144,15 +1148,13 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 		// Azure/GCP host: short-circuit before any AWS SDK work.
 		return "", "", nil
 	}
-	h.awsCfgOnce.Do(func() {
-		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
-	})
-	if h.awsCfgErr != nil {
+	awsCfg, err := h.getBaseAWSConfig(ctx)
+	if err != nil {
 		// AWS host but SDK config broken: real failure. Surface the
 		// error so security-sensitive callers fail closed.
-		return "", "", fmt.Errorf("aws sdk config load: %w", h.awsCfgErr)
+		return "", "", fmt.Errorf("aws sdk config load: %w", err)
 	}
-	client := sts.NewFromConfig(h.awsCfg)
+	client := sts.NewFromConfig(awsCfg)
 	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		logging.Warnf("Failed to resolve source account ID via STS: %v", err)

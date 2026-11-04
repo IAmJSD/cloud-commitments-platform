@@ -34,10 +34,13 @@ func pendingRegistrationFixture() *config.AccountRegistration {
 // newApproveRegistrationHandler wires an admin session and a pending
 // registration. The pre-#1102 steps are registered with .Maybe() so a
 // regression to them fails the AssertNotCalled checks instead of panicking.
-func newApproveRegistrationHandler(ctx context.Context, approveErr error) (*Handler, *MockConfigStore) {
+func newApproveRegistrationHandler(t *testing.T, ctx context.Context, approveErr error) (*Handler, *MockConfigStore) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	setupAdminAuth(ctx, mockAuth)
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetAccountRegistration", ctx, approveRegID).Return(pendingRegistrationFixture(), nil)
 	store.On("ApproveAccountRegistration", ctx, mock.Anything, mock.Anything, mock.Anything).Return(approveErr)
 	store.On("TransitionRegistrationStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -57,7 +60,7 @@ func assertNoPiecemealApproval(t *testing.T, store *MockConfigStore) {
 
 func TestApproveRegistration_ApprovesAndCreatesInOneStoreCall(t *testing.T) {
 	ctx := context.Background()
-	h, store := newApproveRegistrationHandler(ctx, nil)
+	h, store := newApproveRegistrationHandler(t, ctx, nil)
 
 	result, err := h.approveRegistration(ctx, adminRequest(approveRegBody), approveRegID)
 	require.NoError(t, err)
@@ -94,7 +97,7 @@ func TestApproveRegistration_StoreErrorsMapToResponses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			h, store := newApproveRegistrationHandler(ctx, tc.storeErr)
+			h, store := newApproveRegistrationHandler(t, ctx, tc.storeErr)
 
 			result, err := h.approveRegistration(ctx, adminRequest(approveRegBody), approveRegID)
 			assert.Nil(t, result)

@@ -218,14 +218,14 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 }
 
 // unrestrictedAccountAccess reports whether session passes
-// requireUnrestrictedAccountScope, the gate on POST
+// requireGlobalScope on view:recommendations, the gate on POST
 // /api/recommendations/refresh, by running that same check rather than a
 // copy of it. A scope lookup failure is logged and reported as false: the flag
 // only steers the UI (false skips an automatic refresh), the refresh endpoint
 // still enforces the scope itself, and failing the whole permissions response
 // would drop the frontend to its coarser group-based gating.
 func (h *Handler) unrestrictedAccountAccess(ctx context.Context, session *Session) bool {
-	err := h.requireUnrestrictedAccountScope(ctx, session)
+	err := h.requireGlobalScope(ctx, session, auth.ActionView, auth.ResourceRecommendations, refreshScopeMsg)
 	if err == nil {
 		return true
 	}
@@ -420,7 +420,7 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 	// request. Failing closed here would reveal infrastructure state (503 vs 200) to
 	// an enumerating attacker and harm legitimate users more than the enumeration risk.
 	if h.rateLimiter != nil {
-		allowed, err := h.rateLimiter.AllowWithEmail(ctx, pwdReq.Email, "forgot_password")
+		allowed, err := h.rateLimiter.AllowWithEmail(ctx, strings.ToLower(strings.TrimSpace(pwdReq.Email)), "forgot_password")
 		if err != nil {
 			logging.Errorf("ALERT: rate limiter error on forgot_password for %s; proceeding fail-open (02-M1): %v",
 				redactEmail(pwdReq.Email), err)
@@ -577,6 +577,7 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 //     another account holds the address; prevents account enumeration via the
 //     profile-update path (issue #929).
 //   - ErrUserChanged -> 409: the account changed after it was read (issue #474).
+//   - ErrInvalidEmail -> 400: the address is not a bare addr-spec (issue #104).
 //   - All other errors pass through unchanged for handleRequestError to render
 //     as 500.
 func mapProfileUpdateError(err error) error {
@@ -587,6 +588,8 @@ func mapProfileUpdateError(err error) error {
 		return NewClientError(409, "Unable to update email")
 	case errors.Is(err, auth.ErrUserChanged):
 		return NewClientError(409, auth.ErrUserChanged.Error())
+	case errors.Is(err, auth.ErrInvalidEmail):
+		return NewClientError(400, auth.ErrInvalidEmail.Error())
 	}
 	return err
 }

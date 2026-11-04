@@ -77,6 +77,7 @@ func wireRetryCarveout(t *testing.T, failed *config.PurchaseExecution, mockConfi
 func TestRetryCarveOut_PlainAdminIsRefused(t *testing.T) {
 	failed := retryCarveoutFailedExec()
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	h := wireRetryCarveout(t, failed, mockConfig, mockAuth, []auth.Permission{
 		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
@@ -118,6 +119,7 @@ func TestRetryCarveOut_PlainAdminIsRefused(t *testing.T) {
 func TestRetryCarveOut_AdminPurchaserIsAllowed(t *testing.T) {
 	failed := retryCarveoutFailedExec()
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockAuth := new(MockAuthService)
 	h := wireRetryCarveout(t, failed, mockConfig, mockAuth, []auth.Permission{
 		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},

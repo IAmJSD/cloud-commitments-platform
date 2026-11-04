@@ -102,6 +102,11 @@ func (s *Service) loginWithMFAToken(ctx context.Context, req LoginRequest) (*Log
 // claimMFALoginToken spends one attempt on the token and returns its user,
 // provided email names that user, the account may still sign in, MFA is
 // still on and the password has not changed since the token was issued.
+//
+// The user is read by the token's user ID, not by the submitted email, and
+// every refusal is ErrInvalidMFAToken: an unknown, expired or used token, an
+// email that is not the token's user's, and an inactive or locked account
+// all get the same answer.
 func (s *Service) claimMFALoginToken(ctx context.Context, tokenHash, email string) (*User, error) {
 	claim, err := s.store.ClaimMFALoginTokenAttempt(ctx, tokenHash, MaxMFALoginTokenAttempts)
 	if err != nil {
@@ -111,12 +116,24 @@ func (s *Service) claimMFALoginToken(ctx context.Context, tokenHash, email strin
 	if claim == nil {
 		return nil, ErrInvalidMFAToken
 	}
-	user, err := s.getUserAndValidateStatus(ctx, email)
+	user, err := s.store.GetUserByID(ctx, claim.UserID)
 	if err != nil {
-		return nil, err
+		logging.Warnf("Failed to load the user of an MFA login token: %v", err)
+		return nil, ErrInvalidMFAToken
 	}
-	if user.ID != claim.UserID || !user.MFAEnabled || user.PasswordVersion != claim.PasswordVersion {
+	if !mfaTokenUserMayContinue(user, claim, email) {
 		return nil, ErrInvalidMFAToken
 	}
 	return user, nil
+}
+
+// mfaTokenUserMayContinue reports whether the token's user is the one email
+// names, may sign in (active, not locked), still has MFA on and has the
+// password version the token was issued against. email is compared exactly,
+// as GetUserByEmail matches it.
+func mfaTokenUserMayContinue(user *User, claim *MFALoginToken, email string) bool {
+	if user == nil || user.Email != email || !user.Active || accountLocked(user) {
+		return false
+	}
+	return user.MFAEnabled && user.PasswordVersion == claim.PasswordVersion
 }

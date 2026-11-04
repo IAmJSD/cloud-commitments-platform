@@ -153,6 +153,23 @@ describe('Dashboard Module', () => {
   });
 
   describe('loadDashboard', () => {
+    // #1709: committed_monthly sums the active commitments' estimated monthly
+    // savings (handler_dashboard.go), not what they cost, so the card must not
+    // call it "committed".
+    test('Active Commitments detail names the figure as estimated savings', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 0, active_commitments: 3, committed_monthly: 500,
+        current_coverage: 70, target_coverage: 80, ytd_savings: 0, by_service: {},
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const tile = document.querySelector('#summary [data-kpi="commitments"]');
+      expect(tile?.textContent).toContain('$500/mo estimated savings');
+      expect(tile?.textContent).not.toContain('committed');
+    });
+
     test('fetches dashboard summary and upcoming purchases', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
@@ -174,6 +191,54 @@ describe('Dashboard Module', () => {
       // not a literal 'all' — '' is the "All Providers" sentinel.
       expect(api.getDashboardSummary).toHaveBeenCalledWith('', []);
       expect(api.getUpcomingPurchases).toHaveBeenCalled();
+    });
+
+    // #1686: the YTD figure is monthly estimated savings times elapsed months,
+    // not recorded savings, so its caption must say so.
+    test('labels YTD Savings as an estimate', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 0, active_commitments: 1, committed_monthly: 10,
+        current_coverage: 50, target_coverage: 80, ytd_savings: 5000, by_service: {},
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const ytd = document.querySelector('#summary [data-kpi="ytd"]') ?? document.getElementById('summary');
+      expect(ytd?.textContent).toContain('Estimated from active commitments');
+      expect(ytd?.textContent).not.toContain('From commitment purchases');
+    });
+
+    // #1686: the per-service card shares the KPI cards' loading treatment.
+    test('shows a per-service loading skeleton until the chart renders', async () => {
+      const loading = document.createElement('div');
+      loading.id = 'savings-by-service-loading';
+      document.getElementById('savings-by-service-section')?.appendChild(loading);
+      let resolve!: (v: unknown) => void;
+      (api.getDashboardSummary as jest.Mock).mockReturnValue(new Promise(r => { resolve = r; }));
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      const done = loadDashboard();
+      expect(loading.querySelector('.skeleton')).not.toBeNull();
+
+      resolve({ total_recommendations: 0, active_commitments: 0, by_service: {} });
+      await done;
+      expect(loading.querySelector('.skeleton')).toBeNull();
+    });
+
+    test('clears the per-service loading skeleton when the dashboard fails to load', async () => {
+      const loading = document.createElement('div');
+      loading.id = 'savings-by-service-loading';
+      document.getElementById('savings-by-service-section')?.appendChild(loading);
+      (api.getDashboardSummary as jest.Mock).mockRejectedValue(new Error('boom'));
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      expect(loading.querySelector('.skeleton')).toBeNull();
+      const empty = document.getElementById('savings-by-service-empty');
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      expect(empty?.textContent).toBe('Potential savings could not be loaded. Reload the page to try again.');
     });
 
     test('renders dashboard summary', async () => {
@@ -742,6 +807,13 @@ describe('Dashboard Module', () => {
         expect(document.activeElement).toBe(viewBtn);
       });
 
+      // #1653: opening the dialog must not put focus on the destructive action.
+      test('initial focus lands on Close, not Cancel Purchase', async () => {
+        const { modal } = await openDetails();
+        expect(modal.querySelector('#cancel-purchase-detail-btn')).not.toBeNull();
+        expect(document.activeElement?.id).toBe('close-purchase-details-btn');
+      });
+
       test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
         const { modal } = await openDetails();
         let finishDelete: () => void = () => {};
@@ -1123,6 +1195,138 @@ describe('Dashboard Module', () => {
       (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
     });
 
+    // #1686: the empty state is about the selected range, not the account's
+    // whole history, and a failed fetch must not read as "no history".
+    describe('empty and error states name what happened (#1686)', () => {
+      const selectRange = async (range: string): Promise<void> => {
+        const btn = document.createElement('button');
+        btn.className = 'trend-range';
+        btn.dataset['range'] = range;
+        document.body.appendChild(btn);
+        setupSavingsTrendHandlers();
+        btn.click();
+        await new Promise(r => setTimeout(r, 0));
+      };
+      const emptyText = (): string => document.getElementById('savings-trend-empty')?.textContent ?? '';
+
+      test('a short range with no points names the range and points to 1y', async () => {
+        await selectRange('90');
+        expect(emptyText()).toContain('No savings recorded in the last 90 days.');
+        expect(emptyText()).toContain('1y');
+        expect(emptyText()).not.toContain('No purchase history yet');
+      });
+
+      test('the 1y range with no points names the year and offers no longer range', async () => {
+        await selectRange('all');
+        expect(emptyText()).toContain('No savings recorded in the last year.');
+        expect(emptyText()).not.toContain('1y');
+      });
+
+      test('an active filter is named alongside the range', async () => {
+        (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-3']);
+        await selectRange('30');
+        expect(emptyText()).toContain('No savings recorded in the last 30 days for');
+        expect(emptyText()).toContain('uuid-acct-3');
+      });
+
+      test('a fetch error shows an error, not an empty or "not yet" state', async () => {
+        (api.getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('503'));
+        await loadSavingsTrendChart();
+        expect(emptyText()).toBe('Savings history could not be loaded. Reload the page to try again.');
+      });
+
+      test('shows a loading skeleton until the fetch settles', async () => {
+        const loading = document.createElement('div');
+        loading.id = 'savings-trend-loading';
+        document.body.appendChild(loading);
+        let resolve!: (v: { data_points: [] }) => void;
+        (api.getSavingsAnalytics as jest.Mock).mockReturnValue(new Promise(r => { resolve = r; }));
+
+        const done = loadSavingsTrendChart();
+        expect(loading.querySelector('.skeleton')).not.toBeNull();
+        // The skeleton stands in for the canvas rather than stacking above it.
+        expect(document.getElementById('savings-trend-chart')?.classList.contains('hidden')).toBe(true);
+
+        resolve({ data_points: [] });
+        await done;
+        expect(loading.querySelector('.skeleton')).toBeNull();
+      });
+
+      const addLoading = (): HTMLElement => {
+        const loading = document.createElement('div');
+        loading.id = 'savings-trend-loading';
+        document.body.appendChild(loading);
+        return loading;
+      };
+      const pending = (): ((v: unknown) => void) => {
+        let resolve!: (v: unknown) => void;
+        (api.getSavingsAnalytics as jest.Mock).mockReturnValueOnce(new Promise(r => { resolve = r; }));
+        return (v) => resolve(v);
+      };
+      const points = [
+        { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+        { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 150 },
+      ];
+
+      test('a reload with a chart already drawn keeps the chart and shows no skeleton', async () => {
+        const loading = addLoading();
+        (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: points });
+        await loadSavingsTrendChart();
+        expect(document.getElementById('savings-trend-chart')?.classList.contains('hidden')).toBe(false);
+
+        const resolve = pending();
+        const done = loadSavingsTrendChart();
+        expect(loading.querySelector('.skeleton')).toBeNull();
+        expect(document.getElementById('savings-trend-chart')?.classList.contains('hidden')).toBe(false);
+        resolve({ data_points: points });
+        await done;
+      });
+
+      test('an older load settling after a newer one leaves the newer load\'s skeleton', async () => {
+        const loading = addLoading();
+        await loadSavingsTrendChart(); // empty: no chart drawn
+        const resolveOld = pending();
+        const older = loadSavingsTrendChart();
+        const resolveNew = pending();
+        const newer = loadSavingsTrendChart();
+
+        resolveOld({ data_points: [] });
+        await older;
+        expect(loading.querySelector('.skeleton')).not.toBeNull();
+
+        resolveNew({ data_points: [] });
+        await newer;
+        expect(loading.querySelector('.skeleton')).toBeNull();
+      });
+
+      test('the previous range\'s empty text is hidden while the next range loads', async () => {
+        addLoading();
+        await loadSavingsTrendChart(); // empty state shown
+        expect(document.getElementById('savings-trend-empty')?.classList.contains('hidden')).toBe(false);
+
+        const resolve = pending();
+        const done = loadSavingsTrendChart();
+        expect(document.getElementById('savings-trend-empty')?.classList.contains('hidden')).toBe(true);
+        resolve({ data_points: [] });
+        await done;
+      });
+
+      test('a failed dashboard load clears the trend skeleton and says the load failed', async () => {
+        const loading = addLoading();
+        await loadSavingsTrendChart(); // no chart drawn
+        (api.getDashboardSummary as jest.Mock).mockRejectedValue(new Error('boom'));
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        const summary = document.createElement('div');
+        summary.id = 'summary';
+        document.body.appendChild(summary);
+
+        await loadDashboard();
+
+        expect(loading.querySelector('.skeleton')).toBeNull();
+        expect(emptyText()).toBe('Savings history could not be loaded. Reload the page to try again.');
+      });
+    });
+
     // #747: a slower, older response must not overwrite a newer one.
     describe('stale-response guard (#747)', () => {
       type Deferred = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
@@ -1327,7 +1531,7 @@ describe('Dashboard Module', () => {
       const empty = document.getElementById('savings-trend-empty');
       expect(canvas?.classList.contains('hidden')).toBe(true);
       expect(empty?.classList.contains('hidden')).toBe(false);
-      expect(empty?.textContent).toContain('No purchase history yet');
+      expect(empty?.textContent).toContain('No savings recorded in the last');
     });
 
     test('x-axis min/max spans the selected window regardless of data point dates (QA 3.1)', async () => {
@@ -1655,7 +1859,7 @@ describe('Dashboard Module', () => {
 
       const empty = document.getElementById('savings-trend-empty');
       expect(empty?.classList.contains('hidden')).toBe(false);
-      expect(empty?.textContent).toContain('No purchase history yet');
+      expect(empty?.textContent).toContain('No savings recorded in the last');
     });
 
     test('empty-state names the provider when a provider filter is active (issue #498, QA 2.3)', async () => {
@@ -1672,7 +1876,7 @@ describe('Dashboard Module', () => {
       expect(empty?.classList.contains('hidden')).toBe(false);
       // Provider name (uppercased by buildFilterDesc) appears in the message.
       expect(empty?.textContent).toContain('AWS');
-      expect(empty?.textContent).toContain('No savings history for');
+      expect(empty?.textContent).toMatch(/No savings recorded in the last (\d+ days|year) for /);
     });
 
     test('loadSavingsTrendChart forwards the provider chip to the analytics API (issue #498, QA 2.3)', async () => {
@@ -2013,8 +2217,13 @@ describe('Dashboard Module', () => {
           const label = document.getElementById('savings-by-service-chart')?.getAttribute('aria-label') ?? '';
           // ec2: 40 current + 60 lowest option + 200 upside = 300; rds: 50. Total 350.
           expect(label).toContain('2 services');
-          expect(label).toContain('$350 in total');
-          expect(label).toContain('Largest: ec2 at $300');
+          // #1649: the text alternative uses the same names as the axis.
+          expect(label).toContain('Largest: EC2 at $300');
+          // #1686: the bar total includes committed savings and each service's
+          // highest option, so say so instead of a bare "in total" that reads
+          // as a third "potential savings" figure next to the KPI range.
+          expect(label).toContain('The bars add up to $350');
+          expect(label).toContain('not the Potential Monthly Savings range');
         });
 
         test('lists every layer value per service in a "View as table" disclosure', () => {
@@ -2026,9 +2235,10 @@ describe('Dashboard Module', () => {
           expect(document.querySelector('#savings-by-service-table summary')?.textContent).toBe('View as table');
           const headers = Array.from(document.querySelectorAll('#savings-by-service-table thead th')).map((th) => th.textContent);
           expect(headers).toEqual(['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total']);
+          // #1649: display names, matching the chart axis.
           expect(tableRows()).toEqual([
-            ['ec2', '$40', '$60', '$200', '$300'],
-            ['rds', '$0', '$50', '$0', '$50'],
+            ['EC2', '$40', '$60', '$200', '$300'],
+            ['RDS', '$0', '$50', '$0', '$50'],
           ]);
         });
 
@@ -2051,9 +2261,10 @@ describe('Dashboard Module', () => {
           buildDOM();
           renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
           const calls = (Chart as unknown as jest.Mock).mock.calls;
-          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { top: number }; borderColor: string }[] } }).data.datasets;
+          // The bars are horizontal, so each segment's gap is on its right (end) edge.
+          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { right: number }; borderColor: string }[] } }).data.datasets;
           for (const d of datasets) {
-            expect(d.borderWidth.top).toBe(2);
+            expect(d.borderWidth.right).toBe(2);
             expect(d.borderColor).toBe('#ffffff');
           }
         });

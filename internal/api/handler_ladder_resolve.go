@@ -69,6 +69,8 @@ func (h *Handler) resolveLadderTranche(ctx context.Context, req *events.LambdaFu
 	if err != nil {
 		return nil, err
 	}
+	// Verb and admin-key refusal here; the tranche's own account and provider
+	// are checked against the grant in authorizeLadderResolveScope.
 	if grantErr := h.requireAutoPurchaseGrant(ctx, req, session); grantErr != nil {
 		return nil, grantErr
 	}

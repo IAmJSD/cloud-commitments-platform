@@ -82,6 +82,12 @@ let accountChip: ChipSelectHandle | null = null;
 // call has started, preventing stale responses from overwriting fresh options.
 let _accountRequestGen = 0;
 
+// Set when the last account list request failed, so opening the chip retries
+// it instead of leaving a lone "All Accounts" that reads as "no accounts"
+// (issue #1693).
+let accountsLoadFailed = false;
+const ACCOUNTS_LOAD_FAILED_NOTICE = "Couldn't load accounts. Close and reopen this menu to try again.";
+
 /**
  * Build the account chip's option list from the current provider context.
  * Always includes the "All Accounts" option at the top.
@@ -108,10 +114,14 @@ async function populateAccountOptions(provider: string): Promise<void> {
         label: `${a.name} (${a.external_id})`,
       })),
     ];
+    accountsLoadFailed = false;
+    accountChip.setNotice(null);
     accountChip.setOptions(options);
   } catch (err) {
     if (gen !== _accountRequestGen) return;
     console.warn('topbar-filters: failed to list accounts for chip:', err);
+    accountsLoadFailed = true;
+    accountChip.setNotice(ACCOUNTS_LOAD_FAILED_NOTICE);
     accountChip.setOptions([{ value: '', label: 'All Accounts' }]);
   }
 }
@@ -152,6 +162,7 @@ export function initTopbarFilters(): void {
   while (slot.firstChild) slot.removeChild(slot.firstChild);
   providerChip = null;
   accountChip = null;
+  accountsLoadFailed = false;
 
   providerChip = createChipSelect({
     label: 'Provider',
@@ -181,6 +192,14 @@ export function initTopbarFilters(): void {
     // populateAccountOptions resolves.
     options: [{ value: '', label: 'All Accounts' }],
     value: state.getCurrentAccountIDs()[0] ?? '',
+    onOpen: () => {
+      if (!accountsLoadFailed) return;
+      // Cleared until this retry settles, so reopening meanwhile doesn't fire
+      // another request; a second failure sets it again.
+      accountsLoadFailed = false;
+      accountChip?.setNotice('Loading accounts…');
+      void populateAccountOptions(state.getCurrentProvider());
+    },
     onChange: (newAccountId) => {
       state.setCurrentAccountIDs(newAccountId ? [newAccountId] : []);
       // Issue #477: keep URL in sync with the new account selection.

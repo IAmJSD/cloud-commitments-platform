@@ -180,18 +180,6 @@
     margin: 0;     /* override the legacy `main` rule below */
 }
 
-/* Narrow viewports: collapse sidebar to icon-only automatically.
- * Don't introduce new responsive behaviour — just keep the existing
- * desktop ≥ 1024px experience intact and degrade gracefully below. */
-@media (max-width: 900px) {
-    .app-sidebar {
-        width: var(--cudly-sidebar-w-collapsed);
-    }
-    .app-sidebar .sidebar-label {
-        display: none;
-    }
-}
-
 /* ------------------------------------------------------------------------- */
 
 header {

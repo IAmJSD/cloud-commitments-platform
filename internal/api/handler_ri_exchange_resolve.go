@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -84,7 +86,7 @@ func (h *Handler) resolveRIExchange(ctx context.Context, req *events.LambdaFunct
 	if err != nil {
 		return nil, err
 	}
-	if constraintErr := h.requireRIExchangeResolveConstraints(ctx, session, check.Region); constraintErr != nil {
+	if constraintErr := h.requireRIExchangeResolveConstraints(ctx, session, id, check.Region); constraintErr != nil {
 		return nil, constraintErr
 	}
 	store, ok := h.config.(config.RIExchangeResolveStore)
@@ -108,18 +110,56 @@ func (h *Handler) resolveRIExchange(ctx context.Context, req *events.LambdaFunct
 // requireRIExchangeResolveConstraints applies the Constraints on the granting
 // execute:ri-exchange permission, as the direct execute endpoint does. The
 // region is the operator's checked_region, which the store requires to equal
-// the exchange's own region.
-func (h *Handler) requireRIExchangeResolveConstraints(ctx context.Context, session *Session, region string) error {
+// the exchange's own region. When the grant carries an amount cap, it must
+// cover the hold's payment_due (USD, like the daily cap it is reserved
+// against); a grant without a cap skips the lookup.
+func (h *Handler) requireRIExchangeResolveConstraints(ctx context.Context, session *Session, id, region string) error {
 	cloudAccountID, err := h.resolveReshapeCloudAccountIDOrUnattributed(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
 	}
-	return h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{{
+	c := auth.PermissionConstraints{
 		AccountIDs: []string{cloudAccountID},
 		Providers:  []string{string(common.ProviderAWS)},
 		Services:   []string{string(common.ServiceEC2)},
 		Regions:    []string{region},
-	}})
+	}
+	check := func(amount float64) error {
+		c.MaxPurchaseAmount = amount
+		return h.requirePermissionConstraints(ctx, session, "execute", "ri-exchange", []auth.PermissionConstraints{c})
+	}
+	// An unmatchable amount passes only when no granting permission caps it.
+	if check(math.MaxFloat64) == nil {
+		return nil
+	}
+	if otherErr := check(0); otherErr != nil {
+		return otherErr
+	}
+	due, err := h.riExchangeHoldAmount(ctx, id)
+	if err != nil {
+		return err
+	}
+	return check(due)
+}
+
+// riExchangeHoldAmount reads the hold's payment_due, refusing a value that is
+// not a finite non-negative number.
+func (h *Handler) riExchangeHoldAmount(ctx context.Context, id string) (float64, error) {
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if errors.Is(err, config.ErrNotFound) {
+		return 0, errNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	if record == nil {
+		return 0, errNotFound
+	}
+	due, err := strconv.ParseFloat(record.PaymentDue, 64)
+	if err != nil || math.IsNaN(due) || math.IsInf(due, 0) || due < 0 {
+		return 0, fmt.Errorf("unreadable hold amount on exchange %s", id)
+	}
+	return due, nil
 }
 
 func mapRIExchangeResolveError(err error) error {

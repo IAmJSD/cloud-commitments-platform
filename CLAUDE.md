@@ -22,6 +22,8 @@
 - `internal/`: backend application code (API, auth, purchase, scheduler, ...)
 - `frontend/`: TypeScript web frontend (webpack + jest)
 - `terraform/`, `cloudformation/`, `arm/`, `iac/`: infrastructure as code
+  (Terraform is the only install path; the CloudFormation and ARM templates
+  create CUDly's role in target accounts)
 - `docs/`: documentation and markdown files
 - `scripts/`: utility scripts
 - `tests/`: end-to-end tests (Go unit tests live next to the code they test)

@@ -97,7 +97,9 @@ func TestHandleRequest_RevokeCalculate_AzureQuote(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
 			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			mockAuth.On("ValidateSession", mock.Anything, "tok").Return(revokeAdminSession(), nil)
 			r := armReservationRecord()
 			mockStore.On("GetPurchaseHistoryByPurchaseID", mock.Anything, r.PurchaseID).Return(r, nil)

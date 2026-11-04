@@ -88,6 +88,7 @@ func lookupCallers() []lookupCaller {
 func newLookupService(ctx context.Context, t *testing.T, c lookupCaller, user *User, err error) *Service {
 	t.Helper()
 	m := new(MockStore)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	c.setup(ctx, m)
 	m.On("GetUserByID", ctx, lookupUserID).Return(user, err)
 	return createTestService(m, new(MockEmailSender))

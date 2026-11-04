@@ -25,9 +25,11 @@ var (
 // TestNoUnscopedRecommendationsDelete guards #159. ReplaceRecommendations ran
 // `DELETE FROM recommendations` with no WHERE, so any caller handing it a
 // partial or empty snapshot would have wiped every account's rows, not only
-// its own. It had no production caller and was removed. The only production
-// delete left on the table is UpsertRecommendations' eviction, which is
-// scoped to the (provider, account) pairs that collected successfully.
+// its own. It had no production caller and was removed. The production
+// deletes left on the table are UpsertRecommendations' eviction, which is
+// scoped to the (provider, account) pairs that collected successfully, and
+// PruneStaleRecommendations, which is scoped to the pairs with no row
+// collected inside the retention window (issue #120).
 //
 // This scans every non-test Go file under internal/ and cmd/ for a string
 // literal that deletes from recommendations without a WHERE in the same

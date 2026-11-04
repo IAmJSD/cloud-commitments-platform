@@ -16,12 +16,19 @@
     min-height: 280px;
 }
 
-/* Savings-by-service chart needs more vertical space to show multiple
- * stacked bars legibly. Scoped to this canvas only so other charts are
- * unaffected (issue #769 follow-up). */
+/* Savings-by-service chart: horizontal bars whose height dashboard.ts sets
+ * inline from the bar count (36px a row). These bounds only apply before the
+ * first render and cap a long list. */
 #savings-by-service-chart {
     max-height: 600px;
-    min-height: 560px;
+    min-height: 160px;
+}
+
+/* One-line unit / scope note under a chart heading. */
+.chart-section .chart-note {
+    margin: calc(-1 * var(--cudly-sp-3)) 0 var(--cudly-sp-3);
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
 }
 
 /* Empty state for chart sections stays centred and occupies roughly

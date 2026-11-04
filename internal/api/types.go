@@ -172,6 +172,11 @@ type SchedulerInterface interface {
 	// byte-wise ID order, chunkSize store rows at a time, calling fn with
 	// each chunk's survivors (issue #981).
 	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
+	// PageRecommendations returns one page of the list and the summary of
+	// the whole filtered set with every filter evaluated in SQL (issue
+	// #981). An error wrapping scheduler.ErrRecommendationsPageNeedsScan
+	// means the request must be served by ScanRecommendations instead.
+	PageRecommendations(ctx context.Context, scope config.RecommendationListScope, afterID string, limit int) (*config.RecommendationPage, error)
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by
@@ -659,7 +664,9 @@ type DashboardSummaryResponse struct {
 	PotentialMonthlySavings float64                   `json:"potential_monthly_savings"`
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
-	CommittedMonthly        float64                   `json:"committed_monthly"`
+	// CommittedMonthly is the estimated monthly savings of the active
+	// commitments (the sum of their EstimatedSavings), not their cost (#1709).
+	CommittedMonthly float64 `json:"committed_monthly"`
 	// CurrentCoverage is null when there is neither committed nor potential
 	// savings to measure (0/0), instead of a fabricated 100% (issue #72).
 	CurrentCoverage *float64 `json:"current_coverage"`
@@ -829,7 +836,7 @@ type PlannedPurchase struct {
 // PlanRequest represents the API request format for creating/updating plans
 // The frontend sends ramp_schedule as a string, which we convert to the proper struct.
 type PlanRequest struct {
-	Payment                string   `json:"payment,omitempty"`
+	Payment                *string  `json:"payment,omitempty"`
 	Description            string   `json:"description,omitempty"`
 	RampSchedule           string   `json:"ramp_schedule,omitempty"`
 	Name                   string   `json:"name"`
@@ -837,7 +844,7 @@ type PlanRequest struct {
 	Service                string   `json:"service,omitempty"`
 	TargetAccounts         []string `json:"target_accounts,omitempty"`
 	TargetCoverage         *int     `json:"target_coverage,omitempty"`
-	Term                   int      `json:"term,omitempty"`
+	Term                   *int     `json:"term,omitempty"`
 	NotificationDaysBefore int      `json:"notification_days_before"`
 	CustomStepPercent      int      `json:"custom_step_percent,omitempty"`
 	CustomIntervalDays     int      `json:"custom_interval_days,omitempty"`
@@ -856,6 +863,18 @@ func (r *PlanRequest) validateTargetCoverage() error {
 		return NewClientError(400, "target_coverage must be between 1 and 100 for a purchase plan")
 	}
 	return nil
+}
+
+// omittedFields records which service fields an update request left out, so
+// the overlay keeps the stored values instead of the create defaults.
+type omittedFields struct{ Coverage, Term, Payment bool }
+
+func (r *PlanRequest) omittedFields() omittedFields {
+	return omittedFields{
+		Coverage: r.TargetCoverage == nil,
+		Term:     r.Term == nil || *r.Term == 0,
+		Payment:  r.Payment == nil || *r.Payment == "",
+	}
 }
 
 // toPurchasePlan converts a PlanRequest to a config.PurchasePlan.
@@ -927,14 +946,15 @@ func (r *PlanRequest) buildServiceConfig() map[string]config.ServiceConfig {
 		return nil
 	}
 
-	term := r.Term
-	if term == 0 {
-		term = 3
+	// nil or zero is an omitted field; create defaults it, update keeps the stored value.
+	term := 3
+	if r.Term != nil && *r.Term != 0 {
+		term = *r.Term
 	}
 
-	payment := r.Payment
-	if payment == "" {
-		payment = "no-upfront"
+	payment := "no-upfront"
+	if r.Payment != nil && *r.Payment != "" {
+		payment = *r.Payment
 	}
 
 	// nil is an omitted field (create defaults it to 80); an explicit value is kept as sent.
