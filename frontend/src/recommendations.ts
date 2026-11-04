@@ -70,6 +70,11 @@ let checkedPurchaseModalInitialised = false;
 // it after its override fetch so only the newest open renders and sets
 // submit state (issue #430).
 let purchaseModalOpenToken = 0;
+
+/** Identifies the current purchase-modal session; changes on every open. */
+export function getPurchaseModalSession(): number {
+  return purchaseModalOpenToken;
+}
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
 // Whether the last account-list fetch returned any accounts; null when it
