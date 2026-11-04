@@ -7,10 +7,12 @@
  * Layout (styles/ladder-form.css): labels sit above their inputs, the short
  * fields pair up in a two-column grid that collapses to one column on narrow
  * screens, and range/unit qualifiers live in a muted hint under each input.
- * The header stays put while the body scrolls on short viewports.
+ * The header stays put while the body scrolls on short viewports. The ramp
+ * schedule is a step editor (ladder-ramp-editor.ts) over the JSON textarea.
  */
 
 import { iconSvg } from './icons';
+import { RAMP_PRESETS } from './ladder-ramp-schedule';
 
 export function renderLadderConfigModal(): string {
   return `
@@ -122,15 +124,37 @@ export function renderLadderConfigModal(): string {
           <span id="ladder-cfg-max-actions-hint" class="form-hint">Between 1 and 50</span>
         </div>
 
-        <div class="ladder-field ladder-field-full">
-          <label for="ladder-cfg-ramp-schedule">Ramp Schedule (JSON)</label>
-          <textarea id="ladder-cfg-ramp-schedule" rows="8" spellcheck="false" aria-describedby="ladder-cfg-ramp-schedule-hint"
-                    placeholder='{"steps":[{"after_days":0,"fraction":1.0}]}'></textarea>
-          <span id="ladder-cfg-ramp-schedule-hint" class="form-hint">
-            An array of steps. Each step has <code>after_days</code> (integer) and
-            <code>fraction</code> (0&ndash;1). Fractions must sum to 1.0.
-            Example: immediate &mdash; <code>{"steps":[{"after_days":0,"fraction":1.0}]}</code>
-          </span>
+        <div class="ladder-field-full ramp-editor" role="group" aria-labelledby="ladder-ramp-label">
+          <div class="ramp-editor-head">
+            <span class="ramp-editor-label" id="ladder-ramp-label">Ramp Schedule</span>
+            <button type="button" class="btn-link ramp-json-toggle" id="ladder-ramp-json-toggle"
+                    aria-expanded="false" aria-controls="ladder-ramp-json">Edit as JSON</button>
+          </div>
+          <div class="ramp-bar" id="ladder-ramp-bar" aria-hidden="true"></div>
+          <p class="ramp-summary" id="ladder-ramp-summary" aria-live="polite"></p>
+          <div class="ramp-steps-head" aria-hidden="true">
+            <span>Step</span><span>After (days)</span><span>Share (%)</span>
+          </div>
+          <ol class="ramp-steps" id="ladder-ramp-steps"></ol>
+          <div class="ramp-actions">
+            <button type="button" class="btn btn-secondary ramp-add" id="ladder-ramp-add">Add step</button>
+            <div class="ramp-presets" role="group" aria-labelledby="ladder-ramp-presets-label">
+              <span id="ladder-ramp-presets-label">Presets:</span>
+              ${RAMP_PRESETS.map(p => `<button type="button" class="btn-link" data-preset="${p.id}" title="${p.title}">${p.label}</button>`).join('')}
+            </div>
+          </div>
+          <div class="ramp-json" id="ladder-ramp-json" hidden>
+            <label for="ladder-cfg-ramp-schedule">Ramp Schedule (JSON)</label>
+            <textarea id="ladder-cfg-ramp-schedule" rows="8" spellcheck="false"
+                      aria-describedby="ladder-cfg-ramp-schedule-hint ladder-cfg-ramp-schedule-error"
+                      placeholder='{"steps":[{"after_days":0,"fraction":1.0}]}'></textarea>
+            <p id="ladder-cfg-ramp-schedule-error" class="field-error" hidden></p>
+            <span id="ladder-cfg-ramp-schedule-hint" class="form-hint">
+              An array of steps. Each step has <code>after_days</code> (integer) and
+              <code>fraction</code> (0&ndash;1). Fractions must sum to 1.0.
+              Example: immediate &mdash; <code>{"steps":[{"after_days":0,"fraction":1.0}]}</code>
+            </span>
+          </div>
         </div>
 
         <div class="modal-footer ladder-field-full">
