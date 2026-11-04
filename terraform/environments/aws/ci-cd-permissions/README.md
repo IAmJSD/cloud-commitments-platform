@@ -9,7 +9,7 @@ CI/CD pipeline uses to deploy infrastructure on AWS. It optionally sets up keyle
 | Resource | Purpose |
 | --- | --- |
 | `aws_iam_role.cudly_deploy` | The deploy role; assumed by GitHub Actions or a human operator |
-| `aws_iam_policy.networking` | VPC, subnets, security groups, ALB, ECS cluster |
+| `aws_iam_policy.networking` | VPC, subnets, security groups, ALB, ECS cluster, and the persistent fck-nat ENI (`ec2:CreateNetworkInterface`, `ec2:ModifyNetworkInterfaceAttribute`, `ec2:DetachNetworkInterface`, added for #716; re-apply before merging the change that creates it) |
 | `aws_iam_policy.compute` | ECS services/tasks, ECR, CloudWatch Logs, SSM |
 | `aws_iam_policy.compute_b` | Overflow for `aws_iam_policy.compute`, which is close to the 6144-character managed-policy limit |
 | `aws_iam_policy.data` | RDS, ElastiCache, S3 (state bucket), Secrets Manager |

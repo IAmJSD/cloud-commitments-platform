@@ -118,6 +118,37 @@ The `enable_nat_gateway` option deploys a cost-effective NAT alternative:
   boot, so egress survives the ASG replacing the instance. With an existing
   VPC, route private subnets to the `nat_network_interface_id` output.
 
+### Rollback runbook (persistent ENI, #716)
+
+If egress from the private subnets is down after the apply that introduced the
+persistent ENI, run `rollback.yml` against the pre-merge `main` SHA first. Note
+that `rollback.yml` applies the environment root from that ref's checkout.
+
+Fallback by hand, when the workflow cannot run. Placeholders: `<eni-id>` is the
+`nat_network_interface_id` output, `<instance-id>` the running fck-nat instance
+(`nat_autoscaling_group_name` output, then `aws autoscaling describe-auto-scaling-groups`),
+`<rtb-id>` each private route table.
+
+```bash
+# 1. Is the ENI attached as the instance's second interface?
+aws ec2 describe-network-interfaces --network-interface-ids <eni-id> \
+  --query 'NetworkInterfaces[0].Attachment'
+
+# 2. If not, attach it by hand (device index 1; the instance must be in the ENI's AZ).
+aws ec2 attach-network-interface --network-interface-id <eni-id> \
+  --instance-id <instance-id> --device-index 1
+
+# 3. If the route is a blackhole, point it back at a working target
+#    (the instance's primary ENI, or the ENI once step 2 succeeded).
+aws ec2 replace-route --route-table-id <rtb-id> \
+  --destination-cidr-block 0.0.0.0/0 --network-interface-id <eni-id>
+```
+
+A persistent attach failure shows as an instance replaced about every 5 minutes
+(`aws autoscaling describe-scaling-activities --auto-scaling-group-name <asg-name>`):
+user data bounds the service restart at 300 s and powers the instance off, and
+the launch template's `terminate` shutdown behaviour has the ASG replace it.
+
 ## Security Groups
 
 The module creates:
