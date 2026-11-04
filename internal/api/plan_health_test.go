@@ -149,7 +149,7 @@ func TestComputePlanHealth_FailedExecutionsPenaltyCapsAtFour(t *testing.T) {
 	assert.Equal(t, 100-40, score)
 }
 
-func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFour(t *testing.T) {
+func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFourAndCountsBothSpellings(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	plan := config.PurchasePlan{
 		Enabled: true,
@@ -160,10 +160,11 @@ func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFour(t *testing.T) {
 			StartDate:        now.AddDate(0, 0, -1),
 		},
 	}
-	// 5 canceled; penalty caps at 4 * 5 = 20 but the note reports the true
-	// count of 5.
+	// 3 canonical + 2 legacy-spelled = 5 total canceled; penalty caps at
+	// 4 * 5 = 20 but the note reports the true count of 5.
 	execCounts := counts(map[string]int{
-		config.StatusCanceled: 5,
+		config.StatusCanceled:       3,
+		config.LegacyStatusCanceled: 2,
 	})
 
 	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})

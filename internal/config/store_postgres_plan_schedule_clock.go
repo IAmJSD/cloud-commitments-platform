@@ -129,7 +129,7 @@ func managedPlanNextRoot(plan *PurchasePlan, rows []PurchaseExecution) (*Purchas
 		if row.StepNumber != plan.RampSchedule.CurrentStep+1 {
 			continue
 		}
-		if row.Status == StatusCanceled {
+		if row.Status == StatusCanceled || row.Status == LegacyStatusCanceled {
 			blocked = blocked || managedRootPriorAction(row)
 			continue
 		}
