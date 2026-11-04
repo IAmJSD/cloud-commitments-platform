@@ -84,6 +84,7 @@ func suppressionRows(n int) *pgxmock.Rows {
 func TestPGXMock_ListActiveSuppressions_ReturnsEveryRowAboveMaxListLimit(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
+	expectAZConfigReady(mock)
 	mock.ExpectQuery(`(?s)FROM purchase_suppressions\s+WHERE expires_at > NOW\(\)\s*$`).
 		WillReturnRows(suppressionRows(MaxListLimit + 5))
 

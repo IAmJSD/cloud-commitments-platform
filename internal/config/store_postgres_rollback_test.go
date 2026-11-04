@@ -38,23 +38,24 @@ func captureConfigLogs(t *testing.T, level logging.Level) *bytes.Buffer {
 // is primed with only Begin and Rollback, so the first statement inside the
 // transaction fails as unexpected and the deferred rollback runs.
 var rollbackSites = []struct {
-	name string
-	op   string
-	run  func(ctx context.Context, s *PostgresStore) error
+	name  string
+	op    string
+	gated bool // runs the az_config schema gate before Begin
+	run   func(ctx context.Context, s *PostgresStore) error
 }{
-	{"DeleteCloudAccount", "DeleteCloudAccount", func(ctx context.Context, s *PostgresStore) error {
+	{"DeleteCloudAccount", "DeleteCloudAccount", false, func(ctx context.Context, s *PostgresStore) error {
 		return s.DeleteCloudAccount(ctx, "11111111-1111-1111-1111-111111111111")
 	}},
-	{"SetPlanAccounts", "SetPlanAccounts", func(ctx context.Context, s *PostgresStore) error {
+	{"SetPlanAccounts", "SetPlanAccounts", false, func(ctx context.Context, s *PostgresStore) error {
 		return s.SetPlanAccounts(ctx, "22222222-2222-2222-2222-222222222222", nil)
 	}},
-	{"UpsertRecommendations", "UpsertRecommendations", func(ctx context.Context, s *PostgresStore) error {
+	{"UpsertRecommendations", "UpsertRecommendations", true, func(ctx context.Context, s *PostgresStore) error {
 		return s.UpsertRecommendations(ctx, time.Now(), nil, nil)
 	}},
-	{"WithTx", "WithTx", func(ctx context.Context, s *PostgresStore) error {
+	{"WithTx", "WithTx", false, func(ctx context.Context, s *PostgresStore) error {
 		return s.WithTx(ctx, func(pgx.Tx) error { return errors.New("user code failed") })
 	}},
-	{"withLadderConfigLock", "ladder config lock cfg-1", func(ctx context.Context, s *PostgresStore) error {
+	{"withLadderConfigLock", "ladder config lock cfg-1", false, func(ctx context.Context, s *PostgresStore) error {
 		return s.withLadderConfigLock(ctx, "cfg-1", func(pgx.Tx) error { return nil })
 	}},
 }
@@ -65,6 +66,9 @@ func TestTxRollbackFailureIsLogged(t *testing.T) {
 			// Capture at Warn so a downgrade of the log level is caught.
 			buf := captureConfigLogs(t, logging.LevelWarn)
 			mock := newMock(t)
+			if tc.gated {
+				expectAZConfigReady(mock)
+			}
 			mock.ExpectBegin()
 			rbErr := errors.New("conn reset by peer")
 			mock.ExpectRollback().WillReturnError(rbErr)
@@ -87,6 +91,9 @@ func TestTxRollbackAfterCloseIsQuiet(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			buf := captureConfigLogs(t, logging.LevelDebug)
 			mock := newMock(t)
+			if tc.gated {
+				expectAZConfigReady(mock)
+			}
 			mock.ExpectBegin()
 			mock.ExpectRollback().WillReturnError(pgx.ErrTxClosed)
 

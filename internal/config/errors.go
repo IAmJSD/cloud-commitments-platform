@@ -4,6 +4,11 @@ import "errors"
 
 var ErrAzurePricingNotReady = errors.New("azure pricing migration not ready")
 
+// ErrAZConfigMigrationNotReady means migrations 000154 (recommendations
+// az_config) and 000155 (purchase_suppressions az_config) are not both applied.
+// Apply them before running a release that reads or writes az_config.
+var ErrAZConfigMigrationNotReady = errors.New("az_config migrations 000154 and 000155 are not applied")
+
 // ErrNotFound is returned when a requested config-store row does not exist.
 var ErrNotFound = errors.New("not found")
 

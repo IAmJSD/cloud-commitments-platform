@@ -166,6 +166,9 @@ func (s *PostgresStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx 
 // days, so normal use can exceed MaxListLimit. A capped read would either
 // under-suppress (re-offering capacity just bought) or fail every caller.
 func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseSuppression, error) {
+	if err := s.CheckAZConfigMigration(ctx); err != nil {
+		return nil, fmt.Errorf("suppression listing skipped: %w", err)
+	}
 	const q = `
 		SELECT id, execution_id, account_id, provider, service, region,
 		       resource_type, engine, suppressed_count, expires_at, created_at,

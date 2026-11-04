@@ -29,6 +29,13 @@ func newMock(t *testing.T) pgxmock.PgxPoolIface {
 	return mock
 }
 
+// expectAZConfigReady primes the schema gate that UpsertRecommendations and
+// ListActiveSuppressions run first, reporting the fully migrated version.
+func expectAZConfigReady(mock pgxmock.PgxPoolIface) {
+	mock.ExpectQuery("SELECT version, dirty FROM schema_migrations").
+		WillReturnRows(pgxmock.NewRows([]string{"version", "dirty"}).AddRow(156, false))
+}
+
 // anyArgs returns n AnyArg() matchers.
 func anyArgsCfg(n int) []interface{} {
 	args := make([]interface{}, n)

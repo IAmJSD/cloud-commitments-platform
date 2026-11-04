@@ -128,6 +128,7 @@ func TestPGXMock_ListActiveSuppressions(t *testing.T) {
 			"t4g.nano", "", 3, future, now, nil, nil, nil, nil).
 		AddRow("sup-2", "exec-2", "acct-1", "aws", "ec2", "us-east-1",
 			"t4g.nano", "", 2, future, now, &az, &platform, &tenancy, nil)
+	expectAZConfigReady(mock)
 	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions WHERE expires_at > NOW\(\)`).
 		WillReturnRows(rows)
 
@@ -204,6 +205,7 @@ func TestPGXMock_Suppression_AZConfigRoundTrip(t *testing.T) {
 	rows := pgxmock.NewRows(cols).
 		AddRow("a", "e", "acct-1", "aws", "relational-db", "us-east-1", "db.r5.large", "mysql", 2, now, now, &az, &platform, &tenancy, nil).
 		AddRow("b", "e", "acct-1", "aws", "relational-db", "us-east-1", "db.r5.large", "mysql", 2, now, now, &az, &platform, &tenancy, &azConfig)
+	expectAZConfigReady(mock)
 	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions`).WillReturnRows(rows)
 	sups, err := store.ListActiveSuppressions(ctx)
 	require.NoError(t, err)

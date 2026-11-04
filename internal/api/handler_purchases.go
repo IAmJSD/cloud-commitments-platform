@@ -2805,6 +2805,9 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // The successor is a web-source pending row for the retrying user, so it
 // also goes through the submit dedupe (issue #760): see writeRetrySuccessorTx.
 func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
+	if err := h.requireAZConfigSchema(ctx); err != nil {
+		return err
+	}
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		return h.writeRetrySuccessorTx(ctx, tx, failedExec, newExecution, suppressions)
 	})
@@ -3639,6 +3642,9 @@ func (h *Handler) persistExecutionAndSuppressions(
 	suppressions []config.PurchaseSuppression,
 	creatorID, idempotencyKey string,
 ) (dup *config.PurchaseExecution, err error) {
+	if err := h.requireAZConfigSchema(ctx); err != nil {
+		return nil, err
+	}
 	txErr := h.config.WithTx(ctx, func(tx pgx.Tx) error {
 		// Duplicate check inside the tx, after taking the creator's submit
 		// lock: a concurrent identical submit waits for this tx to commit,

@@ -23,6 +23,10 @@ const recommendationsBatchSize = 500
 
 const azurePricingMigrationVersion = 106
 
+// azConfigExpandMigrationVersion is the last az_config expand migration
+// (000155); the contract step 000156 is not required.
+const azConfigExpandMigrationVersion = 155
+
 // UpsertRecommendations is the incremental write path: it upserts each row
 // by natural key (cloud_account_id, provider, service, region,
 // resource_type, engine, term, payment_option, availability_zone, platform,
@@ -56,6 +60,9 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 // carryAzureHold), so overlapping collections cannot drop each other's hold
 // and a failed read or write rolls the rows back with the marker.
 func (s *PostgresStore) UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect, partial *RecommendationsCollectionPartial) error {
+	if err := s.CheckAZConfigMigration(ctx); err != nil {
+		return fmt.Errorf("recommendation write skipped: %w", err)
+	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -409,17 +416,31 @@ func (s *PostgresStore) checkAzurePricingMigration(ctx context.Context, required
 	if !required {
 		return nil
 	}
+	return s.checkSchemaVersion(ctx, azurePricingMigrationVersion, ErrAzurePricingNotReady, "Azure pricing")
+}
+
+// CheckAZConfigMigration returns ErrAZConfigMigrationNotReady (wrapped, with
+// the schema version found) until both az_config expand migrations (000154
+// recommendations, 000155 purchase_suppressions) are applied.
+func (s *PostgresStore) CheckAZConfigMigration(ctx context.Context) error {
+	return s.checkSchemaVersion(ctx, azConfigExpandMigrationVersion, ErrAZConfigMigrationNotReady, "az_config")
+}
+
+// checkSchemaVersion fails with notReady when schema_migrations is empty,
+// dirty or below minVersion. Migrations apply in order, so the version alone
+// says every earlier one ran.
+func (s *PostgresStore) checkSchemaVersion(ctx context.Context, minVersion int, notReady error, what string) error {
 	var version int
 	var dirty bool
 	err := s.db.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrAzurePricingNotReady
+		return notReady
 	}
 	if err != nil {
-		return fmt.Errorf("check Azure pricing migration: %w", err)
+		return fmt.Errorf("check %s migration: %w", what, err)
 	}
-	if version < azurePricingMigrationVersion || dirty {
-		return ErrAzurePricingNotReady
+	if version < minVersion || dirty {
+		return fmt.Errorf("%w: schema version %d (dirty=%t), need >= %d", notReady, version, dirty, minVersion)
 	}
 	return nil
 }
