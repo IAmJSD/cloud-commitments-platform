@@ -3,7 +3,9 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,6 +70,56 @@ func TestFanOut_ContextCancelled(t *testing.T) {
 
 	require.Len(t, results, 1)
 	assert.ErrorIs(t, results[0].Err, context.Canceled)
+}
+
+func TestFanOut_ExpiredContextNeverStartsFn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	const n = 200
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("acct-%d", i)
+	}
+	var started atomic.Int64
+	results := FanOutWithConcurrency(ctx, ids, func(context.Context, string) (string, error) {
+		started.Add(1)
+		return "ran", nil
+	}, n)
+
+	assert.Zero(t, started.Load(), "fn must not start once ctx is done")
+	require.Len(t, results, n)
+	for i, r := range results {
+		assert.Equal(t, ids[i], r.AccountID)
+		assert.ErrorIs(t, r.Err, context.Canceled)
+	}
+}
+
+func TestFanOut_ExpiredContextNeverStartsFn_DeadlinePassesBetweenScheduleAndStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const n = 40
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("acct-%d", i)
+	}
+	var startedOthers atomic.Int64
+	results := FanOutWithConcurrency(ctx, ids, func(_ context.Context, id string) (string, error) {
+		if id == ids[0] {
+			// Expire the run while the dispatcher is scheduling the remaining ids.
+			cancel()
+			return "first", nil
+		}
+		startedOthers.Add(1)
+		return "ran", nil
+	}, 1)
+
+	assert.Zero(t, startedOthers.Load(), "fn must not start for ids scheduled after ctx expired")
+	require.Len(t, results, n)
+	for _, r := range results[1:] {
+		assert.ErrorIs(t, r.Err, context.Canceled)
+	}
 }
 
 func TestPartition(t *testing.T) {
