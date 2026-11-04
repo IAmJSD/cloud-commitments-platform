@@ -1558,7 +1558,9 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
-          description: Settlement storage is unavailable
+          description: >-
+            Settlement is unavailable: its storage is down, or the database
+            migration that adds the settlement columns is not applied yet.
           content:
             application/json:
               schema:

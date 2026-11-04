@@ -126,6 +126,8 @@ func mapExecutionSettleError(err error) error {
 		return NewClientError(400, err.Error())
 	case errors.Is(err, config.ErrExecutionSettleConflict):
 		return NewClientError(409, err.Error())
+	case errors.Is(err, config.ErrExecutionSettleNotReady):
+		return NewClientError(503, err.Error())
 	}
 	return err
 }

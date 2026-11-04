@@ -137,7 +137,14 @@ func sameAccountSet(a, b []string) bool {
 // settled (SettleFailedExecution): it can no longer be retried and keeps its
 // failed status, so detaching it hides nothing.
 func requireManagedDeleteTx(ctx context.Context, tx pgx.Tx, planID string) error {
-	rows, err := tx.Query(ctx, `SELECT status, no_submission, outcome_settled_at IS NOT NULL FROM purchase_executions WHERE plan_id = $1`, planID)
+	// Before the settlement migration no row can be settled (#999).
+	settledCol := "false"
+	if ready, err := settlementSchemaReady(ctx, tx); err != nil {
+		return err
+	} else if ready {
+		settledCol = "outcome_settled_at IS NOT NULL"
+	}
+	rows, err := tx.Query(ctx, `SELECT status, no_submission, `+settledCol+` FROM purchase_executions WHERE plan_id = $1`, planID)
 	if err != nil {
 		return fmt.Errorf("failed to read plan executions: %w", err)
 	}

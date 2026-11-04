@@ -5,8 +5,13 @@ package config
 
 import (
 	"context"
+	"os"
+	"regexp"
+	"strconv"
 	"testing"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -214,4 +219,46 @@ func TestDeleteWaitsForSettleAndSeesIt(t *testing.T) {
 	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%FOR UPDATE%")
 	require.NoError(t, settleTx.Commit(ctx))
 	require.NoError(t, testhelpers.Await(t, done))
+}
+
+// migrationBelow is the highest migration on disk below version, so a test can
+// roll back exactly one migration whatever gaps the numbering has.
+func migrationBelow(t *testing.T, version int) uint {
+	t.Helper()
+	entries, err := os.ReadDir(getTestMigrationsPath())
+	require.NoError(t, err)
+	re := regexp.MustCompile(`^(\d{6})_.*\.up\.sql$`)
+	best := 0
+	for _, e := range entries {
+		if m := re.FindStringSubmatch(e.Name()); m != nil {
+			if n, _ := strconv.Atoi(m[1]); n < version && n > best {
+				best = n
+			}
+		}
+	}
+	require.NotZero(t, best)
+	return uint(best)
+}
+
+// main deploys on merge while prod migrations are applied separately, so this
+// code must work on a schema without the settlement columns (#999): delete
+// and retry behave as before, and settling is refused instead of erroring.
+func TestSettlementPathsBeforeTheMigration(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	rec := baselineRec(f.accounts[0], "m5.large", 4)
+	failed := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, false, rec)
+
+	conn, ok := f.store.db.(*database.Connection)
+	require.True(t, ok)
+	require.NoError(t, migrations.MigrateToVersion(ctx, conn.Pool(), getTestMigrationsPath(), migrationBelow(t, settlementMigrationVersion)))
+	var cols int
+	require.NoError(t, conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'purchase_executions' AND column_name = 'outcome_settled_at'`).Scan(&cols))
+	require.Zero(t, cols, "precondition: the settlement columns are gone")
+
+	require.ErrorIs(t, f.store.DeletePurchasePlan(ctx, f.planID), ErrManagedPlanLiveExecutions,
+		"the delete guard works and still refuses, rather than failing on a missing column")
+	_, err := f.settle(ctx, failed.ExecutionID, "checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleNotReady)
+	f.retryInOneTx(ctx, t, failed, uuid.NewString(), StatusCompleted) // the retry link still works
 }

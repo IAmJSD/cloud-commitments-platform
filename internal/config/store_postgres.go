@@ -1285,6 +1285,13 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 // successor row, after that insert, so the FK on retry_execution_id is
 // satisfied.
 func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID, retryExecutionID string) (linked bool, err error) {
+	// Before the settlement migration no row can be settled (#999).
+	notSettled := ""
+	if ready, readyErr := settlementSchemaReady(ctx, tx); readyErr != nil {
+		return false, readyErr
+	} else if ready {
+		notSettled = "AND outcome_settled_at IS NULL"
+	}
 	q := `
 		UPDATE purchase_executions
 		   SET retry_execution_id = $2,
@@ -1292,8 +1299,7 @@ func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx,
 		 WHERE execution_id = $1
 		   AND status = 'failed'
 		   AND retry_execution_id IS NULL
-		   AND outcome_settled_at IS NULL
-	`
+		   ` + notSettled
 	tag, err := tx.Exec(ctx, q, executionID, retryExecutionID)
 	if err != nil {
 		return false, fmt.Errorf("failed to link retry execution: %w", err)

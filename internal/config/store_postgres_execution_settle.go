@@ -15,6 +15,8 @@ var (
 	ErrExecutionSettleNotFound = errors.New("execution not found")
 	ErrExecutionSettleInvalid  = errors.New("invalid execution settle request")
 	ErrExecutionSettleConflict = errors.New("execution cannot be settled")
+	// ErrExecutionSettleNotReady: the settlement migration is not applied yet.
+	ErrExecutionSettleNotReady = errors.New("execution settlement is not available until the database migration is applied")
 )
 
 // executionSettleReasonMax bounds the stored record; the column has no CHECK.
@@ -73,6 +75,12 @@ func (s *PostgresStore) SettleFailedExecution(ctx context.Context, req Execution
 	}
 	var res *ExecutionSettlement
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		if ready, err := settlementSchemaReady(ctx, tx); err != nil || !ready {
+			if err != nil {
+				return err
+			}
+			return ErrExecutionSettleNotReady
+		}
 		target, err := lockSettleTarget(ctx, tx, req.ExecutionID)
 		if err != nil {
 			return err
