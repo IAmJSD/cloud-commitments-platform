@@ -69,7 +69,7 @@ describe('summary-card grids (issue #191)', () => {
     expect(decl(ruleBody(read('tables.css'), '#recommendations-summary, #history-summary'), 'grid-template-columns')).toBe(FOUR);
   });
 
-  test('responsive.css steps to 2x2, then 1 column, never auto-fit', () => {
+  test('responsive.css steps to 2x2 and keeps 2x2 on phones, never auto-fit', () => {
     const responsive = read('responsive.css');
     // The media block whose first selector is #summary (480px has another block).
     const block = (maxWidth: string): string => {
@@ -78,7 +78,7 @@ describe('summary-card grids (issue #191)', () => {
       return m[1]!;
     };
     expect(block('1199px')).toMatch(/grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-    expect(block('480px')).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+    expect(block('480px')).toMatch(/grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
     for (const id of ['#summary', '#recommendations-summary', '#history-summary']) {
       expect(block('1199px')).toContain(id);
     }

@@ -142,17 +142,27 @@
 
 /* Sub-tab bar: a quiet underline row between the page header and the
  * sub-tab content. */
+/* The hairline is an inset shadow, not a border, so the active tab's 2px
+ * underline paints over it inside the scroll box instead of being clipped. */
 .settings-tabs,
 .inventory-subnav {
     gap: var(--cudly-sp-1);
-    border-bottom-width: 1px;
+    border-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--cudly-border);
     margin-bottom: var(--cudly-sp-5);
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+}
+
+.settings-tabs::-webkit-scrollbar,
+.inventory-subnav::-webkit-scrollbar {
+    display: none;
 }
 
 .sub-tab-btn {
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
-    margin-bottom: -1px;
     border-bottom-width: 2px;
+    scroll-snap-align: start;
     font-size: var(--cudly-fs-sm);
     font-weight: var(--cudly-fw-medium);
     white-space: nowrap;
@@ -348,24 +358,471 @@
     display: none;
 }
 
-/* Phone drawer: the avatar sits beside the email (one size down so a typical
- * address still fits on one line), and Log out keeps a gap between its icon
- * and its label. Who is signed in is first in the DOM here (the drawer order
- * is set by nav/mobile-nav.ts:syncHeaderPlacement, not by CSS `order`, so
- * keyboard order matches what is painted). */
-.app-sidebar-extras #user-email-display {
+.app-sidebar-extras .user-info-divider {
+    display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Stat tiles: one look for every figure tile. Home and Opportunities KPI
+ * tiles (.kpi-tile), the Purchase History summary cards, the Savings
+ * History / Trends / Users stat cards (.stat-card) and the API key usage
+ * tiles all read label, value, sub-label, top-aligned, so the baselines
+ * line up across a row whether or not a tile has a sparkline or a detail.
+ * ------------------------------------------------------------------------- */
+.kpi-tile,
+#history-summary > .card,
+.stat-card,
+.apikeys-usage-tile {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--cudly-sp-4);
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
+    text-align: left;
+}
+
+/* Label */
+.card.kpi-tile h3,
+#history-summary > .card h3,
+.stat-card h4,
+.stat-card .stat-label,
+.apikeys-usage-tile-label {
+    order: -1;
+    margin: 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    line-height: 1.4;
+    letter-spacing: 0;
+}
+
+/* Value */
+.kpi-tile-value,
+#history-summary > .card .value,
+.stat-card .stat-value,
+.apikeys-usage-tile-value {
+    margin: var(--cudly-sp-2) 0 0;
+    color: var(--cudly-text);
+    font-size: var(--cudly-fs-2xl);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+
+.kpi-tile-value.savings,
+#history-summary > .card .value.savings,
+#savings-stats .stat-value {
+    color: var(--cudly-success);
+}
+
+/* Sub-label */
+.kpi-tile-detail,
+#history-summary > .card .detail,
+.stat-card .stat-unit-context {
+    margin: var(--cudly-sp-1) 0 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    line-height: 1.4;
+}
+
+/* KPI tiles: the sparkline shares the value's row on the right, so a tile
+ * with one keeps the same label and value lines as its neighbours. */
+.kpi-tile {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+        "title title"
+        "value spark"
+        "detail detail";
+    align-content: start;
     align-items: center;
-    gap: var(--cudly-sp-2);
+}
+
+.card.kpi-tile h3 {
+    grid-area: title;
+}
+
+.kpi-tile-value {
+    grid-area: value;
+}
+
+.kpi-tile-detail {
+    grid-area: detail;
+}
+
+.kpi-tile-spark {
+    grid-area: spark;
+    align-self: end;
+    margin-top: var(--cudly-sp-2);
+}
+
+/* The tiles are figures, not controls: no hover lift. */
+.kpi-tile:hover {
+    transform: none;
+    box-shadow: var(--cudly-shadow-sm);
+}
+
+/* Tiles inside a card (Savings History, Trends, Users, API keys) sit on a
+ * muted inner surface instead of stacking shadows. */
+.card .stat-card,
+.card .apikeys-usage-tile,
+.settings-category .stat-card,
+.settings-category .apikeys-usage-tile {
+    background: var(--cudly-surface-muted);
+    box-shadow: none;
+}
+
+.stats-grid,
+.apikeys-usage-tiles {
+    gap: var(--cudly-sp-3);
+}
+
+.stat-card.stat-card-highlight {
+    border-color: var(--cudly-primary);
+}
+
+/* ---------------------------------------------------------------------------
+ * Signed-out screens (login, MFA code, forgot / reset password, first-admin
+ * setup, API-unreachable notice): authDialog.ts marks the gate .auth-screen.
+ * While one is up the app chrome is not rendered at all, and the gate is a
+ * centred card on a plain branded background with the logo above it.
+ * ------------------------------------------------------------------------- */
+body:has(> .auth-screen) #app {
+    display: none;
+}
+
+.auth-screen .modal-overlay {
+    flex-direction: column;
+    align-items: center;
+    justify-content: safe center;
+    gap: var(--cudly-sp-5);
+    padding: var(--cudly-sp-7) var(--cudly-sp-4);
+    overflow-y: auto;
+    background:
+        radial-gradient(60rem 30rem at 50% -10%, var(--cudly-info-bg), transparent 70%),
+        var(--cudly-bg);
+}
+
+.auth-brand {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    justify-items: start;
+    column-gap: var(--cudly-sp-2);
+    flex-shrink: 0;
+}
+
+.auth-brand-mark {
+    grid-row: span 2;
+    color: var(--cudly-primary);
+}
+
+.auth-brand-name {
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
+    color: var(--cudly-text);
+}
+
+.auth-brand-tagline {
+    font-size: var(--cudly-fs-xs);
+    color: var(--cudly-text-muted);
+}
+
+.auth-screen .modal-content {
+    flex-shrink: 0;
+    width: 400px;
+    max-width: 100%;
+    max-height: none;
+    overflow: visible;
+    padding: var(--cudly-sp-6);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-lg);
+}
+
+.auth-screen .modal-content h2 {
+    margin-bottom: var(--cudly-sp-5);
+    text-align: center;
+    font-size: var(--cudly-fs-xl);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content h3 {
+    margin-bottom: var(--cudly-sp-1);
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content p {
+    margin-bottom: var(--cudly-sp-4);
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+}
+
+.auth-screen .modal-content label {
+    display: block;
+    margin-bottom: var(--cudly-sp-4);
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+    color: var(--cudly-text);
+}
+
+.auth-screen .modal-content :is(input[type="email"], input[type="password"], input[type="text"]) {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    margin-top: var(--cudly-sp-1);
+    padding: 0 var(--cudly-sp-3);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-surface);
+    color: var(--cudly-text);
     font-size: var(--cudly-fs-sm);
 }
 
-.app-sidebar-extras #logout-btn {
-    gap: var(--cudly-sp-2);
+.auth-screen .modal-content .password-input-wrapper input {
+    padding-right: 2.75rem;
 }
 
-.app-sidebar-extras .user-info-divider {
-    display: none;
+.auth-screen .modal-content .toggle-password {
+    top: calc(50% + var(--cudly-sp-1) / 2);
+}
+
+.auth-screen .modal-content :is(input[type="email"], input[type="password"], input[type="text"]):focus-visible {
+    outline: none;
+    border-color: var(--cudly-primary);
+    box-shadow: 0 0 0 3px var(--cudly-info-bg);
+}
+
+/* Full-width primary action. */
+.auth-screen .modal-content button.primary {
+    display: block;
+    width: 100%;
+    height: 2.5rem;
+    margin-top: var(--cudly-sp-2);
+    border-radius: var(--cudly-r-md);
+    font-weight: var(--cudly-fw-semibold);
+}
+
+.auth-screen .modal-content a {
+    color: var(--cudly-primary);
+    font-weight: var(--cudly-fw-medium);
+    text-decoration: none;
+}
+
+.auth-screen .modal-content a:hover {
+    text-decoration: underline;
+}
+
+/* "Forgot password?" sits under the password field, right-aligned. */
+.auth-screen .modal-content p:has(> #forgot-password-link) {
+    margin-top: calc(-1 * var(--cudly-sp-2));
+    text-align: right;
+}
+
+/* Secondary way out ("Back to login", "Already have an account?") under
+ * the primary button. */
+.auth-screen .modal-content :is(button, form) + p:has(> a:only-child) {
+    margin: var(--cudly-sp-4) 0 0;
+    text-align: center;
+}
+
+.auth-screen .password-requirements {
+    margin: 0 0 var(--cudly-sp-4);
+    border-color: var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+}
+
+.auth-screen .error-message,
+.auth-screen .success-message {
+    border-radius: var(--cudly-r-md);
+    font-size: var(--cudly-fs-sm);
+}
+
+.auth-screen .modal-content code {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+    .auth-screen .modal-overlay {
+        padding: var(--cudly-sp-6) var(--cudly-sp-3);
+    }
+
+    .auth-screen .modal-content {
+        width: 100%;
+        padding: var(--cudly-sp-5);
+        border-radius: var(--cudly-r-lg);
+    }
+}
+
+/* Keep the alert-to-button gap (base.css) over the button's own margin. */
+.auth-screen .modal-content .error-message:not(.hidden) ~ button.primary,
+.auth-screen .modal-content .success-message:not(.hidden) + button.primary {
+    margin-top: var(--cudly-sp-4);
+}
+
+/* ---------------------------------------------------------------------------
+ * Error, empty and loading blocks.
+ *
+ * Inline error lines (p.error / div.error) read as one alert: tinted box,
+ * hairline border, alert icon. A section whose load failed gets the
+ * .error-callout (lib/error-callout.ts): the same icon, the failure line, a
+ * short hint and a "Try again" that re-runs the section's load, on a card
+ * surface like the start-up error card (init-error.ts).
+ * ------------------------------------------------------------------------- */
+:root {
+    --cudly-error-border: color-mix(in srgb, var(--cudly-error) 28%, transparent);
+    --cudly-icon-alert: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' y1='8' x2='12' y2='12'/%3E%3Cline x1='12' y1='16' x2='12.01' y2='16'/%3E%3C/svg%3E");
+}
+
+p.error,
+div.error {
+    position: relative;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4) var(--cudly-sp-3) calc(var(--cudly-sp-4) + 1.125rem + var(--cudly-sp-2));
+    border: 1px solid var(--cudly-error-border);
+    border-radius: var(--cudly-r-md);
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-normal);
+}
+
+p.error::before,
+div.error::before {
+    content: "";
+    position: absolute;
+    left: var(--cudly-sp-4);
+    top: calc(var(--cudly-sp-3) + 0.125rem);
+    width: 1.125rem;
+    height: 1.125rem;
+    background-color: currentColor;
+    -webkit-mask: var(--cudly-icon-alert) center / contain no-repeat;
+    mask: var(--cudly-icon-alert) center / contain no-repeat;
+}
+
+.error-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--cudly-sp-3);
+    padding: var(--cudly-sp-4) var(--cudly-sp-5);
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-error-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
+}
+
+.error-callout-icon {
+    flex-shrink: 0;
+    margin-top: 0.0625rem;
+    color: var(--cudly-error-fg);
+}
+
+.error-callout-body {
+    min-width: 0;
+}
+
+.error-callout p.error {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--cudly-text);
+    font-weight: var(--cudly-fw-semibold);
+    overflow-wrap: anywhere;
+}
+
+.error-callout p.error::before {
+    content: none;
+}
+
+.error-callout-hint {
+    margin-top: var(--cudly-sp-1);
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+}
+
+.error-callout .error-callout-retry {
+    margin: var(--cudly-sp-3) 0 0;
+}
+
+/* Start-up error card: the same icon, centred above the title. */
+.init-error-card .init-error-icon {
+    display: block;
+    width: 2.5rem;
+    height: 2.5rem;
+    margin: 0 auto var(--cudly-sp-3);
+    padding: var(--cudly-sp-2);
+    border-radius: var(--cudly-r-full);
+    background: var(--cudly-error-bg);
+    color: var(--cudly-error-fg);
+}
+
+.init-error-card .btn-primary {
+    margin-top: var(--cudly-sp-4);
+}
+
+/* Section/page empty cards: a little more air and a calmer heading. */
+.empty-state {
+    padding: var(--cudly-sp-7) var(--cudly-sp-5);
+}
+
+.empty-state h3 {
+    font-size: var(--cudly-fs-md);
+}
+
+.empty-state p {
+    font-size: var(--cudly-fs-sm);
+}
+
+.card .error-callout {
+    box-shadow: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile shell.
+ * ------------------------------------------------------------------------- */
+
+/* Section headers (chart titles + range buttons, Savings History controls)
+ * wrap the controls onto a second line instead of squeezing the title into
+ * one word per line. */
+.section-header {
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2) var(--cudly-sp-3);
+}
+
+.section-header > :is(h2, h3) {
+    flex: 1 1 auto;
+    min-width: min(100%, max-content);
+}
+
+@media (max-width: 768px) {
+    .app-main {
+        padding: var(--cudly-sp-4);
+    }
+
+    .page-header {
+        margin-bottom: var(--cudly-sp-4);
+    }
+
+    .page-header-actions {
+        justify-content: flex-start;
+    }
+
+    /* Sub-tab bars scroll edge to edge of the content column. */
+    .settings-tabs,
+    .inventory-subnav {
+        margin-left: calc(-1 * var(--cudly-sp-4));
+        margin-right: calc(-1 * var(--cudly-sp-4));
+        padding: 0 var(--cudly-sp-4);
+        scroll-padding: 0 var(--cudly-sp-4);
+    }
+
 }
 
 /* ---------------------------------------------------------------------------
