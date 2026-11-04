@@ -202,7 +202,10 @@ export function openModal(
     const targetId = btn.getAttribute(DISMISS_ATTR);
     const target = targetId ? document.getElementById(targetId) : null;
     if (target) target.click();
-    else closeModal(el);
+    else {
+      if (targetId) console.error(`modal: ${DISMISS_ATTR} target #${targetId} not found; closing without its Cancel handler`);
+      closeModal(el);
+    }
   };
 
   el.addEventListener('keydown', keydownHandler);

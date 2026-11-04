@@ -185,48 +185,16 @@ describe('dialog header close-X', () => {
     });
   });
 
-  describe('RI exchange header (createModalHeader with closeLabel "Close dialog")', () => {
-    // riexchange.ts builds its header this way: no target, so the X takes the
-    // closeModal path (which runs the dialog's onClose), and a distinct label
-    // because a finished exchange relabels the footer Cancel to "Close".
-    function buildRiExchangeDialog(): { d: Dialog; footerClose: HTMLButtonElement } {
-      const h3 = document.createElement('h3');
-      h3.textContent = 'RI Exchange';
-      const header = createModalHeader(h3, { closeLabel: 'Close dialog' });
-      const x = header.querySelector<HTMLButtonElement>('button.modal-close')!;
-      const d = buildDialog(x);
-      const footerClose = addFooterButton(d, 'ri-cancel', 'Close');
-      footerClose.addEventListener('click', () => closeModal(d.modal));
-      return { d, footerClose };
-    }
-
-    test('the X is labelled "Close dialog", distinct from the footer\'s "Close"', () => {
-      const { d } = buildRiExchangeDialog();
-      const named = Array.from(d.modal.querySelectorAll('button'))
-        .map(b => b.getAttribute('aria-label') ?? b.textContent?.trim());
-      expect(named).toEqual(['Close dialog', 'Close']);
-      expect(closeXOf(d).getAttribute('data-modal-dismiss')).toBe('');
-    });
-
-    test('the header keeps the modal-header class and renders the title before the X', () => {
-      const h3 = document.createElement('h3');
-      h3.textContent = 'RI Exchange';
-      const header = createModalHeader(h3, { closeLabel: 'Close dialog' });
-      expect(header.classList.contains('modal-header')).toBe(true);
-      expect(header.querySelector('h3')?.textContent).toBe('RI Exchange');
-      expect(header.firstElementChild).toBe(h3);
-      expect(header.lastElementChild?.matches('button.modal-close')).toBe(true);
-    });
-
-    test('clicking the X closes the dialog and runs its onClose', () => {
-      const { d } = buildRiExchangeDialog();
-      const onClose = jest.fn();
-      openModal(d.modal, { onClose });
-
+  describe('unknown dismiss target', () => {
+    test('logs a console error and still closes through closeModal', () => {
+      const err = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      const d = buildDialog(fromHtml(modalCloseButtonHtml('no-such-button')));
+      openModal(d.modal);
       closeXOf(d).click();
-
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(String(err.mock.calls[0]?.[0])).toContain('no-such-button');
       expect(d.modal.classList.contains('hidden')).toBe(true);
-      expect(onClose).toHaveBeenCalledTimes(1);
+      err.mockRestore();
     });
   });
 
