@@ -21,7 +21,7 @@ var serverNotePatterns = []string{
 	`execution was approved but its purchase run was interrupted before completing and never finalized; failed by the recovery sweep so it is not silently stuck \(issue #632\)\. (?:Verify on the cloud provider that no commitment was created, then Retry\.|Retry is refused for this purchase because a repeat could buy a second commitment\. Verify on the cloud provider whether the commitment was created; if it was not, start a new purchase\.)`,
 	`refusing to execute retry attempt \d+: (?:` + redriveReasonPattern + `)`,
 	`stale Azure recommendation pricing; refresh recommendations and submit a new purchase(?:: the latest collection state is missing, so Azure prices cannot be confirmed current)?`,
-	`(?:execution [^:\s]+: )?plan step has no recommendations attached, so it cannot buy anything \(platform#631: plan steps cannot yet carry recommendations\)`,
+	`(?:execution [^:\s]+: )?plan step has no recommendations attached, so it cannot buy anything(?: \(platform#631: plan steps cannot yet carry recommendations\))?`,
 	`plan step refused by commitment cap(?:: plan has no max_step_commitment set \(auto-purchase of steps with recommendations is refused until one is set\)|: step total commitment \d+\.\d{2} exceeds max_step_commitment \d+\.\d{2})?`,
 	`scheduled purchase skipped: it was due too long ago(?:: it was due at \d{4}-\d{2}-\d{2}T[0-9:.]+Z, [0-9a-z.]+ ago, which is more than the [0-9a-z.]+ limit \(SCHEDULED_PURCHASE_MAX_OVERDUE\); nothing was submitted, retry it if the purchase is still wanted)?`,
 	`purchase refused after claim: the claimed execution no longer passes the authorization checks`,

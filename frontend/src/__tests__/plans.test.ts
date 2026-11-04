@@ -816,17 +816,53 @@ describe('Plans Module', () => {
         await loadPlans();
       });
 
-      test('renders the run button disabled with an explanatory title', () => {
+      test('renders the run button aria-disabled (still focusable) with an explanatory title', () => {
         const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
-        expect(runBtn.disabled).toBe(true);
+        expect(runBtn.disabled).toBe(false);
+        expect(runBtn.getAttribute('aria-disabled')).toBe('true');
+        expect(runBtn.classList.contains('is-disabled')).toBe(true);
         expect(runBtn.title).toBe('Run now: this step has no recommendations, so there is nothing to run');
         expect(runBtn.getAttribute('aria-label')).toBe('Run now: this step has no recommendations, so there is nothing to run');
         expect(runBtn.getAttribute('data-id')).toBe('purchase-bare');
       });
 
+      test('placeholder dashes share one muted style in the numeric columns (#1680)', () => {
+        const cells = Array.from(document.querySelectorAll('tr.planned-purchase-row td.num'));
+        expect(cells).toHaveLength(3);
+        cells.forEach(td => {
+          expect(td.innerHTML.trim()).toBe('<span class="cell-placeholder">\u2014</span>');
+        });
+      });
+
+      test('the plan name is not clamped to the small truncate width (#1680)', () => {
+        const name = document.querySelector('.plan-name') as HTMLElement;
+        expect(name.classList.contains('cell-truncate--sm')).toBe(false);
+        expect(name.classList.contains('plan-name-cell')).toBe(true);
+        expect(name.title).toBe('Azure compute 80% weekly');
+      });
+
+      test('clicking the aria-disabled run button keeps focus and does not re-fetch', async () => {
+        const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
+        runBtn.focus();
+        (api.getPlannedPurchases as jest.Mock).mockClear();
+        runBtn.click();
+        await flushPromises();
+
+        expect(api.getPlannedPurchases).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(runBtn);
+      });
+
+      test('an all-upfront step with $0 upfront shows the placeholder dash', async () => {
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [
+          { ...bare, has_recommendations: true, payment: 'all-upfront', upfront_cost: 0, count: 2, estimated_savings: 5 },
+        ] });
+        await loadPlans();
+        const cells = document.querySelectorAll('tr.planned-purchase-row td.num');
+        expect(cells[1]!.innerHTML.trim()).toBe('<span class="cell-placeholder">\u2014</span>');
+      });
+
       test('the run action never calls the API or opens a confirm', async () => {
         const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
-        runBtn.disabled = false;
         runBtn.click();
         await flushPromises();
 

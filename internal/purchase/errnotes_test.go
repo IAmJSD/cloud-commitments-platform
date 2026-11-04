@@ -30,6 +30,8 @@ func TestSanitizeStoredError_AllowlistedNotesPassThroughVerbatim(t *testing.T) {
 		armedRedriveRefusal(gcpRetry).Error(),
 		ErrStaleAzurePricing.Error(),
 		ErrPlanStepNoRecommendations.Error(),
+		legacyPlanStepNoRecommendationsNote,
+		"execution 00000000-0000-0000-0000-000000000000: " + legacyPlanStepNoRecommendationsNote,
 		fmt.Errorf("execution %s: %w", "00000000-0000-0000-0000-000000000000", ErrPlanStepNoRecommendations).Error(),
 		fmt.Errorf("%w: plan has no max_step_commitment set (auto-purchase of steps with recommendations is refused until one is set)", ErrStepCommitmentCap).Error(),
 		fmt.Errorf("%w: step total commitment 10.00 exceeds max_step_commitment 5.00", ErrStepCommitmentCap).Error(),
@@ -76,4 +78,12 @@ func TestSanitizeStoredError_UnknownTextFailsClosed(t *testing.T) {
 		out := SanitizeStoredError(in)
 		assert.Equal(t, ErrCategoryMessage(ErrCategoryUnknown), out, in)
 	}
+}
+
+// Rows stored before #1708 carry the old text that named an internal issue;
+// it must keep passing the allowlist, and the live text must not name one.
+const legacyPlanStepNoRecommendationsNote = "plan step has no recommendations attached, so it cannot buy anything (platform#631: plan steps cannot yet carry recommendations)"
+
+func TestErrPlanStepNoRecommendations_NamesNoInternalIssue(t *testing.T) {
+	assert.NotContains(t, ErrPlanStepNoRecommendations.Error(), "#")
 }

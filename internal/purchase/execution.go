@@ -25,8 +25,11 @@ import (
 // ErrPlanStepNoRecommendations marks a plan-step execution that carries no
 // recommendations. Nothing attaches recommendations to a plan step yet
 // (platform#609), so such a step can only "succeed" by buying nothing, which
-// would complete it and advance the ramp. It is refused instead.
-var ErrPlanStepNoRecommendations = errors.New("plan step has no recommendations attached, so it cannot buy anything (platform#631: plan steps cannot yet carry recommendations)")
+// would complete it and advance the ramp. It is refused instead. The text is
+// user-facing, so it names no internal issue (tracked in platform#631); rows
+// stored before that carry a "(platform#631: ...)" suffix, which errnotes.go
+// still recognizes.
+var ErrPlanStepNoRecommendations = errors.New("plan step has no recommendations attached, so it cannot buy anything")
 
 // executePurchase performs the actual purchase.
 // When the plan has associated cloud accounts and a credential store is configured,

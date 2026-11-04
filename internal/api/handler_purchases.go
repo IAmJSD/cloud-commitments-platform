@@ -2461,7 +2461,7 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// successor that fails the same way.
 	if failedExec.PlanID != "" && len(failedExec.Recommendations) == 0 {
 		return nil, NewClientError(409,
-			"this plan step has no recommendations attached, so retrying it would buy nothing (platform#631: plan steps cannot yet carry recommendations)")
+			"this plan step has no recommendations attached, so retrying it would buy nothing")
 	}
 
 	totalUpfront, totalSavings, err := validateAndTotalRecommendations(failedExec.Recommendations)
