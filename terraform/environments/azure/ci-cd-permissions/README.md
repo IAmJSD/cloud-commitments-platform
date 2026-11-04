@@ -96,7 +96,7 @@ to `terraform init -backend-config=backend.hcl`.
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 
-# 2. Fill in terraform.tfvars (only subscription_id is required)
+# 2. Fill in terraform.tfvars (subscription_id, github_owner_id and github_repo_id are required)
 # 3. Fill in backend.hcl with your storage account details
 
 # 4. Initialise
@@ -167,8 +167,25 @@ Azure federated credentials allow no wildcards, so one resource is required per 
 
 | Credential | Subject | Use case |
 | --- | --- | --- |
-| `github-actions-main` | `repo:LeanerCloud/cloud-commitments-platform:ref:refs/heads/main` | Deployments from main |
-| `github-actions-env-<name>` | `repo:LeanerCloud/cloud-commitments-platform:environment:<name>` | Jobs bound to a deployment environment (one per `var.github_environments`) |
+| `github-actions-main` | `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:ref:refs/heads/main` | Deployments from main |
+| `github-actions-env-<name>` | `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:environment:<name>` | Jobs bound to a deployment environment (one per `var.github_environments`) |
+
+### Immutable subject
+
+Trust is keyed on GitHub's immutable OIDC subject, `repo:<owner>@<owner_id>/<repo>@<repo_id>:...`, built from
+`github_repo` plus `github_owner_id` and `github_repo_id` (required; read them with
+`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`). A renamed or delete-and-recreated repo gets a
+new id, so a name squatter cannot match. No name-only subject exists in this module.
+
+GitHub prerequisite: the repository must emit that subject (Settings, Actions, OIDC, immutable subject).
+`gh api repos/<owner>/<repo>/actions/oidc/customization/sub` must show `use_immutable_subject: true`
+and `sub_claim_prefix` equal to the prefix above; otherwise no token matches.
+
+This module is bootstrap-only: a privileged human applies it, staging first. Agents never apply.
+
+If your existing `terraform.tfvars` has `github_repo = "owner@id/repo@id"` (the 2026-09 hand-applied form), set it back to `owner/name` and add the two id vars; the subjects stay identical.
+
+Apply note: with the pinned azuread provider, `subject` and `description` changes are in-place updates (only `display_name` and the application id force replacement). The live state already has the id form, so the plan should show no subject diff, only an in-place description diff if the old tfvars used the `@` form.
 
 No `pull_request`-subject credential is provisioned: it is not scoped to any
 branch or environment protection, and no workflow in this repo runs

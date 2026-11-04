@@ -7,13 +7,38 @@ variable "github_repo" {
   description = "GitHub repository (owner/name) whose Actions workflows may authenticate via federated identity credentials (e.g. 'LeanerCloud/cloud-commitments-platform'). Leave empty to skip federated credential setup."
   type        = string
   default     = "LeanerCloud/cloud-commitments-platform"
+
+  validation {
+    condition     = var.github_repo == "" || can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", var.github_repo))
+    error_message = "github_repo must be empty or owner/name."
+  }
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric id of the GitHub owner (gh api repos/OWNER/REPO --jq .owner.id). Trust subjects are keyed on it, not on the owner name."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.github_owner_id))
+    error_message = "github_owner_id must be a positive integer without leading zeros."
+  }
+}
+
+variable "github_repo_id" {
+  description = "Immutable numeric id of the GitHub repository (gh api repos/OWNER/REPO --jq .id). Trust subjects are keyed on it, not on the repo name."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*$", var.github_repo_id))
+    error_message = "github_repo_id must be a positive integer without leading zeros."
+  }
 }
 
 variable "github_environments" {
   description = <<-EOT
     GitHub deployment environment names whose jobs may authenticate via federated
     identity credentials. A job carrying `environment: <name>` presents the OIDC
-    subject repo:<github_repo>:environment:<name>, so a name absent from this list
+    subject repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:<name> (immutable ids), so a name absent from this list
     cannot authenticate (AADSTS70021).
 
     NOTE the subject is ref-agnostic: it does not encode the branch, so a
@@ -25,7 +50,7 @@ variable "github_environments" {
 
     Gating rule: add a name only once its GitHub environment exists with a
     deployment branch policy that admits only `main`. This service principal
-    already trusts repo:<github_repo>:ref:refs/heads/main (sp.tf, github_main),
+    already trusts the same immutable-id main-branch subject (sp.tf, github_main),
     and only a run on `main` can enter such an environment, so its credential
     adds no reach. A credential for an environment that does not exist widens
     access: GitHub creates a referenced environment on first use with no
