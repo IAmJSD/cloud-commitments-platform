@@ -17,6 +17,7 @@ func TestPGXMock_CreateSuppression_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectAZConfigReady(mock)
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
 			"t4g.nano", "", 3, pgxmock.AnyArg(), (*string)(nil), (*string)(nil), (*string)(nil), (*string)(nil)).
@@ -43,6 +44,7 @@ func TestPGXMock_CreateSuppression_WritesVariant(t *testing.T) {
 
 	az, platform, tenancy := "", "Linux/UNIX", "default"
 	mock.ExpectBegin()
+	expectAZConfigReady(mock)
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
 			"t4g.nano", "", 3, pgxmock.AnyArg(), &az, &platform, &tenancy, (*string)(nil)).
@@ -186,6 +188,7 @@ func TestPGXMock_Suppression_AZConfigRoundTrip(t *testing.T) {
 
 	az, platform, tenancy, azConfig := "", "", "", "multi-az"
 	mock.ExpectBegin()
+	expectAZConfigReady(mock)
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "relational-db", "us-east-1",
 			"db.r5.large", "mysql", 2, pgxmock.AnyArg(), &az, &platform, &tenancy, &azConfig).

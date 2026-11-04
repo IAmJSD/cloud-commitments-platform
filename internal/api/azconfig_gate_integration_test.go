@@ -56,6 +56,14 @@ func TestAZConfigGate_RefusesBeforeExpandMigrations(t *testing.T) {
 
 		_, err = store.ListActiveSuppressions(ctx)
 		assert.True(t, errors.Is(err, config.ErrAZConfigMigrationNotReady), "suppression listing: %v", err)
+
+		sup := &config.PurchaseSuppression{ExecutionID: uuid.NewString(), Provider: "aws", Service: "rds", Region: "us-east-1",
+			ResourceType: "db.r5.large", SuppressedCount: 1, ExpiresAt: time.Now().Add(time.Hour)}
+		err = store.CreateSuppression(ctx, sup)
+		assert.True(t, errors.Is(err, config.ErrAZConfigMigrationNotReady), "CreateSuppression: %v", err)
+		err = store.WithTx(ctx, func(tx pgx.Tx) error { return store.CreateSuppressionTx(ctx, tx, sup) })
+		assert.True(t, errors.Is(err, config.ErrAZConfigMigrationNotReady), "CreateSuppressionTx: %v", err)
+		store.txs = 0 // the direct WithTx above is not the purchase path
 	}
 
 	for _, version := range []uint{155, 156} {
