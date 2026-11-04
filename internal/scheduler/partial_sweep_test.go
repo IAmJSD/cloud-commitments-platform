@@ -189,15 +189,17 @@ func expectScheduledCollection(store *MockConfigStore, providers ...string) (*[]
 	store.On("UpsertRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			upserted = args.Get(2).([]config.RecommendationRecord)
-		}).Return(nil).Once()
+		}).Return(nil).Maybe()
 
-	// Registered as Maybe so an unwanted call is RECORDED: MockConfigStore
-	// short-circuits unexpected methods before mock.Called, which would
-	// make AssertNotCalled pass vacuously.
+	// A partial collection writes its marker in the same transaction as the
+	// rows. Registered as Maybe so an unwanted call is RECORDED:
+	// MockConfigStore short-circuits unexpected methods before mock.Called,
+	// which would make AssertNotCalled pass vacuously.
 	var recorded *config.RecommendationsCollectionPartial
-	store.On("SetRecommendationsCollectionPartial", mock.Anything, mock.Anything).
+	store.On("UpsertRecommendationsWithPartial", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
-			recorded = args.Get(1).(*config.RecommendationsCollectionPartial)
+			upserted = args.Get(2).([]config.RecommendationRecord)
+			recorded = args.Get(4).(*config.RecommendationsCollectionPartial)
 		}).Return(nil).Maybe()
 	return &upserted, &recorded
 }
@@ -241,7 +243,7 @@ func TestCollectRecommendations_CompleteSweepLeavesPartialCleared(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.Len(t, *upserted, 1)
-	store.AssertNotCalled(t, "SetRecommendationsCollectionPartial", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "UpsertRecommendationsWithPartial", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestCollectRecommendations_TotalFailureUnchanged: a hard provider failure
@@ -260,7 +262,7 @@ func TestCollectRecommendations_TotalFailureUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.FailedProviders, "azure")
 	assert.Contains(t, recordedErr, "azure: ")
-	store.AssertNotCalled(t, "SetRecommendationsCollectionPartial", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "UpsertRecommendationsWithPartial", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // A partial provider and a complete one: only the partial provider appears.
@@ -271,4 +273,50 @@ func TestAppendPartialProvider(t *testing.T) {
 	require.Len(t, got.Providers, 1)
 	assert.Equal(t, "azure", got.Providers[0].Provider)
 	assert.NotNil(t, got.Providers[0].Reasons, "reasons must encode as {} rather than null")
+}
+
+// A mixed Azure sweep (a lost subscription plus Advisor pricing-outage skips on
+// a reachable one) must hold the account like a skips-only outage does, or its
+// rows stay purchasable at the previous cycle's price.
+func TestGapFromPartialSubscriptions_PricingOutageSkipsHoldAccount(t *testing.T) {
+	outage := []string{
+		`advisor: azure advisor: advisor compute reservation price for "Standard_D2s_v3" in "westeurope" (1y): get: retail prices fetch failed: EOF`,
+		`advisor: price lookup unavailable: azure advisor: advisor compute reservation price for "Standard_D2s_v3" in "westeurope" (1y): get: retail prices fetch failed: EOF`,
+	}
+	failed := []azureprovider.SubscriptionFailure{{SubscriptionID: "sub-b", Err: errors.New("403 authorization failed")}}
+
+	// The multi-subscription client Provider.GetRecommendationsClient returns
+	// when scope is ambiguous builds each skip as "<subscription ID>: <skip>"
+	// (recommendations_multi_subscription.go:399 at 61111428).
+	prefixed := make([]string, len(outage))
+	for i, r := range outage {
+		prefixed[i] = "0f4c1a52-8d3e-4b7a-9c61-2e5d7a9b3c10: " + r
+	}
+	gap, err := tolerateIncompleteSweep("azure", azureprovider.NewPartialSubscriptionFailure(2, failed, prefixed))
+	require.NoError(t, err)
+
+	held := gap.forAccount().withHeld("acct-1")
+	assert.True(t, held.pricingUnavailable)
+	assert.Equal(t, []string{"acct-1"}, held.heldAccountIDs)
+	assert.True(t, held.holdsEviction(), "the lost subscription still holds eviction")
+	sweep := held.toProviderSweep("azure")
+	assert.Positive(t, sweep.Reasons[config.PartialReasonPricingUnavailable])
+	assert.Equal(t, []string{"acct-1"}, sweep.HeldAccountIDs)
+}
+
+// A skips-only multi-subscription sweep returns a plain PartialResultError
+// (recommendations_multi_subscription.go:421 at 61111428) whose skips carry the
+// same "<subscription ID>: " prefix; its outage must hold the account too.
+func TestTolerateIncompleteSweep_PrefixedPricingOutageSkipsHoldAccount(t *testing.T) {
+	skips := []string{
+		`0f4c1a52-8d3e-4b7a-9c61-2e5d7a9b3c10: advisor: azure advisor: advisor compute reservation price for "Standard_D2s_v3" in "westeurope" (1y): get: retail prices fetch failed: EOF`,
+		`0f4c1a52-8d3e-4b7a-9c61-2e5d7a9b3c10: advisor: price lookup unavailable: azure advisor: advisor compute reservation price for "Standard_D2s_v3" in "westeurope" (1y): get: retail prices fetch failed: EOF`,
+	}
+	gap, err := tolerateIncompleteSweep("azure", &azureprovider.PartialResultError{Skipped: skips})
+	require.NoError(t, err)
+
+	held := gap.forAccount().withHeld("acct-1")
+	assert.True(t, held.pricingUnavailable)
+	assert.True(t, held.holdsEviction(), "the held rows must survive eviction")
+	assert.Equal(t, []string{"acct-1"}, held.heldAccountIDs)
 }

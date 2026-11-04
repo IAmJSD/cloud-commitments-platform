@@ -85,6 +85,8 @@ export interface PartialProviderSweep {
   /** Recommendations the provider dropped as invalid (GCP: non-USD, malformed, unknown term). */
   skipped_recommendations?: number;
   reasons: Record<string, number>;
+  /** Platform account IDs whose rows are held through a pricing outage (reason `pricing_unavailable`). */
+  held_account_ids?: string[];
 }
 
 export interface RecommendationsFreshness {

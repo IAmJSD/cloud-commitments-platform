@@ -949,6 +949,11 @@ const (
 	PartialReasonNotFound            = "not_found"
 	PartialReasonProviderUnavailable = "provider_unavailable"
 	PartialReasonOther               = "other"
+	// PartialReasonPricingUnavailable marks accounts whose previous-cycle
+	// Advisor rows were kept because the Retail Prices catalog could not be
+	// reached. Those rows may carry an outdated price and must not be
+	// purchased until a good collection re-prices them.
+	PartialReasonPricingUnavailable = "pricing_unavailable"
 )
 
 // PartialProviderSweep summarizes one provider's incomplete sweeps in a
@@ -973,6 +978,12 @@ type PartialProviderSweep struct {
 	SkippedRecommendations int `json:"skipped_recommendations"`
 	// Reasons counts the failure causes by PartialReason* category.
 	Reasons map[string]int `json:"reasons"`
+	// HeldAccountIDs lists the platform cloud-account UUIDs (not cloud
+	// account numbers) whose previous-cycle rows are held through a pricing
+	// outage; the purchase path refuses their recommendations. It can contain
+	// the nil UUID (all zeros) for the ambient identity, which has no account;
+	// the API shows it only to callers with an unrestricted account scope.
+	HeldAccountIDs []string `json:"held_account_ids,omitempty"`
 }
 
 // SuccessfulCollect identifies a (provider, account) pair whose collection

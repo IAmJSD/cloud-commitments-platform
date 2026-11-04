@@ -6985,8 +6985,11 @@ components:
       nullable: true
       description: >
         Non-null when the most recent persisted collection kept rows from
-        at least one incomplete sweep. Cleared by the next collection whose
-        sweeps are all complete. Carries counts and reason categories only.
+        at least one incomplete sweep, or while a pricing hold carries
+        forward from an earlier collection. Cleared by the next collection
+        whose sweeps are all complete and that leaves no hold. Carries counts
+        and reason categories, plus held_account_ids filtered to the
+        caller's account scope.
       required: [providers]
       properties:
         providers:
@@ -7026,12 +7029,25 @@ components:
           description: >
             Failure count per reason category. Keys are drawn from a closed
             set: permission_denied, throttled, timeout, canceled, not_found,
-            provider_unavailable, other.
+            provider_unavailable, pricing_unavailable, other.
           additionalProperties:
             type: integer
           example:
             permission_denied: 2
             throttled: 1
+        held_account_ids:
+          type: array
+          description: >
+            Platform cloud-account IDs (not cloud account numbers) whose
+            previous-cycle Azure Advisor rows are held because the price
+            catalog was unreachable (reason pricing_unavailable). Their
+            reservations cannot be purchased until a collection re-prices them.
+            The nil UUID (00000000-0000-0000-0000-000000000000) stands for the
+            ambient identity, which has no registered account. It is returned
+            only to callers with an unrestricted account scope.
+          items:
+            type: string
+            format: uuid
 
     # -- Plans --------------------------------------------------------------
     PlansResponse:

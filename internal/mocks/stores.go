@@ -1876,6 +1876,15 @@ func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, partial *config.RecommendationsCollectionPartial) error {
+	m.record("UpsertRecommendationsWithPartial", ctx, collectedAt, recs, successfulCollects, partial)
+	if !isExpected(&m.Mock, "UpsertRecommendationsWithPartial") {
+		return nil
+	}
+	args := m.Called(ctx, collectedAt, recs, successfulCollects, partial)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) PruneStaleRecommendations(ctx context.Context, retentionDays int) (int64, error) {
 	m.record("PruneStaleRecommendations", ctx, retentionDays)
 	if !isExpected(&m.Mock, "PruneStaleRecommendations") {
@@ -1971,15 +1980,6 @@ func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context,
 		return nil
 	}
 	args := m.Called(ctx, errMsg)
-	return args.Error(0)
-}
-
-func (m *MockConfigStore) SetRecommendationsCollectionPartial(ctx context.Context, partial *config.RecommendationsCollectionPartial) error {
-	m.record("SetRecommendationsCollectionPartial", ctx, partial)
-	if !isExpected(&m.Mock, "SetRecommendationsCollectionPartial") {
-		return nil
-	}
-	args := m.Called(ctx, partial)
 	return args.Error(0)
 }
 

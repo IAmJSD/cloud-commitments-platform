@@ -45,6 +45,15 @@ const azurePricingMigrationVersion = 106
 // insert. This collapses ambient and registered identities consistently
 // on both sides of the join.
 func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error {
+	return s.UpsertRecommendationsWithPartial(ctx, collectedAt, recs, successfulCollects, nil)
+}
+
+// UpsertRecommendationsWithPartial is UpsertRecommendations that records the
+// collection's incomplete-sweep summary in the same transaction. The previous
+// Azure pricing hold is read under a row lock and merged into partial (see
+// carryAzureHold), so overlapping collections cannot drop each other's hold
+// and a failed read or write rolls the rows back with the marker.
+func (s *PostgresStore) UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect, partial *RecommendationsCollectionPartial) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -72,6 +81,13 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		}
 	}
 
+	// The state row lock is taken last, after the row writes, so the lock order
+	// is unchanged from the plain UPDATE this replaced.
+	partialJSON, markerErr := lockedMarkerJSON(ctx, tx, partial, successfulCollects)
+	if markerErr != nil {
+		return markerErr
+	}
+
 	// last_collected_at only moves forward (issue #111). Two collections can
 	// overlap (cron and a user refresh), and the one that started first can
 	// commit last; an unconditional SET would then move freshness backwards
@@ -83,9 +99,9 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		UPDATE recommendations_state
 		   SET last_collected_at       = GREATEST(last_collected_at, $1),
 		       last_collection_error   = NULL,
-		       last_collection_partial = NULL
+		       last_collection_partial = $2::jsonb
 		 WHERE id = 1
-	`, collectedAt); err != nil {
+	`, collectedAt, partialJSON); err != nil {
 		return fmt.Errorf("failed to update state: %w", err)
 	}
 
@@ -93,6 +109,60 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		return fmt.Errorf("failed to commit upsert: %w", err)
 	}
 	return nil
+}
+
+// encodeCollectionPartial marshals the marker for the JSONB column; nil stays
+// nil so the column is cleared.
+func encodeCollectionPartial(partial *RecommendationsCollectionPartial) ([]byte, error) {
+	if partial == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(partial)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode collection partial: %w", err)
+	}
+	return encoded, nil
+}
+
+// lockedMarkerJSON returns the encoded marker to write: partial with the
+// previous Azure hold merged in under the state row lock.
+func lockedMarkerJSON(ctx context.Context, tx pgx.Tx, partial *RecommendationsCollectionPartial, collects []SuccessfulCollect) ([]byte, error) {
+	merged, err := carryHoldInTx(ctx, tx, partial, collects)
+	if err != nil {
+		return nil, err
+	}
+	return encodeCollectionPartial(merged)
+}
+
+// carryHoldInTx locks the state row, then merges the previous Azure pricing
+// hold into partial. The lock serializes this read-merge-write against every
+// concurrent collection. An unreadable row or account list fails the tx.
+func carryHoldInTx(ctx context.Context, tx pgx.Tx, partial *RecommendationsCollectionPartial, collects []SuccessfulCollect) (*RecommendationsCollectionPartial, error) {
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT last_collection_partial FROM recommendations_state WHERE id = 1 FOR UPDATE`).Scan(&raw); err != nil {
+		return nil, fmt.Errorf("failed to lock recommendations_state: %w", err)
+	}
+	prev := decodeCollectionPartial(raw)
+	if previousAzureHold(prev) == nil {
+		return partial, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT account_key::text FROM recommendations WHERE provider = 'azure'`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list azure accounts with stored rows: %w", err)
+	}
+	defer rows.Close()
+	stored := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan azure account key: %w", err)
+		}
+		stored[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list azure accounts with stored rows: %w", err)
+	}
+	return carryAzureHold(prev, partial, collects, stored), nil
 }
 
 // successfulCollectArrays converts the SuccessfulCollect slice into the two
@@ -434,7 +504,7 @@ func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*Recom
 
 // decodeCollectionPartial decodes the last_collection_partial JSONB column.
 // NULL decodes to nil (the last collection was complete). The column is only
-// ever written by SetRecommendationsCollectionPartial via json.Marshal, so an
+// ever written by UpsertRecommendationsWithPartial via json.Marshal, so an
 // undecodable value means the row was edited by hand; it is logged and read
 // as nil rather than failing the whole freshness read, which the scheduler's
 // cache-TTL check and every dashboard load depend on.
@@ -472,32 +542,6 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 		 WHERE id = 1
 	`, errMsg); err != nil {
 		return fmt.Errorf("failed to set collection error: %w", err)
-	}
-	return nil
-}
-
-// SetRecommendationsCollectionPartial records the most recent collection's
-// incomplete-sweep summary (issue #87), or clears it when partial is nil.
-// Like SetRecommendationsCollectionError it is called by the scheduler AFTER
-// UpsertRecommendations has reset the column to NULL, so a complete
-// collection leaves it cleared and only a partial one re-sets it. It touches
-// no other column; in particular it must not clear last_collection_started_at
-// (see SetRecommendationsCollectionError, issue #261).
-func (s *PostgresStore) SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error {
-	var raw []byte
-	if partial != nil {
-		encoded, err := json.Marshal(partial)
-		if err != nil {
-			return fmt.Errorf("failed to encode collection partial: %w", err)
-		}
-		raw = encoded
-	}
-	if _, err := s.db.Exec(ctx, `
-		UPDATE recommendations_state
-		   SET last_collection_partial = $1::jsonb
-		 WHERE id = 1
-	`, raw); err != nil {
-		return fmt.Errorf("failed to set collection partial: %w", err)
 	}
 	return nil
 }

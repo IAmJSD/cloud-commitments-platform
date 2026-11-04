@@ -692,6 +692,10 @@ type StoreInterface interface {
 	// SuccessfulCollect for the per-row semantics. There is deliberately no
 	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
+	// UpsertRecommendationsWithPartial is UpsertRecommendations that also
+	// records the collection's incomplete-sweep summary (nil clears it) in the
+	// same transaction, so the rows and the marker commit or roll back together.
+	UpsertRecommendationsWithPartial(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect, partial *RecommendationsCollectionPartial) error
 	// PruneStaleRecommendations deletes the rows of every (provider,
 	// account) pair with no row collected in the last retentionDays days,
 	// leaving every pair that collected inside the window untouched, and
@@ -712,11 +716,6 @@ type StoreInterface interface {
 	PageStoredRecommendations(ctx context.Context, q RecommendationPageQuery) (RecommendationPage, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
-	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
-	// most recent collection's incomplete-sweep summary.
-	// UpsertRecommendations clears it, so a later complete collection drops
-	// the marker.
-	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
 	// OR older than 5 minutes), and stamps a freshly generated owner token

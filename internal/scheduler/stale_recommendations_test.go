@@ -79,8 +79,7 @@ func TestScheduler_persistCollection_PruneErrorIsBestEffort(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	partial := &config.RecommendationsCollectionPartial{}
-	mockStore.On("UpsertRecommendations", ctx, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockStore.On("SetRecommendationsCollectionPartial", ctx, partial).Return(nil)
+	mockStore.On("UpsertRecommendationsWithPartial", ctx, mock.Anything, mock.Anything, mock.Anything, partial).Return(nil)
 	mockStore.On("PruneStaleRecommendations", ctx, config.DefaultStaleRecommendationRetentionDays).
 		Return(int64(0), errors.New("lock timeout"))
 
