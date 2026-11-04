@@ -1808,6 +1808,14 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-style: italic;
 }
 
+/* A load failure inside the menu (issue #1693): an error line, not a choice. */
+.chip-select-notice {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    color: var(--cudly-error-fg);
+    font-size: var(--cudly-fs-sm);
+    white-space: normal;
+}
+
 /* ---------------------------------------------------------------------------
  * API keys usage summary (issue #340/#344 deferred sub-task).
  * Three-tile summary card + top-3 most-active list. Sits above the
