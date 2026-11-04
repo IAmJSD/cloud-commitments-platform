@@ -388,7 +388,7 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 
 	// Fold the request's single service into the stored map rather than
 	// replacing it, so other services survive the edit (issue #934).
-	services, err := mergeRequestedServices(existingPlan.Services, plan.Services)
+	services, err := mergeRequestedServices(existingPlan.Services, plan.Services, req.omittedFields())
 	if err != nil {
 		return nil, err
 	}
