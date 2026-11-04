@@ -49,6 +49,8 @@ let currentRIs: ConvertibleRI[] = [];
 let currentRIsLoaded = false;
 let currentUtilization: Map<string, RIUtilization> = new Map();
 let currentRecommendations: ReshapeRecommendation[] = [];
+// Registered account names by AWS account ID, for the account label (#1692).
+let riAccountNames: Map<string, string> = new Map();
 const exchangePaymentPattern = /^\d+(?:\.\d+)?$/;
 
 // Generation counter to prevent stale utilization data from overwriting fresh data
@@ -320,7 +322,7 @@ async function loadConvertibleRIs(accountID?: string, generation: number = scope
   try {
     // issue #871: scope to the selected account so the page honours the
     // Main Header global filter.
-    const ris = await api.listConvertibleRIs(accountID);
+    const [ris] = await Promise.all([api.listConvertibleRIs(accountID), loadRIAccountNames()]);
     if (generation !== scopeGeneration) return;
     currentRIs = ris;
     currentRIsLoaded = true;
@@ -371,6 +373,25 @@ async function loadExchangeableAzureRIs(accountID: string | undefined, generatio
   }
 }
 
+// Best effort: without names the label falls back to the account ID.
+async function loadRIAccountNames(): Promise<void> {
+  try {
+    const accounts = (await api.listAccountsMinimal({ provider: 'aws' })) ?? [];
+    riAccountNames = new Map(accounts.map(a => [a.external_id, a.name]));
+  } catch (error) {
+    console.warn('RI Exchange: could not load account names:', error);
+    riAccountNames = new Map();
+  }
+}
+
+// "CUDly host (123456789012)": the ID is added only when the name lacks it.
+function riAccountLabel(accountID: string | undefined): string {
+  if (!accountID) return 'could not be determined';
+  const name = riAccountNames.get(accountID);
+  if (!name) return `AWS account ${accountID}`;
+  return name.includes(accountID) ? name : `${name} (${accountID})`;
+}
+
 async function loadUtilization(generation: number): Promise<void> {
   try {
     const utilization = await api.getRIUtilization();
@@ -416,7 +437,9 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
     return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
+  const accountLabels = [...new Set(currentRIs.map(r => riAccountLabel(r.account_id)))];
   container.innerHTML = `
+    <p class="setting-hint" id="ri-exchange-account-label">Account: ${escapeHtml(accountLabels.join(', '))}</p>
     <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
@@ -1205,6 +1228,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   riLabel.appendChild(riSpan);
   riRow.appendChild(riLabel);
   content.appendChild(riRow);
+
+  // #1692: name the account before anything is quoted or executed.
+  const sourceRI = currentRIs.find(r => r.reserved_instance_id === riId);
+  if (sourceRI) {
+    const accountRow = document.createElement('div');
+    accountRow.className = 'setting-row';
+    accountRow.id = 'modal-exchange-account';
+    accountRow.textContent = `Account: ${riAccountLabel(sourceRI.account_id)}`;
+    content.appendChild(accountRow);
+  }
 
   // Targets container: one or more rows, each with offering picker +
   // count. Users click "+ Add target" to split a source RI across

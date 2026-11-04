@@ -2033,7 +2033,9 @@ paths:
         '200':
           description: >
             Convertible RI list. Empty when the deployment's AWS account is
-            outside the session's allowed accounts.
+            outside the session's allowed accounts. Each entry in `instances`
+            carries `account_id`, the AWS account the RI belongs to; it is
+            omitted when that account could not be resolved.
           content:
             application/json:
               schema:

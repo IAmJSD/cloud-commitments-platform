@@ -1396,7 +1396,10 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
 
   it('forwards undefined and skips the account lookup when no account is selected', async () => {
     await loadRIExchange();
-    expect(api.listAccountsMinimal).not.toHaveBeenCalled();
+    // No scope lookup (an unfiltered listAccountsMinimal()); the only call is
+    // the AWS account-name lookup for the account label (issue #1692).
+    expect(api.listAccountsMinimal).not.toHaveBeenCalledWith();
+    expect(api.listAccountsMinimal).toHaveBeenCalledWith({ provider: 'aws' });
     expect(api.listConvertibleRIs).toHaveBeenCalledWith(undefined);
   });
 
