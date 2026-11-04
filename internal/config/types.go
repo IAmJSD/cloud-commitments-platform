@@ -1653,3 +1653,9 @@ type LadderTrancheDB struct {
 	ScheduledDate time.Time `json:"scheduled_date"`
 	CreatedAt     time.Time `json:"created_at"`
 }
+
+// IsUSDCommitmentCurrency is the one rule for "this CommitmentCurrency is
+// USD": whitespace-trimmed and case-insensitive. Empty (unknown) is not USD.
+func IsUSDCommitmentCurrency(currency string) bool {
+	return strings.EqualFold(strings.TrimSpace(currency), "USD")
+}

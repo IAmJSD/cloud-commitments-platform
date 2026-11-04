@@ -28,6 +28,43 @@ func azureMonthlyRec(monthly float64, termYears int) config.RecommendationRecord
 	return config.RecommendationRecord{ID: "r-monthly", Provider: "azure", Service: "compute", Count: 1, Term: termYears, UpfrontCost: 0, MonthlyCost: f64(monthly)}
 }
 
+func currencyRec(currency string) config.RecommendationRecord {
+	r := upfrontRec(100)
+	r.CommitmentCurrency = currency
+	return r
+}
+
+func TestCheckStepCommitmentCap_Currency(t *testing.T) {
+	capped := &config.PurchasePlan{MaxStepCommitment: f64(1000)}
+	cases := []struct {
+		name    string
+		plan    *config.PurchasePlan
+		recs    []config.RecommendationRecord
+		wantErr bool
+	}{
+		{"USD passes", capped, []config.RecommendationRecord{currencyRec("USD")}, false},
+		{"padded lowercase usd passes", capped, []config.RecommendationRecord{currencyRec(" usd ")}, false},
+		{"empty currency passes", capped, []config.RecommendationRecord{currencyRec("")}, false},
+		{"EUR refuses", capped, []config.RecommendationRecord{currencyRec("EUR")}, true},
+		{"JPY refuses", capped, []config.RecommendationRecord{currencyRec("JPY")}, true},
+		{"mixed batch with one EUR refuses", capped, []config.RecommendationRecord{currencyRec("USD"), currencyRec("EUR")}, true},
+		{"uncapped plan is refused by the cap rule, not the currency", &config.PurchasePlan{}, []config.RecommendationRecord{currencyRec("EUR")}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckStepCommitmentCap(tc.plan, tc.recs)
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrStepCommitmentCap)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+	err := CheckStepCommitmentCap(capped, []config.RecommendationRecord{currencyRec("EUR")})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "EUR")
+}
+
 func TestCheckStepCommitmentCap(t *testing.T) {
 	cases := []struct {
 		name    string
