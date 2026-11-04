@@ -443,6 +443,12 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	if fetchErr != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", fetchErr)
 	}
+	// An empty step has no constraint sets to evaluate (the auth check fails
+	// closed on them, which surfaced as a 500), and the executor refuses it
+	// anyway so it cannot complete and advance the ramp (issue #1695).
+	if len(execution.Recommendations) == 0 {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be started: %v", executionID, purchase.ErrPlanStepNoRecommendations))
+	}
 	if constraintErr := h.enforcePurchaseConstraints(ctx, session, "execute", execution.Recommendations); constraintErr != nil {
 		return nil, constraintErr
 	}

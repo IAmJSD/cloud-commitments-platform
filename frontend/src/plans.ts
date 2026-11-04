@@ -455,8 +455,9 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
 
   // #181: a pending step whose date has passed did not run; "pending" alone
   // reads as on schedule. Flag it and name the next action the user can take.
+  const runLabel = hasNoRecommendations ? 'Run now: this step has no recommendations, so there is nothing to run' : 'Run now';
   const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
-  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueHint = canRunPurchase && !hasNoRecommendations ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
   const overdueBadge = overdue
     ? badgeHtml('danger', 'Overdue', 'Scheduled date has passed')
     : '';
@@ -479,7 +480,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions"><span class="row-actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run"${hasNoRecommendations ? ' disabled' : ''} title="${runLabel}" aria-label="${runLabel}">${iconSvg('play')}<span>Run now</span></button>` : ''}
         ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
         ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
         ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small icon-btn" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
@@ -510,9 +511,6 @@ const runNowInFlight = new Set<string>();
 
 function runNowBody(target: PlannedPurchase | undefined): string | HTMLElement {
   if (!target) return 'This immediately executes the purchase.';
-  if (target.has_recommendations === false) {
-    return 'This step has no recommendations attached, so running it will not buy anything.';
-  }
   const summary = buildCommitmentSummary([{
     service: target.service,
     provider: target.provider,
@@ -533,6 +531,10 @@ async function runPlannedPurchaseNow(purchaseId: string): Promise<void> {
   runNowInFlight.add(purchaseId);
   try {
     const target = lastLoadedPurchases.find(p => p.id === purchaseId);
+    if (target?.has_recommendations === false) {
+      showToast({ message: 'This step has no recommendations attached, so there is nothing to run.', kind: 'info', timeout: 5_000 });
+      return;
+    }
     const ok = await confirmDialog({
       title: target ? `Run step ${target.step_number}/${target.total_steps} of "${target.plan_name}" now?` : 'Run purchase now?',
       body: runNowBody(target),
