@@ -56,3 +56,10 @@ func TestGetRIExchangeHistoryForAccounts_Integration(t *testing.T) {
 		require.NotNil(t, recs, "%s id list must return an empty slice, not nil", name)
 	}
 }
+
+// A missing id reads as ErrNotFound, which the API maps to a 404.
+func TestGetRIExchangeRecord_MissingIsNotFound_Integration(t *testing.T) {
+	store := NewPostgresStore(setupTestContainerDB(t))
+	_, err := store.GetRIExchangeRecord(context.Background(), "6f1c2a8e-0d4b-4c1e-9a3f-692000000009")
+	require.ErrorIs(t, err, ErrNotFound)
+}
