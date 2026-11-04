@@ -690,3 +690,14 @@ variable "alert_emails" {
     error_message = "alert_emails must be a comma-separated list of email addresses."
   }
 }
+
+variable "trusted_proxy_hops" {
+  description = "Number of trusted proxies that append to X-Forwarded-For before the app (CUDLY_TRUSTED_PROXY_HOPS). 1 = one appending proxy (Cloud Run, GKE ingress). 0 ignores X-Forwarded-For and keys on the peer address. 2 is safe only when the origin admits CDN traffic only; never set it while the origin is directly reachable."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.trusted_proxy_hops >= 0 && var.trusted_proxy_hops <= 8 && floor(var.trusted_proxy_hops) == var.trusted_proxy_hops
+    error_message = "trusted_proxy_hops must be an integer between 0 and 8."
+  }
+}

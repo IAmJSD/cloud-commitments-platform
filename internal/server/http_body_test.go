@@ -88,7 +88,7 @@ func TestHttpToLambdaRequest_BodyAtLimitIsKeptWhole(t *testing.T) {
 	body := bytes.Repeat([]byte("a"), requestBodyLimit)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/test", bytes.NewReader(body))
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, 0)
 
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, requestBodyLimit, len(lambdaReq.Body))
@@ -100,7 +100,7 @@ func TestHttpToLambdaRequest_OversizeBodyIsAnError(t *testing.T) {
 	body := bytes.Repeat([]byte("a"), requestBodyLimit+1)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/test", bytes.NewReader(body))
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, 0)
 
 	testutil.AssertError(t, err)
 	var tooLarge *http.MaxBytesError
@@ -113,7 +113,7 @@ func TestHttpToLambdaRequest_ReadErrorIsReturned(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/test", nil)
 	req.Body = &failingBody{}
 
-	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req, 0)
 
 	testutil.AssertError(t, err)
 	testutil.AssertTrue(t, !errors.Is(err, io.EOF), "a read error must not look like a clean EOF")

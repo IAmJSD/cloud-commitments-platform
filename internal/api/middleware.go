@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/clientip"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -465,6 +466,12 @@ func (h *Handler) requireAdmin(ctx context.Context, req *events.LambdaFunctionUR
 	return session, nil
 }
 
+// allowClientIP is the single place the per-IP limiter is consulted. It keys
+// on the normalised client address; callers log the raw SourceIP.
+func (h *Handler) allowClientIP(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) (bool, error) {
+	return h.rateLimiter.AllowWithIP(ctx, clientip.RateLimitKey(req.RequestContext.HTTP.SourceIP), endpoint)
+}
+
 // checkRateLimit checks if the request is allowed based on IP-based rate limiting.
 // Returns nil if allowed, or an error if rate limited.
 //
@@ -478,7 +485,7 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 	}
 
 	clientIP := req.RequestContext.HTTP.SourceIP
-	allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, endpoint)
+	allowed, err := h.allowClientIP(ctx, req, endpoint)
 	if err != nil {
 		logging.Warnf("Rate limiter error for IP %s: %v", clientIP, err)
 		// Continue on rate limiter errors to avoid blocking legitimate requests
@@ -510,7 +517,7 @@ func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFu
 	}
 
 	clientIP := req.RequestContext.HTTP.SourceIP
-	allowed, err := h.rateLimiter.AllowWithIP(ctx, clientIP, endpoint)
+	allowed, err := h.allowClientIP(ctx, req, endpoint)
 	if err != nil {
 		// High-severity alert: rate limiter unavailable on a credential endpoint.
 		// Fail closed to preserve brute-force protection.

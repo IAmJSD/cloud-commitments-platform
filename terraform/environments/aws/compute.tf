@@ -263,6 +263,7 @@ module "compute_fargate" {
       CREDENTIAL_ENCRYPTION_KEY_SECRET_ARN = module.secrets.credential_encryption_key_secret_arn
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                   = "aws"
+      CUDLY_TRUSTED_PROXY_HOPS             = tostring(var.trusted_proxy_hops)
     },
     var.additional_env_vars,
     local.db_pool_env

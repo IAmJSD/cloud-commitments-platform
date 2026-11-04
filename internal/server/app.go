@@ -147,6 +147,10 @@ type ApplicationConfig struct {
 	DefaultTerm                 int
 	EnableDashboard             bool
 	IsLambda                    bool
+	// TrustedProxyHops is the number of proxies that append to
+	// X-Forwarded-For before the app (CUDLY_TRUSTED_PROXY_HOPS). 0 ignores
+	// the header and uses the peer address.
+	TrustedProxyHops int
 	// ReportSQSBatchItemFailures gates whether handleLambdaSQSEvent returns
 	// the partial events.SQSEventResponse{BatchItemFailures} shape (true) or
 	// the old whole-batch aggregate error (false, default). See
@@ -324,8 +328,13 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 	if err != nil {
 		return ApplicationConfig{}, err
 	}
+	hops, err := parseTrustedProxyHops(os.Getenv("CUDLY_TRUSTED_PROXY_HOPS"))
+	if err != nil {
+		return ApplicationConfig{}, err
+	}
 
 	return ApplicationConfig{
+		TrustedProxyHops:            hops,
 		Version:                     version,
 		NotificationDaysBefore:      getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
 		ScheduledPurchaseMaxOverdue: maxOverdue,
@@ -369,6 +378,23 @@ func loadScheduledPurchaseMaxOverdue() (time.Duration, error) {
 		return 0, fmt.Errorf("invalid SCHEDULED_PURCHASE_MAX_OVERDUE: %q must be a positive duration", raw)
 	}
 	return d, nil
+}
+
+// maxTrustedProxyHops bounds CUDLY_TRUSTED_PROXY_HOPS; no real chain is deeper.
+const maxTrustedProxyHops = 8
+
+// parseTrustedProxyHops parses CUDLY_TRUSTED_PROXY_HOPS. Unset means 0 (the
+// X-Forwarded-For header is ignored); anything but an integer in 0..8 is a
+// startup error.
+func parseTrustedProxyHops(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	hops, err := strconv.Atoi(raw)
+	if err != nil || hops < 0 || hops > maxTrustedProxyHops {
+		return 0, fmt.Errorf("invalid CUDLY_TRUSTED_PROXY_HOPS %q: want an integer 0-%d", raw, maxTrustedProxyHops)
+	}
+	return hops, nil
 }
 
 // validateAppConfigEnvDefaults validates the money-moving env-sourced defaults

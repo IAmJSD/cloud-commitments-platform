@@ -3,6 +3,7 @@ package api //nolint:revive // var-naming: package name "api" is intentional for
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -863,4 +864,52 @@ func makeSourceIPReq(ip string) *events.LambdaFunctionURLRequest {
 			},
 		},
 	}
+}
+
+// Both IP-keyed rate-limit helpers must hand the limiter the normalised key,
+// not the raw source address.
+func TestHandler_RateLimitHelpers_UseNormalisedClientKey(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct{ name, source, key string }{
+		{"ipv6 collapses to /64", "2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"},
+		{"port stripped", "192.0.2.9:41234", "192.0.2.9"},
+		{"v4-mapped unmapped", "::ffff:192.0.2.9", "192.0.2.9"},
+		{"unparsable shares one key", "not-an-ip", "invalid"},
+	}
+	calls := map[string]func(*Handler, *events.LambdaFunctionURLRequest) error{
+		"checkRateLimit": func(h *Handler, r *events.LambdaFunctionURLRequest) error {
+			return h.checkRateLimit(ctx, r, "login")
+		},
+		"checkRateLimitStrict": func(h *Handler, r *events.LambdaFunctionURLRequest) error {
+			return h.checkRateLimitStrict(ctx, r, "login")
+		},
+	}
+	for fn, call := range calls {
+		for _, tt := range tests {
+			t.Run(fn+"/"+tt.name, func(t *testing.T) {
+				mockRL := new(MockRateLimiter)
+				mockRL.On("AllowWithIP", ctx, tt.key, "login").Return(true, nil).Once()
+				t.Cleanup(func() { mockRL.AssertExpectations(t) })
+				require.NoError(t, call(&Handler{rateLimiter: mockRL}, makeSourceIPReq(tt.source)))
+			})
+		}
+	}
+}
+
+// Two addresses in one IPv6 /64 spend a single strict budget.
+func TestHandler_checkRateLimitStrict_SharedBudgetAcrossOneV6Prefix(t *testing.T) {
+	ctx := context.Background()
+	h := &Handler{rateLimiter: NewInMemoryRateLimiter()}
+	var denied bool
+	for i := range 200 {
+		src := fmt.Sprintf("2001:db8:1:2::%x", i+1)
+		if err := h.checkRateLimitStrict(ctx, makeSourceIPReq(src), "login"); err != nil {
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, 429, ce.code)
+			denied = true
+			break
+		}
+	}
+	assert.True(t, denied, "addresses in one /64 share a single login bucket")
 }

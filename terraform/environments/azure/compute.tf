@@ -98,6 +98,7 @@ module "compute_container_apps" {
       SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
       CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD            = "azure"
+      CUDLY_TRUSTED_PROXY_HOPS      = tostring(var.trusted_proxy_hops)
     },
     var.additional_env_vars
   )
@@ -200,6 +201,7 @@ module "compute_aks" {
       SCHEDULED_TASK_SECRET_NAME    = module.secrets.scheduled_task_secret_name
       CUDLY_MAX_ACCOUNT_PARALLELISM = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD            = "azure"
+      CUDLY_TRUSTED_PROXY_HOPS      = tostring(var.trusted_proxy_hops)
     },
     var.additional_env_vars
   )
