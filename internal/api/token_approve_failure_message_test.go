@@ -101,9 +101,9 @@ func TestTokenApprove_FailureBodyOmitsRunErrorText(t *testing.T) {
 	}
 }
 
-// The session caller holds approve-* scoped to the execution and keeps the
-// detailed message.
-func TestSessionApprove_FailureKeepsRunErrorText(t *testing.T) {
+// The session caller gets the execution reference and a category message; the
+// provider's own text (ARNs, account IDs) stays in the server log.
+func TestSessionApprove_FailureShowsSummaryNotRunErrorText(t *testing.T) {
 	ctx := context.Background()
 	execID := "c1234567-c123-c123-c123-c1234567abcd"
 	for _, tc := range tokenFailureCases()[:3] {
@@ -113,7 +113,9 @@ func TestSessionApprove_FailureKeepsRunErrorText(t *testing.T) {
 			ce, ok := IsClientError(err)
 			require.True(t, ok, "expected a client error, got %v", err)
 			assert.Equal(t, tc.code, ce.code)
-			assert.Contains(t, ce.message, otherAcctName)
+			assert.NotContains(t, ce.message, "arn:aws")
+			assert.NotContains(t, ce.message, otherAcctID)
+			assert.Contains(t, ce.message, execID)
 		})
 	}
 }

@@ -2771,7 +2771,7 @@ func TestHandler_getPurchaseDetails_WithTimestamps(t *testing.T) {
 		ScheduledDate:    scheduledDate,
 		NotificationSent: &notificationSent,
 		CompletedAt:      &completedAt,
-		Error:            "some error",
+		Error:            "ramp not advanced: some error",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -2793,7 +2793,7 @@ func TestHandler_getPurchaseDetails_WithTimestamps(t *testing.T) {
 	assert.Equal(t, "completed", resultMap["status"])
 	assert.NotNil(t, resultMap["notification_sent"])
 	assert.NotNil(t, resultMap["completed_at"])
-	assert.Equal(t, "some error", resultMap["error"])
+	assert.Equal(t, "ramp not advanced", resultMap["error"])
 }
 
 // Tests for executePurchase

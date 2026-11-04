@@ -587,6 +587,12 @@ func RedriveRefusalReason(exec *config.PurchaseExecution) string {
 	return ""
 }
 
+// Fixed refusal texts, shared with the stored-error allowlist (errnotes.go).
+const (
+	redriveReasonAWSNoGuard       = "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+	redriveReasonAzureSavingsPlan = "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+)
+
 // recRedriveRefusalReason returns the reason a single recommendation cannot be
 // safely re-driven, or "" when it can. Extracted from RedriveRefusalReason to
 // keep that function under the gocyclo budget and to make per-rec exclusions
@@ -601,7 +607,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// "purchase outcome unknown". The commitment may exist, so a second
 		// attempt must not be made until someone has checked the account.
 		if awsPurchaseHasNoDuplicateGuard(rec.Service) {
-			return "AWS EC2 and Redshift purchases have no provider-side duplicate guard, and a lost response means the earlier attempt may already have bought the commitment. Check EC2 Reserved Instances or Redshift Reserved Nodes in the target account and region; if it is missing, start a new purchase instead of retrying"
+			return redriveReasonAWSNoGuard
 		}
 		return ""
 	case "azure":
@@ -610,7 +616,7 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		// re-drive may create a duplicate. All other Azure services use
 		// DoIdempotentPurchaseTwoStep (#729).
 		if rec.Service == "savingsplans" || rec.Service == "savings-plans" {
-			return "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
+			return redriveReasonAzureSavingsPlan
 		}
 		return ""
 	case "gcp":
