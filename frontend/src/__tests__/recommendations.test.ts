@@ -418,7 +418,8 @@ describe('Recommendations Module', () => {
         await loadRecommendations();
 
         expect(api.getRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ service: 'ec2' }));
-        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2)');
+        // #1683: the pushed-down service filter is named like the Service column.
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: EC2)');
 
         // A further client-side filter is counted, not named.
         (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
@@ -426,7 +427,7 @@ describe('Recommendations Module', () => {
           term: { kind: 'set', values: ['1'] },
         });
         document.querySelector<HTMLTableCellElement>('th[data-sort="service"]')?.click();
-        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2, +1 more filter)');
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: EC2, +1 more filter)');
       } finally {
         // Reload unfiltered so the pushed-down scope doesn't leak into later tests.
         (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
@@ -2854,6 +2855,16 @@ describe('Bundle B: column header filter triggers', () => {
     expect(values.sort()).toEqual(['aws', 'azure']);
   });
 
+  // #1683: the Service filter lists display names but still filters on slugs.
+  test('service popover shows display names and keeps slug values', async () => {
+    await loadRecommendations();
+    document.querySelector<HTMLButtonElement>('th .column-filter-btn[data-column="service"]')?.click();
+    const items = Array.from(
+      document.querySelectorAll<HTMLLabelElement>('.column-filter-popover .column-filter-item'),
+    ).map((label) => [label.querySelector('input')?.dataset['value'], label.textContent]);
+    expect(items).toContainEqual(['ec2', 'EC2']);
+  });
+
   test('service popover includes SageMaker when the loaded rec set has it', async () => {
     const sagemakerRecs = [
       ...sampleRecs,
@@ -3294,11 +3305,12 @@ describe('Bundle B: column header filter triggers', () => {
 
     test('Azure SP rows (service="savingsplans") appear in the rendered table', async () => {
       await loadRecommendations();
-      // The table should contain a row with service badge "savingsplans".
+      // The row's service badge shows the display name (#1683), not the slug.
       const serviceBadges = Array.from(
         document.querySelectorAll<HTMLElement>('td .service-badge'),
       ).map((el) => el.textContent ?? '');
-      expect(serviceBadges).toContain('savingsplans');
+      expect(serviceBadges).toContain('Savings Plans');
+      expect(serviceBadges).not.toContain('savingsplans');
     });
 
     test('service popover renders All Savings Plans toggle when Azure SP + AWS SP slugs are present', async () => {

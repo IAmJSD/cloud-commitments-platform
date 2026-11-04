@@ -2038,7 +2038,8 @@ describe('Dashboard Module', () => {
           // ec2: 40 current + 60 lowest option + 200 upside = 300; rds: 50. Total 350.
           expect(label).toContain('2 services');
           expect(label).toContain('$350 in total');
-          expect(label).toContain('Largest: ec2 at $300');
+          // #1649: the text alternative uses the same names as the axis.
+          expect(label).toContain('Largest: EC2 at $300');
         });
 
         test('lists every layer value per service in a "View as table" disclosure', () => {
@@ -2050,9 +2051,10 @@ describe('Dashboard Module', () => {
           expect(document.querySelector('#savings-by-service-table summary')?.textContent).toBe('View as table');
           const headers = Array.from(document.querySelectorAll('#savings-by-service-table thead th')).map((th) => th.textContent);
           expect(headers).toEqual(['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total']);
+          // #1649: display names, matching the chart axis.
           expect(tableRows()).toEqual([
-            ['ec2', '$40', '$60', '$200', '$300'],
-            ['rds', '$0', '$50', '$0', '$50'],
+            ['EC2', '$40', '$60', '$200', '$300'],
+            ['RDS', '$0', '$50', '$0', '$50'],
           ]);
         });
 

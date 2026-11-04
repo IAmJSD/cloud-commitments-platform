@@ -89,5 +89,6 @@ test('the card stays labeled when the service filter is sent to the server', asy
     req.url().includes('/api/recommendations') && new URL(req.url()).searchParams.get('service') === 'ec2');
   await page.locator('#opportunities-tab-btn').click();
   await pushed;
-  await expect(scope).toHaveText(`Filtered: ${AWS_EC2_COUNT} recommendations (Service: ec2)`);
+  // #1683: the pushed-down filter is named like the Service column.
+  await expect(scope).toHaveText(`Filtered: ${AWS_EC2_COUNT} recommendations (Service: EC2)`);
 });

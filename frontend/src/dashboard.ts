@@ -15,6 +15,7 @@ import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale, startRecommendationsRefresh } from './recommendations';
 import { getRecommendationsFreshness } from './api/recommendations';
 import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
+import { serviceLabel } from './lib/service-labels';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 import { buildErrorCallout } from './lib/error-callout';
 import { filterByEnabledProviders } from './lib/enabled-providers';
@@ -48,33 +49,6 @@ const SAVINGS_BY_SERVICE_MAX = 10;
 // the --cudly-surface token (#699), read at render time.
 function segmentGap() {
   return { borderColor: surfaceColor(), borderWidth: { top: 0, right: 2, bottom: 0, left: 0 } } as const;
-}
-
-// Display names for the per-service chart's axis and tooltips. The chart
-// groups by service slug across providers, so shared slugs (compute, cache,
-// relational-db) get a provider-neutral name. Unknown slugs pass through.
-const SERVICE_CHART_LABELS: Readonly<Record<string, string>> = {
-  ec2: 'EC2',
-  rds: 'RDS',
-  elasticache: 'ElastiCache',
-  opensearch: 'OpenSearch',
-  memorydb: 'MemoryDB',
-  redshift: 'Redshift',
-  'savings-plans-compute': 'Compute Savings Plans',
-  'savings-plans-ec2instance': 'EC2 Instance Savings Plans',
-  'savings-plans-sagemaker': 'SageMaker Savings Plans',
-  'savings-plans-database': 'Database Savings Plans',
-  compute: 'Compute',
-  'relational-db': 'Relational DB',
-  cache: 'Cache',
-  search: 'Search',
-  nosql: 'NoSQL',
-};
-
-export function serviceChartLabel(slug: string, compact = false): string {
-  const label = SERVICE_CHART_LABELS[slug] ?? slug;
-  // Narrow charts abbreviate "Savings Plans" the way plan cards do ("Compute SP").
-  return compact ? label.replace(/ Savings Plans$/, ' SP') : label;
 }
 
 // Below this chart width the category labels use the compact names.
@@ -1067,12 +1041,12 @@ export function renderSavingsByService(
   const top = positive[0]!;
   setChartSummary(canvas,
     `Stacked bar chart of monthly savings for ${positive.length} service${positive.length === 1 ? '' : 's'}, `
-    + `${formatCurrency(totalSavings)} in total. Largest: ${top.svc} at ${formatCurrency(top.visibleTotal)}. `
+    + `${formatCurrency(totalSavings)} in total. Largest: ${serviceLabel(top.svc)} at ${formatCurrency(top.visibleTotal)}. `
     + 'Layers: Current / Committed, Lowest option, Upside. Values are in the table below the chart.');
   renderChartTable(canvas, SAVINGS_BY_SERVICE_TABLE_ID, {
     caption: 'Potential savings range per service (monthly)',
     columns: ['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total'],
-    rows: positive.map(e => [e.svc, formatCurrency(e.current), formatCurrency(e.lowestOption),
+    rows: positive.map(e => [serviceLabel(e.svc), formatCurrency(e.current), formatCurrency(e.lowestOption),
       formatCurrency(e.upside), formatCurrency(e.visibleTotal)]),
   });
 
@@ -1130,7 +1104,7 @@ export function renderSavingsByService(
         },
         tooltip: {
           callbacks: {
-            title: (items) => serviceChartLabel(items[0]?.label ?? ''),
+            title: (items) => serviceLabel(items[0]?.label ?? ''),
             label: (ctx) => {
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
@@ -1151,7 +1125,7 @@ export function renderSavingsByService(
               const total = current + lowestOption + upside;
               const pct = totalSavings > 0 ? ((total / totalSavings) * 100).toFixed(1) : '0.0';
               const lines = [
-                `Service: ${serviceChartLabel(svc)}`,
+                `Service: ${serviceLabel(svc)}`,
                 `Total: ${formatCurrency(total)} (${pct}% of all services)`,
                 `Current / Committed: ${formatCurrency(current)}`,
                 `Lowest option: ${formatCurrency(lowestOption)}`,
@@ -1182,7 +1156,7 @@ export function renderSavingsByService(
           ticks: {
             autoSkip: false,
             callback(value) {
-              return serviceChartLabel(this.getLabelForValue(value as number), this.chart.width < SERVICE_CHART_COMPACT_PX);
+              return serviceLabel(this.getLabelForValue(value as number), this.chart.width < SERVICE_CHART_COMPACT_PX);
             },
           },
         },

@@ -27,6 +27,7 @@ import {
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
 import { badgeHtml, statusBadgeHtml } from './lib/status-badge';
 import { isPastScheduledDate } from './lib/purchase-row-guards';
+import { serviceLabel } from './lib/service-labels';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -469,7 +470,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
       <td>${providerBadgeHtml(purchase.provider)}</td>
-      <td>${escapeHtml(purchase.service)}</td>
+      <td>${escapeHtml(serviceLabel(purchase.service, true))}</td>
       <td>${resourceCell}</td>
       <td class="num">${countCell}</td>
       <td>${termCell}</td>
@@ -724,16 +725,6 @@ const LEGACY_PLAN_SERVICE_IDS: Readonly<Record<string, string>> = {
   'gcp/memorystore': 'cache',
 };
 
-function planServiceLabel(slug: string): string {
-  switch (slug) {
-    case 'savings-plans-compute':     return 'Compute SP';
-    case 'savings-plans-ec2instance': return 'EC2 Instance SP';
-    case 'savings-plans-sagemaker':   return 'SageMaker SP';
-    case 'savings-plans-database':    return 'Database SP';
-    default:                          return slug;
-  }
-}
-
 // Extract provider/service info from plan's services map.
 //
 // `service` is now a comma-separated list of all services covered by
@@ -747,28 +738,31 @@ function planServiceLabel(slug: string): string {
 // are plan-level today, not per-service, so picking any entry is
 // correct. If the model ever differentiates per service, this needs
 // to render the same way.
-function extractPlanInfo(plan: BackendPlan): { provider: string | null; service: string; term: number | null; coverage: number | null } {
+//
+// `service` holds the raw slugs (the edit flow selects the service option by
+// it); `serviceDisplay` holds the display names for the card (#1683).
+function extractPlanInfo(plan: BackendPlan): { provider: string | null; service: string; serviceDisplay: string; term: number | null; coverage: number | null } {
   const services = plan.services || {};
   const serviceValues = Object.values(services);
   const firstService = serviceValues[0];
   if (firstService) {
-    const service = serviceValues.length === 0
-      ? '—'
-      : serviceValues
-          .map(s => planServiceLabel(s.service || '—'))
-          .join(', ');
+    const service = serviceValues.map(s => s.service || '—').join(', ');
+    const serviceDisplay = serviceValues
+      .map(s => (s.service ? serviceLabel(s.service, true) : '—'))
+      .join(', ');
     // H-4: never fabricate provider/term/coverage when absent.
     // Return null so callers can surface NO_VALUE/'Unknown' in the display
     // layer rather than silently committing to aws/3yr/80% defaults.
     return {
       provider: firstService.provider || null,
       service,
+      serviceDisplay,
       term: firstService.term || null,
       coverage: firstService.coverage ?? null
     };
   }
   // No services at all: all fields are unknown.
-  return { provider: null, service: '—', term: null, coverage: null };
+  return { provider: null, service: '—', serviceDisplay: '—', term: null, coverage: null };
 }
 
 // Returns true when the plan's next_execution_date is strictly before today.
@@ -866,7 +860,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Service</span>
-            <span class="plan-detail-value">${escapeHtml(info.service)}</span>
+            <span class="plan-detail-value">${escapeHtml(info.serviceDisplay)}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
