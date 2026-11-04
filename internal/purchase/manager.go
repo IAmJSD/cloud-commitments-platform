@@ -278,6 +278,9 @@ const (
 	// #1434).
 	purchaseExecutionTimeout = 3*time.Minute + 30*time.Second
 	terminalSaveTimeout      = 30 * time.Second
+	// purchaseRunBudget is the longest one purchase can run end to end; the
+	// fire sweep starts a row only while this much time remains (#1582).
+	purchaseRunBudget = purchaseExecutionTimeout + terminalSaveTimeout + failureNotifyTimeout
 	// perRecPurchaseTimeout caps one recommendation's provider calls; see
 	// executeSinglePurchase.
 	perRecPurchaseTimeout = 30 * time.Second
@@ -1049,4 +1052,11 @@ func (m *Manager) ProcessScheduledPurchases(ctx context.Context) (*ProcessResult
 	}
 
 	return result, nil
+}
+
+// enoughTimeFor reports whether ctx has at least budget left. A context
+// without a deadline always has enough.
+func enoughTimeFor(ctx context.Context, budget time.Duration) bool {
+	deadline, ok := ctx.Deadline()
+	return !ok || time.Until(deadline) >= budget
 }

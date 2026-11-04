@@ -24,7 +24,7 @@ import (
 // says, so a shorter timeout cuts a purchase or its failure email off
 // mid-flight (#913, #1434).
 func TestLambdaTimeoutCoversPurchaseBudget(t *testing.T) {
-	lambdatimeout.AssertCovers(t, "../..", purchaseExecutionTimeout+terminalSaveTimeout+failureNotifyTimeout)
+	lambdatimeout.AssertCovers(t, "../..", purchaseRunBudget)
 }
 
 // detachFixture wires a direct single-account AWS purchase (issue #706).
@@ -197,4 +197,16 @@ func TestExecuteAndFinalize_ProviderErrorWithCanceledCaller_PersistsFailed(t *te
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, config.ErrAuditLoss)
 	assert.Equal(t, []string{"failed"}, f.saved)
+}
+
+func TestEnoughTimeFor(t *testing.T) {
+	assert.True(t, enoughTimeFor(context.Background(), time.Hour), "no deadline means enough time")
+
+	long, cancelLong := context.WithTimeout(context.Background(), time.Hour)
+	defer cancelLong()
+	assert.True(t, enoughTimeFor(long, time.Minute))
+
+	short, cancelShort := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShort()
+	assert.False(t, enoughTimeFor(short, time.Minute))
 }

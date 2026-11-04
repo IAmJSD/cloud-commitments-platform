@@ -286,3 +286,17 @@ run "rejects_short_task_timeout" {
 
   expect_failures = [var.task_timeout]
 }
+
+run "rejects_task_timeout_below_purchase_budget" {
+  command = plan
+
+  variables {
+    task_timeout = 299
+  }
+
+  plan_options {
+    target = [kubernetes_cron_job_v1.sweep]
+  }
+
+  expect_failures = [var.task_timeout]
+}

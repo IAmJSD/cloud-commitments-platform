@@ -31,6 +31,10 @@ type FireResult struct {
 	// due more than the due-row age cap ago (ErrDueRowTooOld, issue #712). They
 	// end failed with no_submission and are not counted in Errored.
 	Stale int `json:"stale"`
+	// Deferred is the number of due rows left untouched (still scheduled)
+	// because less than purchaseRunBudget remained on the context deadline.
+	// The next sweep picks them up (issue #1582).
+	Deferred int `json:"deferred"`
 }
 
 // fireOutcome is what fireOneDue did with one due row.
@@ -75,6 +79,20 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 	logging.Infof("FireScheduledDelayedPurchases: found %d row(s) due for execution", len(due))
 
 	for i := range due {
+		// Checked before the claim: fireOneDue's purchase ignores the sweep
+		// deadline, so a row started without purchaseRunBudget left would be
+		// cut off by the Lambda timeout and strand in running. An unclaimed row
+		// stays scheduled for the next tick (issue #1582).
+		if !enoughTimeFor(ctx, purchaseRunBudget) {
+			result.Deferred = len(due) - i
+			logDeferred := logging.Warnf
+			if nothingCouldFire(result) {
+				logDeferred = logging.Errorf
+			}
+			logDeferred("FireScheduledDelayedPurchases: less than %s left, deferring %d of %d due row(s) to the next sweep (fired=%d)",
+				purchaseRunBudget, result.Deferred, len(due), result.Fired)
+			break
+		}
 		switch m.fireOneDue(ctx, &due[i]) {
 		case fireFired:
 			result.Fired++
@@ -87,9 +105,17 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 		}
 	}
 
-	logging.Infof("FireScheduledDelayedPurchases: found=%d fired=%d race_lost=%d stale=%d errored=%d",
-		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored)
+	logging.Infof("FireScheduledDelayedPurchases: found=%d fired=%d race_lost=%d stale=%d errored=%d deferred=%d",
+		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored, result.Deferred)
 	return result, nil
+}
+
+// nothingCouldFire reports a sweep that deferred every due row without firing
+// any: the task deadline is shorter than one purchase, so the same happens on
+// every sweep until the 24h cap fails the rows. That is a misconfiguration,
+// logged at Error rather than Warn.
+func nothingCouldFire(r *FireResult) bool {
+	return r.Found > 0 && r.Fired == 0 && r.Deferred == r.Found
 }
 
 // fireOneDue attempts to fire a single due scheduled execution. It returns

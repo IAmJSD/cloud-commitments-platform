@@ -123,3 +123,13 @@ run "all_off" {
     error_message = "Setting enable_fire_scheduled_purchases_schedule = false must remove the fire rule and target."
   }
 }
+
+run "rejects_task_timeout_below_purchase_budget" {
+  command = plan
+
+  variables {
+    task_timeout = 299
+  }
+
+  expect_failures = [var.task_timeout]
+}

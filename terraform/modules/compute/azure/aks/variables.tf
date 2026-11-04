@@ -367,7 +367,7 @@ variable "task_timeout" {
   default     = 900
 
   validation {
-    condition     = var.task_timeout >= 60 && floor(var.task_timeout) == var.task_timeout
-    error_message = "task_timeout must be a whole number of seconds, at least 60."
+    condition     = var.task_timeout >= 300 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 300 (one purchase can run 270s; a shorter task deadline defers every delayed purchase)."
   }
 }

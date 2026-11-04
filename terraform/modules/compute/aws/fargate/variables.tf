@@ -312,9 +312,14 @@ variable "cleanup_schedule" {
 }
 
 variable "task_timeout" {
-  description = "Timeout in seconds for one-off scheduled tasks"
+  description = "Timeout in seconds for one-off scheduled tasks (TASK_TIMEOUT)"
   type        = number
   default     = 900
+
+  validation {
+    condition     = var.task_timeout >= 300 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 300 (one purchase can run 270s; a shorter task deadline defers every delayed purchase)."
+  }
 }
 
 variable "additional_env_vars" {
