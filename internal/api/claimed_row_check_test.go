@@ -186,8 +186,9 @@ func TestClaimedRowCheck_TokenApprove(t *testing.T) {
 }
 
 // requireClaimedRowRefusedAnyBody is requireClaimedRowRefused for the token
-// path, whose error carries no row (ApproveExecution returns none) and whose
-// plan-cap refusal names the step cap rather than "constraints".
+// path, whose refusal carries the claimed row's execution_id and status
+// (ApproveExecution returns it) and a fixed message that, unlike the session
+// path's, does not repeat the check's own text (a step-cap refusal included).
 func requireClaimedRowRefusedAnyBody(t *testing.T, mp *MockPurchaseManager, err error) {
 	t.Helper()
 	require.Error(t, err)
@@ -195,6 +196,8 @@ func requireClaimedRowRefusedAnyBody(t *testing.T, mp *MockPurchaseManager, err 
 	require.True(t, ok, "expected a clientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.message, "nothing was bought")
+	assert.Equal(t, "failed", ce.Details()["status"])
+	assert.NotEmpty(t, ce.Details()["execution_id"])
 	requireOneCheck(t, mp)
 }
 
