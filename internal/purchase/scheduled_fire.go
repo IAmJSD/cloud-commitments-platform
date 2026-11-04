@@ -49,7 +49,8 @@ const (
 //  1. Atomically transition scheduled -> approved via TransitionExecutionStatus
 //     (CAS; skips the row if the revoke handler won the race and flipped it to
 //     canceled first).
-//  2. Stamp ApprovedBy = "scheduler" to preserve audit trail.
+//  2. Keep the ApprovedBy stored when the purchase was approved (the claim
+//     is transitioned_by NULL) and guard the claim with an audit save.
 //  3. Run executeAndFinalize to call the cloud SDK and flip the row to
 //     completed/failed.
 //
@@ -125,12 +126,11 @@ func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution
 		return fireStale
 	}
 
-	// Stamp ApprovedBy for the audit trail before executing.
-	actor := "scheduler"
-	updated.ApprovedBy = &actor
-	// Guarded on "running". A store error stays best-effort, but a lost guard
-	// means the claim is gone, so nothing is bought (issue #835).
-	if stampErr := m.stampClaimedAudit(ctx, updated, "approved_by"); stampErr != nil {
+	// ApprovedBy is the approver stored at schedule time; the scheduler's
+	// claim is transitioned_by NULL. The save is guarded on "running". A store
+	// error stays best-effort, but a lost guard means the claim is gone, so
+	// nothing is bought (issue #835).
+	if stampErr := m.stampClaimedAudit(ctx, updated, "fire claim"); stampErr != nil {
 		return fireRaceLost
 	}
 

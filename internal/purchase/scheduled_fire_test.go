@@ -193,6 +193,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 
 	approved := row
 	approved.Status = "approved"
+	approved.ApprovedBy = aws.String("approver@example.com")
 	store.On("TransitionExecutionStatus", ctx, "exec-scheduled-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
@@ -237,7 +238,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	require.NotNil(t, savedFinal, "the fired execution must be persisted")
 	assert.Equal(t, "completed", savedFinal.Status)
 	require.NotNil(t, savedFinal.ApprovedBy)
-	assert.Equal(t, "scheduler", *savedFinal.ApprovedBy, "the scheduler must stamp itself as approver")
+	assert.Equal(t, "approver@example.com", *savedFinal.ApprovedBy, "the sweep must keep the stored approver")
 
 	mockServiceClient.AssertExpectations(t)
 }
@@ -332,4 +333,90 @@ func TestFireScheduledDelayedPurchases_DelayPathNotSilentNoOp(t *testing.T) {
 	// would revert to the weaker method-existence-only guard that this
 	// assertion replaced.
 	var _ func(context.Context) (*FireResult, error) = (&Manager{}).FireScheduledDelayedPurchases //nolint:staticcheck // QF1011: explicit type is intentional to catch signature drift
+}
+
+// fireWithClaimedApprover fires one due row whose claimed copy carries the
+// given ApprovedBy and returns the sweep result plus every guarded
+// "running" save (the audit stamp and the terminal save).
+func fireWithClaimedApprover(t *testing.T, approver *string) (FireResult, []config.PurchaseExecution) {
+	t.Helper()
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	mockEmail := new(MockEmailSender)
+	mockFactory := new(MockProviderFactory)
+	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
+	mockServiceClient := new(MockServiceClient)
+
+	const acctID = "acct-approver"
+	row := dueExec("exec-approver-fire")
+	row.StepNumber = 1
+	row.Recommendations = []config.RecommendationRecord{
+		{
+			Provider: "aws", Service: "ec2", ResourceType: "m5.large", Region: "us-east-1",
+			Count: 1, UpfrontCost: 300, Savings: 60, Selected: true, CloudAccountID: aws.String(acctID),
+		},
+	}
+	account := &config.CloudAccount{
+		ID: acctID, Name: "Approver Account", Provider: "aws", ExternalID: "555555555555", AWSAuthMode: "access_keys",
+	}
+	plan := &config.PurchasePlan{ID: "plan-1", Name: "Plan 1", RampSchedule: config.RampSchedule{TotalSteps: 1}}
+
+	store.On("GetScheduledExecutionsDue", ctx).Return([]config.PurchaseExecution{row}, nil)
+	claimed := row
+	claimed.Status = "running"
+	claimed.ApprovedBy = approver
+	store.On("TransitionExecutionStatus", ctx, "exec-approver-fire", []string{"scheduled"}, "running", (*string)(nil)).
+		Return(&claimed, nil)
+	store.On("GetPurchasePlan", mock.Anything, "plan-1").Return(plan, nil)
+	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
+		return nil, nil
+	}
+	store.On("GetCloudAccount", mock.Anything, acctID).Return(account, nil)
+	store.On("CompletePlanStep", mock.Anything, "plan-1", 1).Return(nil)
+
+	var saves []config.PurchaseExecution
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).
+		Run(func(args mock.Arguments) {
+			saves = append(saves, *args.Get(1).(*config.PurchaseExecution))
+		}).Return(nil)
+	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
+	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
+	mockServiceClient.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
+		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-approver"}, nil).Once()
+
+	mgr := &Manager{
+		config:          store,
+		email:           mockEmail,
+		providerFactory: mockFactory,
+		credStore:       awsAccessKeyCredStore(),
+		dashboardURL:    "https://dashboard.example.com",
+	}
+	result, err := mgr.FireScheduledDelayedPurchases(ctx)
+	require.NoError(t, err)
+	mockServiceClient.AssertExpectations(t)
+	return *result, saves
+}
+
+// Issue #1589: the sweep used to overwrite the approver stored at approve
+// time with the literal "scheduler".
+func TestFireScheduledDelayedPurchases_KeepsApproverInApprovedBy(t *testing.T) {
+	result, saves := fireWithClaimedApprover(t, aws.String("approver@example.com"))
+	assert.Equal(t, 1, result.Fired)
+	require.GreaterOrEqual(t, len(saves), 2, "audit stamp and terminal save are both guarded on running")
+	for i, s := range saves {
+		require.NotNil(t, s.ApprovedBy, "save %d lost the approver", i)
+		assert.Equal(t, "approver@example.com", *s.ApprovedBy, "save %d", i)
+	}
+}
+
+func TestFireScheduledDelayedPurchases_NilApproverStaysNil(t *testing.T) {
+	result, saves := fireWithClaimedApprover(t, nil)
+	assert.Equal(t, 1, result.Fired, "the purchase still runs without a stored approver")
+	require.GreaterOrEqual(t, len(saves), 2)
+	for i, s := range saves {
+		assert.Nil(t, s.ApprovedBy, "save %d must not invent an approver", i)
+	}
 }
