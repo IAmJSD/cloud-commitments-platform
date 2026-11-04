@@ -102,6 +102,16 @@ describe('openExchangeModal', () => {
     expect(modal.classList.contains('hidden')).toBe(false);
   });
 
+  it('renders a header close-X labelled "Close dialog" that closes the dialog', () => {
+    openExchangeModal('ri-abc123', 2);
+    const x = modal.querySelector<HTMLButtonElement>('.modal-header button.modal-close[data-modal-dismiss]');
+    expect(x).not.toBeNull();
+    expect(x!.getAttribute('aria-label')).toBe('Close dialog');
+    expect(modal.querySelectorAll('.modal-header .modal-close')).toHaveLength(1);
+    x!.click();
+    expect(modal.classList.contains('hidden')).toBe(true);
+  });
+
   it('displays the RI ID in the modal content', () => {
     openExchangeModal('ri-abc123', 2);
     expect(modal.textContent).toContain('ri-abc123');

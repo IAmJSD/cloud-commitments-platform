@@ -829,16 +829,6 @@ select.dirty {
     .expand-panel-body { grid-template-columns: 1fr; }
 }
 
-/* Duplicate Group modal */
-.modal-header-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-}
-.modal-header-row h2 {
-    margin: 0;
-}
 .modal-close {
     background: none;
     border: none;

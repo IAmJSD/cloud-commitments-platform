@@ -28,6 +28,24 @@
     overflow-y: auto;
 }
 
+/* ---- Dialog chrome (ui/modernize-modals) ---------------------------------
+ * A dialog with a .modal-header child (title + close-X, see
+ * modal.ts) gets the shared chrome: a 24px gutter (--modal-pad), a header
+ * and a footer whose hairlines run edge to edge, both pinned while a long
+ * body scrolls, and one of three widths: .modal-sm (420px), the default
+ * (520px) or .modal-wide (800px). :where() keeps these at class specificity
+ * so .modal-wide and per-dialog rules later in the cascade still win.
+ * Dialogs without a header (login, profile) keep the plain box above. */
+.modal-content:where(:has(> .modal-header)) {
+    --modal-pad: var(--cudly-sp-5);
+    padding: var(--modal-pad);
+    width: 520px;
+}
+
+.modal-sm {
+    width: 420px;
+}
+
 .modal-wide {
     width: 800px;
     max-width: 95vw;
@@ -37,6 +55,88 @@
     margin-bottom: 1.5rem;
     color: var(--cudly-text);
 }
+
+/* The negative insets cancel the scroll container's padding, which sticky
+ * positioning respects, so the header and footer sit flush with its edges. */
+.modal-header {
+    position: sticky;
+    top: calc(-1 * var(--modal-pad, 0px));
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-4);
+    margin: calc(-1 * var(--modal-pad, 0px)) calc(-1 * var(--modal-pad, 0px)) var(--cudly-sp-5);
+    padding: var(--cudly-sp-4) var(--modal-pad, 0px);
+    background: var(--cudly-surface);
+    border-bottom: 1px solid var(--cudly-border);
+}
+
+.modal-content .modal-header h2,
+.modal-content .modal-header h3 {
+    margin: 0;
+    font-size: var(--cudly-fs-lg);
+    font-weight: var(--cudly-fw-semibold);
+    line-height: 1.3;
+    color: var(--cudly-text);
+}
+
+/* Quiet square icon button. The element qualifier outranks the bare button
+ * rule and the older .modal-close in settings.css. */
+.modal-header button.modal-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    margin-right: calc(-1 * var(--cudly-sp-2));
+    padding: 0;
+    border: none;
+    border-radius: var(--cudly-r-sm);
+    background: transparent;
+    color: var(--cudly-text-subtle);
+    font-size: var(--cudly-fs-lg);
+    line-height: 1;
+}
+
+.modal-header button.modal-close:hover {
+    background: var(--cudly-surface-muted);
+    color: var(--cudly-text);
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--cudly-border);
+}
+
+/* Footer of a framed dialog: right-aligned actions on an edge-to-edge
+ * hairline, pinned to the bottom while the body scrolls. */
+.modal-content:has(> .modal-header) :is(.modal-buttons, .modal-footer) {
+    position: sticky;
+    bottom: calc(-1 * var(--modal-pad));
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-3);
+    justify-content: flex-end;
+    align-items: center;
+    margin: var(--cudly-sp-5) calc(-1 * var(--modal-pad)) calc(-1 * var(--modal-pad));
+    padding: var(--cudly-sp-4) var(--modal-pad);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+}
+/* The footer draws its own hairline, so a section just above it drops its. */
+.modal-content:has(> .modal-header) .form-section:has(+ :is(.modal-buttons, .modal-footer)) {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+/* ---- end dialog chrome --------------------------------------------------- */
 
 .modal-content label {
     display: block;
@@ -60,15 +160,6 @@
 .modal-content textarea {
     min-height: 80px;
     resize: vertical;
-}
-
-.modal-buttons {
-    display: flex;
-    gap: 1rem;
-    justify-content: flex-end;
-    margin-top: 1.5rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--cudly-border);
 }
 
 /* Modal description */
