@@ -314,6 +314,42 @@ describe('ladder.ts', () => {
     });
   });
 
+  describe('ramp schedule field error across modal reopen', () => {
+    const ramp = (): HTMLTextAreaElement =>
+      document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement;
+
+    async function openAdd(): Promise<void> {
+      document.getElementById('ladder-add-config-btn')!.click();
+      await waitFor(() => expect(document.getElementById('ladder-cfg-account')).toBeEnabled());
+      (document.getElementById('ladder-cfg-account') as HTMLSelectElement).value = 'acct-1';
+    }
+
+    test('a JSON error left by a cancelled save is gone on reopen and clears on the next edit', async () => {
+      await renderSection();
+      await openAdd();
+      ramp().value = '{ not json';
+      await saveLadderConfig();
+      expect(document.querySelector('.field-error')).not.toBeNull();
+      expect(ramp()).toHaveAttribute('aria-invalid', 'true');
+
+      document.getElementById('ladder-modal-cancel-btn')!.click();
+      await openAdd();
+
+      expect(document.querySelector('.field-error')).toBeNull();
+      expect(ramp()).not.toHaveAttribute('aria-invalid');
+      expect(ramp().getAttribute('aria-describedby')).toBe('ladder-cfg-ramp-schedule-hint');
+
+      // A second failed save on the reopened form must still clear on edit.
+      ramp().value = '{ still not json';
+      await saveLadderConfig();
+      expect(document.querySelector('.field-error')).not.toBeNull();
+      ramp().value = '{}';
+      ramp().dispatchEvent(new Event('input', { bubbles: true }));
+      expect(document.querySelector('.field-error')).toBeNull();
+      expect(ramp()).not.toHaveAttribute('aria-invalid');
+    });
+  });
+
   describe('saveLadderConfig required numeric fields (#134)', () => {
     async function primeValidForm(): Promise<void> {
       await renderSection();
