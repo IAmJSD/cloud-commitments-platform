@@ -252,14 +252,21 @@ resource "aws_launch_template" "fck_nat" {
   # it disables source/destination checking on the primary ENI, attaches
   # eni_id as the second interface (retrying until a predecessor that is
   # still terminating has released it), and NATs traffic arriving on it out
-  # of the primary interface.
+  # of the primary interface. The unit is Type=oneshot with no start timeout
+  # and an unbounded attach loop, so the restart is bounded: on timeout or
+  # failure (exit status means attached AND NATing) the instance powers off
+  # and the ASG replaces it, instead of hanging with a green health check.
   user_data = base64encode(<<-EOF
     #!/bin/sh
     : > /etc/fck-nat.conf
     echo "eni_id=${aws_network_interface.fck_nat[0].id}" >> /etc/fck-nat.conf
-    service fck-nat restart
+    timeout 300 service fck-nat restart || poweroff
   EOF
   )
+
+  # The poweroff above must terminate the instance, not stop it, so the ASG
+  # replaces it at once. Needs no IAM: it is an in-guest shutdown.
+  instance_initiated_shutdown_behavior = "terminate"
 
   # Disable source/destination check for NAT functionality
   metadata_options {

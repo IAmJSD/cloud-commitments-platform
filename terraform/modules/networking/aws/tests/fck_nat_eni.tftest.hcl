@@ -42,11 +42,9 @@ variables {
   enable_nat_gateway       = true
 }
 
-# Not covered here: the routes' depends_on on the ASG, which keeps the
-# one-time upgrade from moving egress to the new ENI before an instance that
-# attaches it is InService, and the ASG's depends_on on the instance role
-# policy. Mock providers expose no apply ordering, so deleting either one
-# leaves every run below green; check them by hand when editing main.tf.
+# The routes' and ASG's depends_on, and the attach policy's scoping, are
+# pinned by fck_nat_guard_test.go in ci-cd-permissions: mock providers expose
+# no apply ordering, so they cannot be asserted here.
 run "routes_target_persistent_eni" {
   command = apply
 
@@ -94,6 +92,29 @@ run "persistent_eni_is_attachable_by_every_instance" {
   assert {
     condition     = strcontains(base64decode(aws_launch_template.fck_nat[0].user_data), "service fck-nat restart")
     error_message = "User data must restart the fck-nat service after writing its config, or the ENI is never attached."
+  }
+
+  # user_data is exactly: shebang, conf write, then a restart bounded by
+  # `timeout` that powers the instance off on failure. The fck-nat unit is
+  # Type=oneshot with no start timeout and an unbounded attach loop, so
+  # without the bound a persistent attach failure hangs forever while the EC2
+  # health check stays green. The restart's exit status means attached AND
+  # NATing. Nothing else may run (the string is compared whole).
+  assert {
+    condition = base64decode(aws_launch_template.fck_nat[0].user_data) == join("\n", [
+      "#!/bin/sh",
+      ": > /etc/fck-nat.conf",
+      "echo \"eni_id=${aws_network_interface.fck_nat[0].id}\" >> /etc/fck-nat.conf",
+      "timeout 300 service fck-nat restart || poweroff",
+      "",
+    ])
+    error_message = "user_data must be the shebang, the /etc/fck-nat.conf write, then exactly `timeout 300 service fck-nat restart || poweroff`, and nothing else."
+  }
+
+  # poweroff must terminate (not stop) so the ASG replaces the instance at once.
+  assert {
+    condition     = aws_launch_template.fck_nat[0].instance_initiated_shutdown_behavior == "terminate"
+    error_message = "The fck-nat launch template must set instance_initiated_shutdown_behavior = \"terminate\" so the bounded-restart poweroff gets the instance replaced instead of left stopped."
   }
 
   assert {
