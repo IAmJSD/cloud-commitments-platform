@@ -48,7 +48,13 @@ let currentRIs: ConvertibleRI[] = [];
 // that failed to load (issue #1135).
 let currentRIsLoaded = false;
 let currentUtilization: Map<string, RIUtilization> = new Map();
+// An RI missing from currentUtilization is still loading only while this is
+// 'loading'; after that its utilization is unknown (issue #1687).
+let utilizationStatus: 'loading' | 'loaded' | 'failed' = 'loading';
 let currentRecommendations: ReshapeRecommendation[] = [];
+// True once currentRecommendations holds this scope's successfully loaded
+// reshape list, so a late utilization result never overwrites a load error.
+let currentRecsLoaded = false;
 // Registered account names by AWS account ID, for the account label (#1692).
 let riAccountNames: Map<string, string> = new Map();
 const exchangePaymentPattern = /^\d+(?:\.\d+)?$/;
@@ -108,16 +114,20 @@ const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", auto: "
  */
 export async function loadRIExchange(): Promise<void> {
   const generation = ++scopeGeneration;
+  // Supersede any in-flight utilization load from the previous scope, before
+  // the account lookup, so a late result can't re-render over the new view.
+  utilizationGeneration++;
   let scope: Awaited<ReturnType<typeof resolveScope>>;
   try {
     scope = await resolveScope();
   } catch (error) {
     if (generation !== scopeGeneration) return;
-    utilizationGeneration++;
     currentRIs = [];
     currentRIsLoaded = false;
     currentUtilization = new Map();
+    utilizationStatus = 'loading';
     currentRecommendations = [];
+    currentRecsLoaded = false;
     currentRIAccountID = undefined;
     const message = 'Select a valid account to load this section.';
     for (const id of ['ri-exchange-recommendations-list', 'ri-exchange-history-list']) {
@@ -172,7 +182,9 @@ function renderGCPEmptyStates(): void {
   currentRIs = [];
   currentRIsLoaded = false;
   currentUtilization = new Map();
+  utilizationStatus = 'loading';
   currentRecommendations = [];
+  currentRecsLoaded = false;
   currentRIAccountID = undefined;
 
   const instances = document.getElementById('ri-exchange-instances-list');
@@ -195,6 +207,7 @@ function renderGCPEmptyStates(): void {
  */
 function renderReshapeNotApplicable(provider: string): void {
   currentRecommendations = [];
+  currentRecsLoaded = false;
   const container = document.getElementById('ri-exchange-recommendations-list');
   if (container) {
     renderEmptyState(container, `Reshape recommendations are not available for ${providerLabel(provider)}.`);
@@ -326,6 +339,7 @@ async function loadConvertibleRIs(accountID?: string, generation: number = scope
     if (generation !== scopeGeneration) return;
     currentRIs = ris;
     currentRIsLoaded = true;
+    utilizationStatus = 'loading';
     renderRIsTable(container, accountID);
     // Load utilization asynchronously (Cost Explorer is slow)
     utilizationGeneration++;
@@ -359,6 +373,7 @@ async function loadExchangeableAzureRIs(accountID: string | undefined, generatio
   currentRIs = [];
   currentRIsLoaded = false;
   currentUtilization = new Map();
+  utilizationStatus = 'loading';
   currentRIAccountID = undefined;
 
   try {
@@ -398,13 +413,25 @@ async function loadUtilization(generation: number): Promise<void> {
     // Discard if a newer load was started while we were waiting
     if (generation !== utilizationGeneration) return;
     currentUtilization = new Map(utilization.map(u => [u.reserved_instance_id, u]));
-    // Re-render table with utilization data, preserving the active account
-    // scope so a scoped empty-state message isn't lost (issue #871).
-    const container = document.getElementById('ri-exchange-instances-list');
-    if (container) renderRIsTable(container, currentRIAccountID);
+    utilizationStatus = 'loaded';
   } catch (error) {
+    if (generation !== utilizationGeneration) return;
     console.error('Failed to load RI utilization:', error);
+    // Values from an earlier load are no longer current (same-scope reload).
+    currentUtilization = new Map();
+    utilizationStatus = 'failed';
   }
+  // Re-render table with utilization data, preserving the active account
+  // scope so a scoped empty-state message isn't lost (issue #871).
+  const container = document.getElementById('ri-exchange-instances-list');
+  if (container) renderRIsTable(container, currentRIAccountID);
+  // The reshape empty state depends on which RIs have known utilization.
+  if (currentRecsLoaded && currentRecommendations.length === 0) rerenderReshape();
+}
+
+function hasKnownUtilization(riID: string): boolean {
+  const pct = currentUtilization.get(riID)?.utilization_percent;
+  return typeof pct === 'number' && Number.isFinite(pct);
 }
 
 function renderRIsTable(container: HTMLElement, accountID?: string): void {
@@ -455,10 +482,15 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
       </thead>
       <tbody>
         ${visibleRIs.map(ri => {
-          const util = currentUtilization.get(ri.reserved_instance_id);
-          const utilPct = util ? util.utilization_percent : null;
+          const utilPct = hasKnownUtilization(ri.reserved_instance_id)
+            ? currentUtilization.get(ri.reserved_instance_id)!.utilization_percent
+            : null;
           const utilClass = utilPct === null ? '' : utilPct >= 95 ? 'util-green' : utilPct >= 70 ? 'util-yellow' : 'util-red';
-          const utilText = utilPct === null ? '<span class="loading-inline">...</span>' : `${utilPct.toFixed(1)}%`;
+          const utilText = utilPct !== null
+            ? `${utilPct.toFixed(1)}%`
+            : utilizationStatus === 'loading'
+              ? '<span class="loading-inline">...</span>'
+              : `<span class="text-muted" title="${utilizationStatus === 'failed' ? 'Utilization could not be loaded' : 'No utilization data was returned for this RI'}">No data</span>`;
           return `
           <tr>
             <td class="monospace">${escapeHtml(ri.reserved_instance_id)}</td>
@@ -585,11 +617,13 @@ export async function loadReshapeRecommendations(generation: number = scopeGener
   // renderRecommendations: Source RI / Current / Suggested /
   // Alternatives / Utilization / Normalized Units / Reason / Actions.
   showSkeletonRows(container, 3, 8);
+  currentRecsLoaded = false;
 
   try {
     const resp: ReshapeRecommendationsResponse = await api.getReshapeRecommendations();
     if (generation !== scopeGeneration) return false;
     currentRecommendations = resp.recommendations ?? [];
+    currentRecsLoaded = true;
     renderRecommendations(container);
     renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
     renderExcludedRIsNotice(resp.excluded_ris);
@@ -974,6 +1008,19 @@ function rerenderReshape(): void {
   if (container) renderRecommendations(container);
 }
 
+// Empty-state copy for a loaded, non-empty RI list. Only RIs with known
+// utilization can be said to meet the threshold (issue #1687).
+function reshapeFleetCopy(): string {
+  const total = currentRIs.length;
+  const plural = total === 1 ? '' : 's';
+  if (utilizationStatus === 'loading') return 'No reshape recommendations right now.';
+  const unknown = currentRIs.filter(ri => !hasKnownUtilization(ri.reserved_instance_id)).length;
+  if (unknown === 0) {
+    return `All ${total} convertible RI${plural} meet your utilization threshold. No reshape needed.`;
+  }
+  return `No reshape recommendations right now. Utilization data is unavailable for ${unknown} of ${total} convertible RI${plural}, so ${unknown === 1 ? 'it was' : 'they were'} not checked against your utilization threshold.`;
+}
+
 function renderRecommendations(container: HTMLElement): void {
   if (!currentRecommendations || currentRecommendations.length === 0) {
     // The "well-utilized" copy is only truthful when the RI fleet actually
@@ -986,7 +1033,7 @@ function renderRecommendations(container: HTMLElement): void {
       ? 'No reshape recommendations right now.'
       : currentRIs.length === 0
         ? 'Reshape recommendations appear once your accounts have active convertible Reserved Instances — none are registered yet.'
-        : `All ${currentRIs.length} convertible RI${currentRIs.length === 1 ? '' : 's'} meet your utilization threshold. No reshape needed.`;
+        : reshapeFleetCopy();
     container.innerHTML = `<p class="empty">${escapeHtml(copy)}</p>`;
     return;
   }
