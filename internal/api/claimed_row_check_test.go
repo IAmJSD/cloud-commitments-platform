@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -247,6 +248,163 @@ func TestClaimedRowCheck_DirectExecute_UnmodifiedRowRuns(t *testing.T) {
 	require.NoError(t, err)
 	requireOneCheck(t, mp)
 	mp.AssertNumberOfCalls(t, "DirectExecute", 1)
+}
+
+// --- Account scope on the claimed row ----------------------------------------
+
+// scopedClaimFixture wires a user scoped to scopedInAccount who passes the
+// pre-claim checks on a snapshot in that account; the funnel then hands the
+// check a claimed row whose recommendations sit in claimedAccount.
+type scopedClaimFixture struct {
+	h        *Handler
+	store    *MockConfigStore
+	snapshot *config.PurchaseExecution
+	claimed  *config.PurchaseExecution
+	execID   string
+}
+
+func newScopedClaimFixture(t *testing.T, mp *MockPurchaseManager, execID, claimedAccount string, perms ...auth.Permission) *scopedClaimFixture {
+	t.Helper()
+	withAccount := func(account string) []config.RecommendationRecord {
+		recs := claimRecs(claimUnder)
+		recs[0].CloudAccountID = &account
+		return recs
+	}
+	creator := scopedUserID
+	snapshot := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator, Recommendations: withAccount(scopedInAccount)}
+	h, store := scopedHandler(t)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, scopedToken).Return(&Session{UserID: scopedUserID}, nil).Maybe()
+	mockAuth.On("ValidateCSRFToken", mock.Anything, scopedToken, "").Return(nil).Maybe()
+	mockAuth.grantPermissionsScoped(perms, []string{scopedInAccount})
+	h.auth = mockAuth
+	h.purchase = mp
+	store.On("GetExecutionByID", mock.Anything, execID).Return(snapshot, nil).Maybe()
+	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "acct-" + id, Provider: "aws"}, nil
+	}
+	claimed := *snapshot
+	claimed.Recommendations = withAccount(claimedAccount)
+	mp.ClaimedRow = &claimed
+	return &scopedClaimFixture{h: h, store: store, snapshot: snapshot, claimed: &claimed, execID: execID}
+}
+
+func scopedBearer() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer " + scopedToken, "authorization": "Bearer " + scopedToken}}
+}
+
+type scopedClaimPath struct {
+	name   string
+	call   string // purchase manager method that buys
+	perm   auth.Permission
+	execID string
+	run    func(t *testing.T, f *scopedClaimFixture) error
+}
+
+func scopedClaimPaths() []scopedClaimPath {
+	return []scopedClaimPath{
+		{"run now", "RunPlannedPurchaseNow", auth.Permission{Action: auth.ActionExecute, Resource: auth.ResourcePurchases},
+			"11111111-1111-1111-1111-111111111112",
+			func(_ *testing.T, f *scopedClaimFixture) error {
+				_, err := f.h.runPlannedPurchase(context.Background(), scopedBearer(), f.execID)
+				return err
+			}},
+		{"session approve", "ApproveAndExecute", auth.Permission{Action: auth.ActionApproveAny, Resource: auth.ResourcePurchases},
+			"abcdefab-cdef-abcd-efab-cdefabcdef02",
+			func(_ *testing.T, f *scopedClaimFixture) error {
+				_, err := f.h.approvePurchase(context.Background(), scopedBearer(), f.execID, "")
+				return err
+			}},
+	}
+}
+
+func TestClaimedRowCheck_AccountScope(t *testing.T) {
+	for _, p := range scopedClaimPaths() {
+		for _, tc := range []struct {
+			name    string
+			account string
+			refused bool
+		}{
+			{"claimed row outside scope refused", scopedOutAccount, true},
+			{"claimed row inside scope runs", scopedInAccount, false},
+		} {
+			t.Run(p.name+"/"+tc.name, func(t *testing.T) {
+				mp := &MockPurchaseManager{}
+				f := newScopedClaimFixture(t, mp, p.execID, tc.account, p.perm)
+				mp.On(p.call, mock.Anything, p.execID, mock.Anything, mock.Anything).Return(&config.PurchaseExecution{ExecutionID: p.execID, Status: "completed"}, "", nil).Maybe()
+				err := p.run(t, f)
+				requireOneCheck(t, mp)
+				if tc.refused {
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), "nothing was bought")
+					switch p.call {
+					case "RunPlannedPurchaseNow":
+						mp.AssertNotCalled(t, "RunPlannedPurchaseNow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+					case "ApproveAndExecute":
+						mp.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+					default:
+						t.Fatalf("unknown purchase call %q", p.call)
+					}
+					return
+				}
+				require.NoError(t, err)
+				mp.AssertNumberOfCalls(t, p.call, 1)
+			})
+		}
+	}
+}
+
+func TestClaimedRowCheck_DirectExecute_AccountScope(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		account string
+		refused bool
+	}{
+		{"claimed row outside scope refused", scopedOutAccount, true},
+		{"claimed row inside scope runs", scopedInAccount, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &MockPurchaseManager{}
+			execID := "33333333-3333-3333-3333-333333333333"
+			f := newScopedClaimFixture(t, mp, execID, tc.account,
+				auth.Permission{Action: auth.ActionExecute, Resource: auth.ResourcePurchases},
+				auth.Permission{Action: auth.ActionExecuteAny, Resource: auth.ResourcePurchases})
+			check := f.h.directExecuteClaimCheck(&Session{UserID: scopedUserID})
+			err := check(context.Background(), f.claimed)
+			if tc.refused {
+				require.ErrorIs(t, err, errNotFound)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// A scope that cannot be loaded refuses: the check fails closed.
+func TestClaimedRowCheck_AccountScopeLookupErrorRefuses(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		check func(h *Handler, s *Session) purchase.ClaimedRowCheck
+	}{
+		{"run now", (*Handler).runNowClaimCheck},
+		{"session approve", (*Handler).sessionApproveClaimCheck},
+		{"direct execute", (*Handler).directExecuteClaimCheck},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			mockAuth.On("GetAllowedAccountsAPI", mock.Anything, scopedUserID).Return(nil, assert.AnError)
+			mockAuth.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
+			store := new(MockConfigStore)
+			store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
+			h := &Handler{config: store, auth: mockAuth}
+			creator := scopedUserID
+			claimed := &config.PurchaseExecution{ExecutionID: "x", Status: "pending", CreatedByUserID: &creator, Recommendations: claimRecs(claimUnder)}
+			err := tc.check(h, &Session{UserID: scopedUserID})(ctx, claimed)
+			require.ErrorIs(t, err, assert.AnError)
+		})
+	}
 }
 
 // --- Error mapping -------------------------------------------------------------

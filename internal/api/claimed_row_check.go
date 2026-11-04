@@ -21,11 +21,25 @@ import (
 // without touching the row. A post-claim refusal ends the row "failed" with
 // no_submission set (see purchase.ClaimedRowCheck).
 
+// requireClaimedRowInScope re-runs the pre-claim account scope check
+// (requireExecutionInScope) on the claimed row. A scope that cannot be loaded
+// refuses.
+func (h *Handler) requireClaimedRowInScope(ctx context.Context, session *Session, claimed *config.PurchaseExecution) error {
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	return h.requireExecutionInScope(ctx, scope, claimed, nil)
+}
+
 // runNowClaimCheck is runPlannedPurchase's update-any / creator check
 // (issue #1129) and execute:purchases Constraints check, against the claimed
 // row.
 func (h *Handler) runNowClaimCheck(session *Session) purchase.ClaimedRowCheck {
 	return func(ctx context.Context, claimed *config.PurchaseExecution) error {
+		if err := h.requireClaimedRowInScope(ctx, session, claimed); err != nil {
+			return err
+		}
 		if err := h.authorizeClaimedRowManagement(ctx, session, claimed); err != nil {
 			return err
 		}
@@ -37,6 +51,9 @@ func (h *Handler) runNowClaimCheck(session *Session) purchase.ClaimedRowCheck {
 // approve-own check, against the claimed row.
 func (h *Handler) sessionApproveClaimCheck(session *Session) purchase.ClaimedRowCheck {
 	return func(ctx context.Context, claimed *config.PurchaseExecution) error {
+		if err := h.requireClaimedRowInScope(ctx, session, claimed); err != nil {
+			return err
+		}
 		return h.authorizeSessionApprove(ctx, session, claimed)
 	}
 }
@@ -56,6 +73,9 @@ func (h *Handler) tokenApproveClaimCheck(session *Session) purchase.ClaimedRowCh
 // its creator.
 func (h *Handler) directExecuteClaimCheck(session *Session) purchase.ClaimedRowCheck {
 	return func(ctx context.Context, claimed *config.PurchaseExecution) error {
+		if err := h.requireClaimedRowInScope(ctx, session, claimed); err != nil {
+			return err
+		}
 		if err := h.enforcePurchaseConstraints(ctx, session, "execute", claimed.Recommendations); err != nil {
 			return err
 		}
