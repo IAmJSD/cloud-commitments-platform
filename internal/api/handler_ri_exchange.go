@@ -1485,25 +1485,28 @@ func (h *Handler) resolveReshapeCloudAccountID(ctx context.Context) (string, err
 	return h.resolveAWSCloudAccountID(ctx)
 }
 
-// checkListRIsAccountIDParam enforces the ?account_id= chip filter for
-// listConvertibleRIs. Returns (true, nil) when the running AWS account matches
-// the requested account (or when no account_id param is given), (false, nil)
-// when it does not match (caller should return an empty list), and
-// (false, err) on STS failure.
-func (h *Handler) checkListRIsAccountIDParam(ctx context.Context, params map[string]string) (bool, error) {
-	accountID := params["account_id"]
-	if accountID == "" {
-		return true, nil
-	}
+// listRIsAccount resolves the AWS account the convertible RIs are read from
+// (the deployment's ambient credentials, via STS) and applies the ?account_id=
+// chip filter (issue #871). With a filter, an STS failure fails closed and a
+// different account is out of scope. Without one the account only labels the
+// rows (#1692), so a failure is logged and the label is left empty.
+func (h *Handler) listRIsAccount(ctx context.Context, requested string) (accountID string, inScope bool, err error) {
 	resolve := h.resolveAWSAccountID
 	if h.riInstancesAccountResolver != nil {
 		resolve = h.riInstancesAccountResolver
 	}
-	runningAccountID, err := resolve(ctx)
-	if err != nil {
-		return false, fmt.Errorf("failed to resolve running AWS account for RI scope: %w", err)
+	running, resolveErr := resolve(ctx)
+	if requested == "" {
+		if resolveErr != nil {
+			logging.Warnf("listConvertibleRIs: could not resolve the running AWS account: %v", resolveErr)
+			return "", true, nil
+		}
+		return running, true, nil
 	}
-	return runningAccountID == accountID, nil
+	if resolveErr != nil {
+		return "", false, fmt.Errorf("failed to resolve running AWS account for RI scope: %w", resolveErr)
+	}
+	return running, running == requested, nil
 }
 
 // listConvertibleRIs returns all active convertible Reserved Instances for
@@ -1528,13 +1531,14 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
 		return nil, sErr
 	} else if !inScope {
-		return &ConvertibleRIsResponse{Instances: []ec2ConvertibleRI{}}, nil
+		return &ConvertibleRIsResponse{Instances: []convertibleRIWithAccount{}}, nil
 	}
 
-	if inScope, sErr := h.checkListRIsAccountIDParam(ctx, req.QueryStringParameters); sErr != nil {
-		return nil, sErr
+	runningAccountID, inScope, err := h.listRIsAccount(ctx, req.QueryStringParameters["account_id"])
+	if err != nil {
+		return nil, err
 	} else if !inScope {
-		return &ConvertibleRIsResponse{Instances: []ec2ConvertibleRI{}}, nil
+		return &ConvertibleRIsResponse{Instances: []convertibleRIWithAccount{}}, nil
 	}
 
 	region := req.QueryStringParameters["region"]
@@ -1543,13 +1547,17 @@ func (h *Handler) listConvertibleRIs(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	ec2Client := newReshapeEC2Client(cfg)
+	ec2Client := h.buildReshapeEC2Client(cfg)
 	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
 	}
 
-	return &ConvertibleRIsResponse{Instances: instances}, nil
+	out := make([]convertibleRIWithAccount, len(instances))
+	for i := range instances {
+		out[i] = convertibleRIWithAccount{ec2ConvertibleRI: instances[i], AccountID: runningAccountID}
+	}
+	return &ConvertibleRIsResponse{Instances: out}, nil
 }
 
 // getRIUtilization returns per-RI utilization from Cost Explorer.
@@ -2108,7 +2116,15 @@ func mapAWSExchangeError(opMsg string, err error) error {
 
 // ConvertibleRIsResponse holds the list of convertible RIs.
 type ConvertibleRIsResponse struct {
-	Instances []ec2ConvertibleRI `json:"instances"`
+	Instances []convertibleRIWithAccount `json:"instances"`
+}
+
+// convertibleRIWithAccount names the AWS account an RI belongs to, so the UI
+// can show it before an exchange (#1692). AccountID is empty when the running
+// account could not be resolved.
+type convertibleRIWithAccount struct {
+	ec2ConvertibleRI
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // ExchangeableAzureRIsResponse holds the list of Azure VM reservations that

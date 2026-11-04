@@ -463,6 +463,11 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 			providerFactory: mockFactory,
 		}
 
+		// #1679: a run cut short records why. The write uses its own context,
+		// since the run's context is already done.
+		mockStore.On("SetRecommendationsCollectionError", mock.MatchedBy(func(c context.Context) bool { return c.Err() == nil }),
+			"recommendations collection stopped before saving: it was canceled or ran out of time").Return(nil).Once()
+
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // cancel BEFORE the call
 
@@ -686,6 +691,10 @@ func TestScheduler_CollectRecommendations_ConfigError(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 
 	mockStore.On("GetGlobalConfig", ctx).Return(nil, assert.AnError)
+	// #1679: the run ends without persisting, so it must say why; otherwise
+	// the frontend sees the in-flight marker clear with no error and reports
+	// a refresh that collected nothing as successful.
+	mockStore.On("SetRecommendationsCollectionError", mock.Anything, "recommendations collection stopped before saving: could not load settings").Return(nil).Once()
 
 	scheduler := &Scheduler{
 		config:       mockStore,

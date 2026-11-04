@@ -128,12 +128,14 @@
                             <button type="button" class="btn btn-small trend-range" data-range="all" title="Last 365 days">1y</button>
                         </div>
                     </div>
+                    <div id="savings-trend-loading"></div>
                     <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>
-                    <p id="savings-trend-empty" class="empty hidden">No purchase history yet — the chart will populate once you start executing plans.</p>
+                    <p id="savings-trend-empty" class="empty hidden"></p>
                 </section>
                 <section id="savings-by-service-section" class="card chart-section">
                     <h3>Potential savings range per service</h3>
                     <p id="savings-by-service-note" class="chart-note hidden"></p>
+                    <div id="savings-by-service-loading"></div>
                     <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a current committed-savings layer per service"></canvas>
                     <p id="savings-by-service-empty" class="empty hidden">No positive potential savings found for current recommendations.</p>
                 </section>
@@ -806,13 +808,15 @@
                     <!-- RI Exchange Automation Settings (loaded dynamically) -->
                     <div id="ri-exchange-automation-settings"></div>
 
-                    <!-- Commitment Laddering Settings (flag-gated default-off, loaded dynamically) -->
-                    <div id="commitment-laddering-settings"></div>
-
+                    <!-- Save/Reset cover the sections above. Laddering saves itself
+                         (toggle, config modal, tranche editor), so it sits below (#1690). -->
                     <div class="settings-buttons">
                         <button type="button" id="reset-purchasing-btn" class="btn btn-quiet-danger">Reset to Defaults</button>
                         <button type="button" id="save-purchasing-btn" class="btn btn-primary">Save Settings</button>
                     </div>
+
+                    <!-- Commitment Laddering Settings (flag-gated default-off, loaded dynamically) -->
+                    <div id="commitment-laddering-settings"></div>
                 </section>
 
                 <!-- Accounts Section (Admin Only) — consolidated account onboarding + management -->

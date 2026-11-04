@@ -48,7 +48,15 @@ let currentRIs: ConvertibleRI[] = [];
 // that failed to load (issue #1135).
 let currentRIsLoaded = false;
 let currentUtilization: Map<string, RIUtilization> = new Map();
+// An RI missing from currentUtilization is still loading only while this is
+// 'loading'; after that its utilization is unknown (issue #1687).
+let utilizationStatus: 'loading' | 'loaded' | 'failed' = 'loading';
 let currentRecommendations: ReshapeRecommendation[] = [];
+// True once currentRecommendations holds this scope's successfully loaded
+// reshape list, so a late utilization result never overwrites a load error.
+let currentRecsLoaded = false;
+// Registered account names by AWS account ID, for the account label (#1692).
+let riAccountNames: Map<string, string> = new Map();
 const exchangePaymentPattern = /^\d+(?:\.\d+)?$/;
 
 // Generation counter to prevent stale utilization data from overwriting fresh data
@@ -106,16 +114,20 @@ const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", auto: "
  */
 export async function loadRIExchange(): Promise<void> {
   const generation = ++scopeGeneration;
+  // Supersede any in-flight utilization load from the previous scope, before
+  // the account lookup, so a late result can't re-render over the new view.
+  utilizationGeneration++;
   let scope: Awaited<ReturnType<typeof resolveScope>>;
   try {
     scope = await resolveScope();
   } catch (error) {
     if (generation !== scopeGeneration) return;
-    utilizationGeneration++;
     currentRIs = [];
     currentRIsLoaded = false;
     currentUtilization = new Map();
+    utilizationStatus = 'loading';
     currentRecommendations = [];
+    currentRecsLoaded = false;
     currentRIAccountID = undefined;
     const message = 'Select a valid account to load this section.';
     for (const id of ['ri-exchange-recommendations-list', 'ri-exchange-history-list']) {
@@ -170,7 +182,9 @@ function renderGCPEmptyStates(): void {
   currentRIs = [];
   currentRIsLoaded = false;
   currentUtilization = new Map();
+  utilizationStatus = 'loading';
   currentRecommendations = [];
+  currentRecsLoaded = false;
   currentRIAccountID = undefined;
 
   const instances = document.getElementById('ri-exchange-instances-list');
@@ -193,6 +207,7 @@ function renderGCPEmptyStates(): void {
  */
 function renderReshapeNotApplicable(provider: string): void {
   currentRecommendations = [];
+  currentRecsLoaded = false;
   const container = document.getElementById('ri-exchange-recommendations-list');
   if (container) {
     renderEmptyState(container, `Reshape recommendations are not available for ${providerLabel(provider)}.`);
@@ -320,10 +335,11 @@ async function loadConvertibleRIs(accountID?: string, generation: number = scope
   try {
     // issue #871: scope to the selected account so the page honours the
     // Main Header global filter.
-    const ris = await api.listConvertibleRIs(accountID);
+    const [ris] = await Promise.all([api.listConvertibleRIs(accountID), loadRIAccountNames()]);
     if (generation !== scopeGeneration) return;
     currentRIs = ris;
     currentRIsLoaded = true;
+    utilizationStatus = 'loading';
     renderRIsTable(container, accountID);
     // Load utilization asynchronously (Cost Explorer is slow)
     utilizationGeneration++;
@@ -357,6 +373,7 @@ async function loadExchangeableAzureRIs(accountID: string | undefined, generatio
   currentRIs = [];
   currentRIsLoaded = false;
   currentUtilization = new Map();
+  utilizationStatus = 'loading';
   currentRIAccountID = undefined;
 
   try {
@@ -371,19 +388,50 @@ async function loadExchangeableAzureRIs(accountID: string | undefined, generatio
   }
 }
 
+// Best effort: without names the label falls back to the account ID.
+async function loadRIAccountNames(): Promise<void> {
+  try {
+    const accounts = (await api.listAccountsMinimal({ provider: 'aws' })) ?? [];
+    riAccountNames = new Map(accounts.map(a => [a.external_id, a.name]));
+  } catch (error) {
+    console.warn('RI Exchange: could not load account names:', error);
+    riAccountNames = new Map();
+  }
+}
+
+// "CUDly host (123456789012)": the ID is added only when the name lacks it.
+function riAccountLabel(accountID: string | undefined): string {
+  if (!accountID) return 'could not be determined';
+  const name = riAccountNames.get(accountID);
+  if (!name) return `AWS account ${accountID}`;
+  return name.includes(accountID) ? name : `${name} (${accountID})`;
+}
+
 async function loadUtilization(generation: number): Promise<void> {
   try {
     const utilization = await api.getRIUtilization();
     // Discard if a newer load was started while we were waiting
     if (generation !== utilizationGeneration) return;
     currentUtilization = new Map(utilization.map(u => [u.reserved_instance_id, u]));
-    // Re-render table with utilization data, preserving the active account
-    // scope so a scoped empty-state message isn't lost (issue #871).
-    const container = document.getElementById('ri-exchange-instances-list');
-    if (container) renderRIsTable(container, currentRIAccountID);
+    utilizationStatus = 'loaded';
   } catch (error) {
+    if (generation !== utilizationGeneration) return;
     console.error('Failed to load RI utilization:', error);
+    // Values from an earlier load are no longer current (same-scope reload).
+    currentUtilization = new Map();
+    utilizationStatus = 'failed';
   }
+  // Re-render table with utilization data, preserving the active account
+  // scope so a scoped empty-state message isn't lost (issue #871).
+  const container = document.getElementById('ri-exchange-instances-list');
+  if (container) renderRIsTable(container, currentRIAccountID);
+  // The reshape empty state depends on which RIs have known utilization.
+  if (currentRecsLoaded && currentRecommendations.length === 0) rerenderReshape();
+}
+
+function hasKnownUtilization(riID: string): boolean {
+  const pct = currentUtilization.get(riID)?.utilization_percent;
+  return typeof pct === 'number' && Number.isFinite(pct);
 }
 
 function renderRIsTable(container: HTMLElement, accountID?: string): void {
@@ -416,7 +464,9 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
     return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
+  const accountLabels = [...new Set(currentRIs.map(r => riAccountLabel(r.account_id)))];
   container.innerHTML = `
+    <p class="setting-hint" id="ri-exchange-account-label">Account: ${escapeHtml(accountLabels.join(', '))}</p>
     <table class="table-compact${canExchange ? ' table-sticky-end' : ''}">
       <thead>
         <tr>
@@ -432,10 +482,15 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
       </thead>
       <tbody>
         ${visibleRIs.map(ri => {
-          const util = currentUtilization.get(ri.reserved_instance_id);
-          const utilPct = util ? util.utilization_percent : null;
+          const utilPct = hasKnownUtilization(ri.reserved_instance_id)
+            ? currentUtilization.get(ri.reserved_instance_id)!.utilization_percent
+            : null;
           const utilClass = utilPct === null ? '' : utilPct >= 95 ? 'util-green' : utilPct >= 70 ? 'util-yellow' : 'util-red';
-          const utilText = utilPct === null ? '<span class="loading-inline">...</span>' : `${utilPct.toFixed(1)}%`;
+          const utilText = utilPct !== null
+            ? `${utilPct.toFixed(1)}%`
+            : utilizationStatus === 'loading'
+              ? '<span class="loading-inline">...</span>'
+              : `<span class="text-muted" title="${utilizationStatus === 'failed' ? 'Utilization could not be loaded' : 'No utilization data was returned for this RI'}">No data</span>`;
           return `
           <tr>
             <td class="monospace">${escapeHtml(ri.reserved_instance_id)}</td>
@@ -562,11 +617,13 @@ export async function loadReshapeRecommendations(generation: number = scopeGener
   // renderRecommendations: Source RI / Current / Suggested /
   // Alternatives / Utilization / Normalized Units / Reason / Actions.
   showSkeletonRows(container, 3, 8);
+  currentRecsLoaded = false;
 
   try {
     const resp: ReshapeRecommendationsResponse = await api.getReshapeRecommendations();
     if (generation !== scopeGeneration) return false;
     currentRecommendations = resp.recommendations ?? [];
+    currentRecsLoaded = true;
     renderRecommendations(container);
     renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
     renderExcludedRIsNotice(resp.excluded_ris);
@@ -951,6 +1008,19 @@ function rerenderReshape(): void {
   if (container) renderRecommendations(container);
 }
 
+// Empty-state copy for a loaded, non-empty RI list. Only RIs with known
+// utilization can be said to meet the threshold (issue #1687).
+function reshapeFleetCopy(): string {
+  const total = currentRIs.length;
+  const plural = total === 1 ? '' : 's';
+  if (utilizationStatus === 'loading') return 'No reshape recommendations right now.';
+  const unknown = currentRIs.filter(ri => !hasKnownUtilization(ri.reserved_instance_id)).length;
+  if (unknown === 0) {
+    return `All ${total} convertible RI${plural} meet your utilization threshold. No reshape needed.`;
+  }
+  return `No reshape recommendations right now. Utilization data is unavailable for ${unknown} of ${total} convertible RI${plural}, so ${unknown === 1 ? 'it was' : 'they were'} not checked against your utilization threshold.`;
+}
+
 function renderRecommendations(container: HTMLElement): void {
   if (!currentRecommendations || currentRecommendations.length === 0) {
     // The "well-utilized" copy is only truthful when the RI fleet actually
@@ -963,7 +1033,7 @@ function renderRecommendations(container: HTMLElement): void {
       ? 'No reshape recommendations right now.'
       : currentRIs.length === 0
         ? 'Reshape recommendations appear once your accounts have active convertible Reserved Instances — none are registered yet.'
-        : `All ${currentRIs.length} convertible RI${currentRIs.length === 1 ? '' : 's'} meet your utilization threshold. No reshape needed.`;
+        : reshapeFleetCopy();
     container.innerHTML = `<p class="empty">${escapeHtml(copy)}</p>`;
     return;
   }
@@ -1205,6 +1275,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   riLabel.appendChild(riSpan);
   riRow.appendChild(riLabel);
   content.appendChild(riRow);
+
+  // #1692: name the account before anything is quoted or executed.
+  const sourceRI = currentRIs.find(r => r.reserved_instance_id === riId);
+  if (sourceRI) {
+    const accountRow = document.createElement('div');
+    accountRow.className = 'setting-row';
+    accountRow.id = 'modal-exchange-account';
+    accountRow.textContent = `Account: ${riAccountLabel(sourceRI.account_id)}`;
+    content.appendChild(accountRow);
+  }
 
   // Targets container: one or more rows, each with offering picker +
   // count. Users click "+ Add target" to split a source RI across
@@ -1834,7 +1914,9 @@ function buildAutoWarningBanner(): HTMLDivElement {
   const strong = document.createElement('strong');
   strong.textContent = 'Warning:';
   banner.appendChild(strong);
-  banner.appendChild(document.createTextNode(' Fully Automated mode will execute RI exchanges without manual approval. Ensure spending caps are configured properly.'));
+  // fourEyesExchangeMode runs every mode as manual while 4-eyes is on.
+  banner.appendChild(document.createTextNode(' Fully Automated mode will execute RI exchanges without manual approval, '
+    + 'unless Require different approver (4-eyes mode) is on. Ensure spending caps are configured properly.'));
   return banner;
 }
 
@@ -1845,6 +1927,34 @@ function buildAutoWarningBanner(): HTMLDivElement {
  */
 function numberAttr(value: number | null | undefined): string {
   return escapeHtmlAttr(String(value ?? ''));
+}
+
+// Help text for each Exchange Automation field (issue #1689). The caps only
+// gate scheduled and approved exchanges; executeExchange (the Exchange
+// dialog) uses the limit entered in the dialog. The per-exchange cap is
+// checked before the mode branch (pkg/exchange auto.go), so it limits what
+// is proposed in both modes; approving refuses while either cap is 0
+// (exchangeCapStrings). 4-eyes runs every mode as manual (fourEyesExchangeMode).
+const DIALOG_NOTE = 'Exchanges started from the Exchange dialog use the limit entered there instead.';
+const AUTOMATION_HINTS: Record<string, string> = {
+  'ri-exchange-enabled': 'Lets CUDly check convertible RI utilization on its schedule and propose or run exchanges for underutilized RIs, depending on the mode below.',
+  'ri-exchange-mode': 'Manual Approval queues each proposed exchange for someone to approve. Fully Automated runs it without approval, within the payment limits below. '
+    + 'While Require different approver (4-eyes mode) is on, every exchange waits for approval in either mode.',
+  'ri-exchange-threshold': 'Convertible RIs whose utilization over the lookback window is below this percentage are candidates for an exchange.',
+  'ri-exchange-max-per-exchange': 'Largest payment due allowed for one scheduled or approved exchange. A recommendation with a higher payment due is not proposed in either mode. '
+    + 'At 0, no exchange with a payment due is proposed, and approving any exchange is refused. ' + DIALOG_NOTE,
+  'ri-exchange-max-daily': 'Total payment due allowed per UTC day across scheduled and approved exchanges. '
+    + 'At 0, Fully Automated exchanges with a payment due do not run, and approving any exchange is refused. ' + DIALOG_NOTE,
+  'ri-exchange-lookback': 'Days of utilization history used to judge whether a convertible RI is underutilized.',
+};
+
+// One settings row; the control must carry aria-describedby="<id>-hint".
+function automationRow(id: string, label: string, controlHTML: string): string {
+  return '<div class="setting-row">'
+    + '<div class="setting-info"><label for="' + id + '">' + escapeHtml(label) + '</label>'
+    + '<p class="setting-hint" id="' + id + '-hint">' + escapeHtml(AUTOMATION_HINTS[id]) + '</p></div>'
+    + '<div class="setting-input">' + controlHTML + '</div>'
+    + '</div>';
 }
 
 function renderAutomationSettings(container: HTMLElement, config: RIExchangeConfig): void {
@@ -1861,33 +1971,21 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     + '<fieldset class="settings-category">'
     + '<legend>Exchange Automation</legend>'
     + '<div id="ri-exchange-warning-slot"></div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-enabled">Enable Automated Exchange</label></div>'
-    +   '<div class="setting-input"><label class="toggle-label">'
-    +     '<input type="checkbox" id="ri-exchange-enabled"' + (config.auto_exchange_enabled ? ' checked' : '') + '>'
-    +     '<span class="slider"></span>'
-    +   '</label></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-mode">Mode</label></div>'
-    +   '<div class="setting-input"><select id="ri-exchange-mode">' + modeOptions + '</select></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-threshold">Utilization Threshold (%)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-max-per-exchange">Max Payment Per Exchange (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-max-daily">Max Payment Daily (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-lookback">Lookback Days</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + numberAttr(config.lookback_days) + '" min="1" max="365"></div>'
-    + '</div>'
+    + automationRow('ri-exchange-enabled', 'Enable Automated Exchange',
+        '<label class="toggle-label">'
+        + '<input type="checkbox" id="ri-exchange-enabled" aria-describedby="ri-exchange-enabled-hint"' + (config.auto_exchange_enabled ? ' checked' : '') + '>'
+        + '<span class="slider"></span>'
+        + '</label>')
+    + automationRow('ri-exchange-mode', 'Mode',
+        '<select id="ri-exchange-mode" aria-describedby="ri-exchange-mode-hint">' + modeOptions + '</select>')
+    + automationRow('ri-exchange-threshold', 'Utilization Threshold (%)',
+        '<input type="number" id="ri-exchange-threshold" aria-describedby="ri-exchange-threshold-hint" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1">')
+    + automationRow('ri-exchange-max-per-exchange', 'Max Payment Per Exchange (USD)',
+        '<input type="number" id="ri-exchange-max-per-exchange" aria-describedby="ri-exchange-max-per-exchange-hint" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01">')
+    + automationRow('ri-exchange-max-daily', 'Max Payment Daily (USD)',
+        '<input type="number" id="ri-exchange-max-daily" aria-describedby="ri-exchange-max-daily-hint" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01">')
+    + automationRow('ri-exchange-lookback', 'Lookback Days',
+        '<input type="number" id="ri-exchange-lookback" aria-describedby="ri-exchange-lookback-hint" value="' + numberAttr(config.lookback_days) + '" min="1" max="365">')
     + '</fieldset>'
     + '<div id="ri-exchange-settings-message" class="mt-3"></div>'
     + '</form>';

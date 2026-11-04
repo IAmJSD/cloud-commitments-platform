@@ -114,6 +114,15 @@ describe('Planned Purchases: overdue pending rows (#181)', () => {
     expect(hint?.textContent).toBe('Not run on its date.');
   });
 
+  test('a step with no recommendations does not suggest Run now (#1695)', async () => {
+    setUser(true);
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
+      purchases: [{ ...purchase('pp-bare', '2000-01-03', 'pending'), has_recommendations: false }],
+    });
+    await loadPlans();
+    expect(row('pp-bare').querySelector('.overdue-hint')?.textContent).toBe('Not run on its date.');
+  });
+
   test('a paused row past its date is not flagged (pausing is the user\'s choice)', async () => {
     setUser(true);
     (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [purchase('pp-paused', '2000-01-03', 'paused')] });

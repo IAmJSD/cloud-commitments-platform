@@ -6,7 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
-import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, fanOutBucketAccountLabel, getAccountName, type FanOutBucket } from './recommendations';
+import { setupRecommendationsHandlers, getPurchaseModalRecommendations, getPurchaseModalSession, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, fanOutBucketAccountLabel, getAccountName, type FanOutBucket } from './recommendations';
 import { switchTab, setActiveNav, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
@@ -452,6 +452,7 @@ export async function handleExecutePurchase(): Promise<void> {
   }
 
   const localRecs = getPurchaseModalRecommendations();
+  const modalSession = getPurchaseModalSession();
   if (localRecs.length === 0) {
     showToast({ message: 'No recommendations selected for purchase.', kind: 'warning' });
     return;
@@ -610,9 +611,25 @@ export async function handleExecutePurchase(): Promise<void> {
     const err = error as Error;
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
+    // A recorded execution, a 409 after the claim or any 5xx may follow a real
+    // purchase: close the modal so one more click can't start another. Only
+    // act on the modal session that sent this request.
+    if (attemptMayHaveRun(err) && getPurchaseModalSession() === modalSession) {
+      closePurchaseModal();
+      clearPurchaseModalRecommendations();
+      clearExecuteMode();
+    }
   } finally {
     setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
   }
+}
+
+// attemptMayHaveRun is false only for transport failures and 4xx refusals
+// other than 409, which the server answers before any execution.
+function attemptMayHaveRun(err: unknown): boolean {
+  const e = err as { status?: number; details?: { execution_id?: unknown } };
+  const status = e.status ?? 0;
+  return Boolean(e.details?.execution_id) || status >= 500 || status === 409;
 }
 
 /**

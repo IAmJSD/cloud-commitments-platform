@@ -412,13 +412,24 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 		// fixing the config makes Retry work). Same call and input as the
 		// retry handler's gate so the two cannot disagree (issue #161).
 		if reason := purchase.RedriveRefusalReason(&exec); reason != "" {
-			row.OpsHint = reason
 			row.RedriveUnsafe = true
+			// Only a proven pre-send AWS refusal on every rec means nothing was
+			// bought; for any other outcome the duplicate-purchase warning stays.
+			// ops_hint stays set either way: the History UI hides Retry on it.
+			if purchase.IsDefiniteAWSRefusal(exec.Recommendations, exec.Error) {
+				row.OpsHint = definiteRefusalOpsHint
+			} else {
+				row.OpsHint = reason
+			}
 		}
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row
 }
+
+// definiteRefusalOpsHint replaces the duplicate-purchase warning when AWS
+// refused the purchase before making it.
+const definiteRefusalOpsHint = "AWS refused this purchase before it was made; start a new purchase after fixing the cause"
 
 // annotateHistoryRowByStatus fills in Approver + StatusDescription on the
 // row based on exec.Status. Split from executionToHistoryRow to keep the
@@ -428,7 +439,7 @@ func annotateHistoryRowByStatus(row *config.PurchaseHistoryRecord, exec config.P
 	case "pending", "notified":
 		row.Approver = approver
 	case "failed":
-		row.StatusDescription = exec.Error
+		row.StatusDescription = purchase.SanitizeStoredError(exec.Error)
 	case "expired":
 		row.StatusDescription = "approval link expired (not approved within 7 days)"
 	case config.StatusCanceled, config.LegacyStatusCanceled:
@@ -482,7 +493,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		// double-count guard as the audit-gap completed case below.
 		row.IsAuditGap = true
 		annotateApproved(row, exec, approver)
-		row.StatusDescription = "partially completed — some commitments succeeded, others failed: " + exec.Error
+		row.StatusDescription = "partially completed — some commitments succeeded, others failed: " + purchase.SanitizeStoredError(exec.Error)
 	case "completed":
 		// Only audit-gap completed executions reach here (fetchExecutionsAsHistory
 		// skips clean completed rows). exec.Error carries why the history write
@@ -494,7 +505,7 @@ func annotateInFlightOrAuditGapRow(row *config.PurchaseHistoryRecord, exec confi
 		row.IsAuditGap = true
 		annotateApproved(row, exec, approver)
 		if exec.Error != "" {
-			row.StatusDescription = "purchase completed but its history record could not be saved: " + exec.Error
+			row.StatusDescription = "purchase completed but its history record could not be saved: " + purchase.SanitizeStoredError(exec.Error)
 		}
 	}
 }

@@ -48,6 +48,8 @@ export interface ChipSelectConfig {
   onChange: (newValue: string) => void;
   /** Threshold (inclusive) above which the in-popover search input renders. */
   searchThreshold?: number;
+  /** Called each time the menu opens, before it renders. */
+  onOpen?: () => void;
 }
 
 export interface ChipSelectHandle {
@@ -55,6 +57,8 @@ export interface ChipSelectHandle {
   setValue: (v: string) => void;
   getValue: () => string;
   setOptions: (opts: readonly ChipSelectOption[]) => void;
+  /** Show a non-selectable status line at the top of the menu; null clears it. */
+  setNotice: (text: string | null) => void;
 }
 
 const DEFAULT_SEARCH_THRESHOLD = 8;
@@ -70,6 +74,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
   // State held in closure so handles + handlers see the latest.
   let currentValue = cfg.value;
   let options = cfg.options.slice();
+  let notice: string | null = null;
   let isOpen = false;
   let filterText = '';
   let activeIndex = -1;
@@ -150,6 +155,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
 
   // Stable id prefix for this instance, used for aria-activedescendant.
   const idPrefix = `chip-select-opt-${cfg.label.toLowerCase().replace(/\s+/g, '-')}`;
+  const noticeId = `${idPrefix}-notice`;
   optionsList.id = `${idPrefix}-listbox`;
   search.setAttribute('aria-controls', optionsList.id);
 
@@ -163,8 +169,27 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
     return menu.contains(search) ? search : trigger;
   }
 
+  // Focus stays on the trigger (or search input), so the notice is only
+  // announced if the focused element is described by it (#1693 review).
+  function syncNoticeDescription(): void {
+    trigger.removeAttribute('aria-describedby');
+    search.removeAttribute('aria-describedby');
+    if (isOpen && notice !== null) activeDescendantHost().setAttribute('aria-describedby', noticeId);
+  }
+
   function renderOptions(): void {
     while (optionsList.firstChild) optionsList.removeChild(optionsList.firstChild);
+    if (notice !== null) {
+      // Same disabled-option shape as the "No matches" hint below.
+      const li = document.createElement('li');
+      li.id = noticeId;
+      li.classList.add('chip-select-notice');
+      li.textContent = notice;
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-disabled', 'true');
+      li.setAttribute('aria-selected', 'false');
+      optionsList.appendChild(li);
+    }
     const visible = visibleOptions();
     let activeOptId: string | null = null;
     visible.forEach((opt, i) => {
@@ -212,6 +237,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
       li.setAttribute('aria-selected', 'false');
       optionsList.appendChild(li);
     }
+    syncNoticeDescription();
   }
 
   function selectByValue(value: string): void {
@@ -245,6 +271,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
   function openMenu(): void {
     if (isOpen) return;
     isOpen = true;
+    cfg.onOpen?.();
     filterText = '';
     search.value = '';
     activeIndex = visibleOptions().findIndex((o) => o.value === currentValue);
@@ -284,6 +311,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
     trigger.setAttribute('aria-expanded', 'false');
     trigger.removeAttribute('aria-activedescendant');
     search.removeAttribute('aria-activedescendant');
+    syncNoticeDescription();
     if (outsideListener) {
       document.removeEventListener('mousedown', outsideListener);
       outsideListener = null;
@@ -392,6 +420,10 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
         syncSearchVisibility();
         renderOptions();
       }
+    },
+    setNotice: (text: string | null): void => {
+      notice = text;
+      if (isOpen) renderOptions();
     },
   };
 }

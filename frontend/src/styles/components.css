@@ -418,6 +418,9 @@ button.secondary:hover {
 .toast-message {
     line-height: 1.35;
     word-break: break-word;
+    /* A provider error body can be huge; scroll instead of covering the page. */
+    max-height: 8rem;
+    overflow-y: auto;
 }
 
 .toast-actions {
@@ -1527,6 +1530,29 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     overflow-wrap: anywhere;
 }
 
+/* Clamp long failure text; the full text is in the title and, when clamped,
+   in a keyboard- and touch-reachable disclosure below it. */
+.history-status-desc {
+    max-width: 18rem;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+}
+
+.history-status-full {
+    max-width: 18rem;
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+}
+
+.history-status-full > div {
+    max-height: 12rem;
+    overflow-y: auto;
+}
+
 .history-approver strong {
     color: var(--cudly-text);
     font-weight: var(--cudly-fw-semibold);
@@ -1780,6 +1806,14 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-text-muted);
     font-size: var(--cudly-fs-sm);
     font-style: italic;
+}
+
+/* A load failure inside the menu (issue #1693): an error line, not a choice. */
+.chip-select-notice {
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    color: var(--cudly-error-fg);
+    font-size: var(--cudly-fs-sm);
+    white-space: normal;
 }
 
 /* ---------------------------------------------------------------------------

@@ -1836,14 +1836,131 @@ describe('Recommendations Module', () => {
 
       expect(mockShowToast).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: 'Recommendations refresh failed: aws: cost explorer throttled',
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    // Issue #1679: in Lambda mode the refresh POST returns 202 as soon as the
+    // collection is started, so the outcome is only known once the in-flight
+    // marker clears. A failed new collection must not be reported as refreshed.
+    test('202 accepted — failure toast, not success, when the started collect failed', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: 'aws: cost explorer throttled',
+        last_collection_started_at: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — success toast only after the started collect finishes', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      let collecting = true;
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockImplementation(async () => ({
+        last_collected_at: collecting ? null : new Date().toISOString(),
+        last_collection_error: null,
+        last_collection_started_at: collecting ? new Date().toISOString() : null,
+      }));
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      // Marker still held: nothing announced and no reload yet.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
+
+      collecting = false;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed', kind: 'success' }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — explicit failure when the started collect outlasts the poll budget', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+        last_collection_started_at: new Date().toISOString(),
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(60 * 5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh is taking longer than expected; try again shortly',
           kind: 'error',
         }),
       );
       expect(mockShowToast).not.toHaveBeenCalledWith(
         expect.objectContaining({ message: 'Recommendations refreshed' }),
       );
-      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
     });
 
     test('dedup — concurrent stale loads fire refreshRecommendations only once', async () => {
@@ -3446,6 +3563,54 @@ describe('Bundle B: column header filter triggers', () => {
       expect(document.getElementById('recommendations-action-summary')?.textContent).toBe('(Select rows to act on)');
       await load(variants, ['v1684-au']);
       expect(document.getElementById('recommendations-action-summary')?.textContent).toMatch(/across 1 row\)$/);
+    });
+
+    // Issue #1705: the Savings Plans child rows use the same nesting rules.
+    test('Savings Plans children: a single plan keeps its type, variants of a multi-variant plan stay blank', async () => {
+      const sp = { provider: 'aws', cloud_account_id: 'a1705', region: 'us-east-1', count: 1, upfront_cost: 0 };
+      await load([
+        { ...sp, id: 'sp1705-compute', service: 'savings-plans-compute', resource_type: 'Compute SP', term: 1, payment: 'no-upfront', savings: 40 },
+        { ...sp, id: 'sp1705-ec2-1', service: 'savings-plans-ec2instance', resource_type: '', term: 1, payment: 'no-upfront', savings: 30 },
+        { ...sp, id: 'sp1705-ec2-3', service: 'savings-plans-ec2instance', resource_type: '', term: 3, payment: 'no-upfront', savings: 50 },
+      ]);
+      const spChevron = document.querySelector<HTMLButtonElement>('.rec-sp-group-chevron');
+      if (spChevron?.getAttribute('aria-expanded') !== 'true') spChevron!.click();
+
+      // The single-plan child is not a variant: it keeps its resource type.
+      const single = document.querySelector<HTMLTableRowElement>('tr.recommendation-row[data-rec-id="sp1705-compute"]')!;
+      expect(single.textContent).toContain('Compute SP');
+
+      // The multi-variant child's summary skips its blank resource type.
+      const childSummary = document.querySelector<HTMLTableRowElement>('tr.rec-sp-group-child')!;
+      expect(childSummary.querySelector('.rec-cell-identity')?.textContent?.trim()).toBe('us-east-1 \u2014 2 variants');
+
+      const childChevron = childSummary.querySelector<HTMLButtonElement>('.rec-cell-chevron')!;
+      if (childChevron.getAttribute('aria-expanded') !== 'true') childChevron.click();
+      const variant = document.querySelector<HTMLTableRowElement>('tr.rec-variant-row[data-rec-id="sp1705-ec2-3"]')!;
+      expect(Array.from(variant.cells).slice(1, 5).map((td) => td.textContent?.trim())).toEqual(['', '', '', '']);
+      expect(variant.textContent).not.toContain('us-east-1');
+    });
+
+    test('payback card treats a lower bound that rounds to 0.0 as no payback', async () => {
+      const tiny = { ...base, resource_type: 'db.r6g.large' };
+      // Best end: 1 / 100 = 0.01 months, which rounds to "0.0"; worst end: 600 / 100 = 6 months.
+      await load([
+        { ...tiny, id: 'v1705-tiny', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: 1 },
+        { ...tiny, id: 'v1705-full', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('0.0 \u2013');
+    });
+
+    test('payback card treats a negative lower bound as no payback', async () => {
+      const credit = { ...base, resource_type: 'db.r6g.xlarge' };
+      // A negative upfront (a credit) gives -1 / 100 = -0.01 months, which rounds to "-0.0".
+      await load([
+        { ...credit, id: 'v1705-credit', term: 1, payment: 'partial-upfront', savings: 100, upfront_cost: -1 },
+        { ...credit, id: 'v1705-paid', term: 1, payment: 'all-upfront', savings: 100, upfront_cost: 600 },
+      ]);
+      expect(paybackText()).toContain('Up to 6.0 months');
+      expect(paybackText()).not.toContain('-0.0');
     });
   });
 
