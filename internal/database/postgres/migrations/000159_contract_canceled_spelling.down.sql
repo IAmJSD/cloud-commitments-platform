@@ -1,4 +1,4 @@
--- Rollback 000158: re-widen both status CHECKs to the 000089 EXPAND state.
+-- Rollback 000159: re-widen both status CHECKs to the 000089 EXPAND state.
 --
 -- Rows stay 'canceled': the widened CHECKs accept both spellings and every
 -- build since #1277 reads both, so converting them back is unnecessary.

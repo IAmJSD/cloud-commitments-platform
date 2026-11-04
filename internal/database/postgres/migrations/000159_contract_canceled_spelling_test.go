@@ -19,29 +19,29 @@ import (
 // The legacy spellings are built by concatenation so the US-locale misspell
 // linter does not flag them; they are the values under test.
 const (
-	contract158     = 158
-	legacyStatus158 = "cancel" + "led"
-	legacyActor158  = "cancel" + "led_by"
-	canceled158     = "canceled"
+	contract159     = 159
+	legacyStatus159 = "cancel" + "led"
+	legacyActor159  = "cancel" + "led_by"
+	canceled159     = "canceled"
 )
 
-// legacyInCheck158 matches the legacy spelling's entry in a status CHECK
+// legacyInCheck159 matches the legacy spelling's entry in a status CHECK
 // definition as pg_get_constraintdef renders it (the cast follows the column
 // type: text or character varying).
-var legacyInCheck158 = regexp.MustCompile(`'` + legacyStatus158 + `'::[a-z ]+, `)
+var legacyInCheck159 = regexp.MustCompile(`'` + legacyStatus159 + `'::[a-z ]+, `)
 
-const insertExecution158 = `
-	INSERT INTO purchase_executions (status, scheduled_date, ` + legacyActor158 + `, updated_at)
+const insertExecution159 = `
+	INSERT INTO purchase_executions (status, scheduled_date, ` + legacyActor159 + `, updated_at)
 	VALUES ($1, NOW(), $2, $3) RETURNING execution_id::text`
 
-func seedExecution158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, status string, legacyBy *string, updatedAt time.Time) string {
+func seedExecution159(ctx context.Context, t *testing.T, pool *pgxpool.Pool, status string, legacyBy *string, updatedAt time.Time) string {
 	t.Helper()
 	var id string
-	require.NoError(t, pool.QueryRow(ctx, insertExecution158, status, legacyBy, updatedAt).Scan(&id))
+	require.NoError(t, pool.QueryRow(ctx, insertExecution159, status, legacyBy, updatedAt).Scan(&id))
 	return id
 }
 
-func insertExchange158(ctx context.Context, pool *pgxpool.Pool, status string, updatedAt time.Time) (string, error) {
+func insertExchange159(ctx context.Context, pool *pgxpool.Pool, status string, updatedAt time.Time) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO ri_exchange_history
@@ -53,7 +53,7 @@ func insertExchange158(ctx context.Context, pool *pgxpool.Pool, status string, u
 	return id, err
 }
 
-func statusCheckDef158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, constraint string) string {
+func statusCheckDef159(ctx context.Context, t *testing.T, pool *pgxpool.Pool, constraint string) string {
 	t.Helper()
 	var def string
 	require.NoError(t, pool.QueryRow(ctx,
@@ -61,7 +61,7 @@ func statusCheckDef158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, co
 	return def
 }
 
-func updatedAt158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table, id string) time.Time {
+func updatedAt159(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table, id string) time.Time {
 	t.Helper()
 	idCol := map[string]string{"purchase_executions": "execution_id", "ri_exchange_history": "id"}[table]
 	var ts time.Time
@@ -70,16 +70,16 @@ func updatedAt158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table, 
 	return ts
 }
 
-// readActor158 reads the actor the way every projection does.
-func readActor158(ctx context.Context, t *testing.T, pool *pgxpool.Pool, id string) (status string, actor *string) {
+// readActor159 reads the actor the way every projection does.
+func readActor159(ctx context.Context, t *testing.T, pool *pgxpool.Pool, id string) (status string, actor *string) {
 	t.Helper()
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT status, COALESCE(canceled_by, `+legacyActor158+`) FROM purchase_executions WHERE execution_id = $1`, id,
+		`SELECT status, COALESCE(canceled_by, `+legacyActor159+`) FROM purchase_executions WHERE execution_id = $1`, id,
 	).Scan(&status, &actor))
 	return status, actor
 }
 
-func requireCheckViolation158(t *testing.T, err error, constraint string) {
+func requireCheckViolation159(t *testing.T, err error, constraint string) {
 	t.Helper()
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -87,54 +87,54 @@ func requireCheckViolation158(t *testing.T, err error, constraint string) {
 	assert.Equal(t, constraint, pgErr.ConstraintName)
 }
 
-func s158(v string) *string { return &v }
+func s159(v string) *string { return &v }
 
-// TestMigration_000158_ContractCanceledSpelling locks down the contract half of
+// TestMigration_000159_ContractCanceledSpelling locks down the contract half of
 // the 000089 rename (issue #47): legacy status rows are normalized without
 // restamping updated_at (the plan-health and retention clock), both status
 // CHECKs lose exactly the legacy spelling, the down restores the widened
 // CHECKs exactly, and the write statements of the build before this release
 // (which still write the legacy actor column) keep working against the
 // narrowed schema.
-func TestMigration_000158_ContractCanceledSpelling(t *testing.T) {
+func TestMigration_000159_ContractCanceledSpelling(t *testing.T) {
 	ctx := context.Background()
 	container := testhelpers.RequirePostgresContainer(ctx, t)
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
-	prev := previousMigrationVersion(t, contract158)
+	prev := previousMigrationVersion(t, contract159)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	peBefore := statusCheckDef158(ctx, t, pool, "purchase_executions_status_check")
-	riBefore := statusCheckDef158(ctx, t, pool, "ri_exchange_history_status_check")
-	require.Len(t, legacyInCheck158.FindAllString(peBefore, -1), 1, peBefore)
-	require.Len(t, legacyInCheck158.FindAllString(riBefore, -1), 1, riBefore)
+	peBefore := statusCheckDef159(ctx, t, pool, "purchase_executions_status_check")
+	riBefore := statusCheckDef159(ctx, t, pool, "ri_exchange_history_status_check")
+	require.Len(t, legacyInCheck159.FindAllString(peBefore, -1), 1, peBefore)
+	require.Len(t, legacyInCheck159.FindAllString(riBefore, -1), 1, riBefore)
 
 	old := time.Now().UTC().AddDate(0, 0, -90).Truncate(time.Microsecond)
-	legacyExec := seedExecution158(ctx, t, pool, legacyStatus158, s158("legacy@example.com"), old)
-	failedExec := seedExecution158(ctx, t, pool, "failed", nil, old)
-	legacyExchange, err := insertExchange158(ctx, pool, legacyStatus158, old)
+	legacyExec := seedExecution159(ctx, t, pool, legacyStatus159, s159("legacy@example.com"), old)
+	failedExec := seedExecution159(ctx, t, pool, "failed", nil, old)
+	legacyExchange, err := insertExchange159(ctx, pool, legacyStatus159, old)
 	require.NoError(t, err)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, contract158))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, contract159))
 
 	// Data: the legacy status is normalized and the legacy actor column is
 	// left alone (this release still reads it); other rows are untouched.
-	status, actor := readActor158(ctx, t, pool, legacyExec)
-	assert.Equal(t, canceled158, status)
+	status, actor := readActor159(ctx, t, pool, legacyExec)
+	assert.Equal(t, canceled159, status)
 	require.NotNil(t, actor)
 	assert.Equal(t, "legacy@example.com", *actor)
-	status, _ = readActor158(ctx, t, pool, failedExec)
+	status, _ = readActor159(ctx, t, pool, failedExec)
 	assert.Equal(t, "failed", status)
 	var exchangeStatus string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM ri_exchange_history WHERE id = $1`, legacyExchange).Scan(&exchangeStatus))
-	assert.Equal(t, canceled158, exchangeStatus)
+	assert.Equal(t, canceled159, exchangeStatus)
 
 	// updated_at is the plan-health and retention clock: a spelling change
 	// must not make 90-day-old rows look fresh. Each table has its own
 	// updated_at trigger, so each is asserted on its own.
-	assert.True(t, old.Equal(updatedAt158(ctx, t, pool, "purchase_executions", legacyExec)),
+	assert.True(t, old.Equal(updatedAt159(ctx, t, pool, "purchase_executions", legacyExec)),
 		"purchase_executions.updated_at must survive the normalization")
-	assert.True(t, old.Equal(updatedAt158(ctx, t, pool, "ri_exchange_history", legacyExchange)),
+	assert.True(t, old.Equal(updatedAt159(ctx, t, pool, "ri_exchange_history", legacyExchange)),
 		"ri_exchange_history.updated_at must survive the normalization")
 	var enabled int
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -145,26 +145,26 @@ func TestMigration_000158_ContractCanceledSpelling(t *testing.T) {
 
 	// Schema: each CHECK is its pre-migration definition minus the legacy
 	// spelling, nothing else, and rejects the legacy spelling.
-	assert.Equal(t, legacyInCheck158.ReplaceAllString(peBefore, ""),
-		statusCheckDef158(ctx, t, pool, "purchase_executions_status_check"))
-	assert.Equal(t, legacyInCheck158.ReplaceAllString(riBefore, ""),
-		statusCheckDef158(ctx, t, pool, "ri_exchange_history_status_check"))
-	_, err = pool.Exec(ctx, insertExecution158, legacyStatus158, nil, old)
-	requireCheckViolation158(t, err, "purchase_executions_status_check")
-	_, err = insertExchange158(ctx, pool, legacyStatus158, old)
-	requireCheckViolation158(t, err, "ri_exchange_history_status_check")
+	assert.Equal(t, legacyInCheck159.ReplaceAllString(peBefore, ""),
+		statusCheckDef159(ctx, t, pool, "purchase_executions_status_check"))
+	assert.Equal(t, legacyInCheck159.ReplaceAllString(riBefore, ""),
+		statusCheckDef159(ctx, t, pool, "ri_exchange_history_status_check"))
+	_, err = pool.Exec(ctx, insertExecution159, legacyStatus159, nil, old)
+	requireCheckViolation159(t, err, "purchase_executions_status_check")
+	_, err = insertExchange159(ctx, pool, legacyStatus159, old)
+	requireCheckViolation159(t, err, "ri_exchange_history_status_check")
 
-	requireOldBuildWritesStillWork158(ctx, t, pool)
+	requireOldBuildWritesStillWork159(ctx, t, pool)
 
 	// Down: the widened CHECKs come back byte for byte.
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	assert.Equal(t, peBefore, statusCheckDef158(ctx, t, pool, "purchase_executions_status_check"))
-	assert.Equal(t, riBefore, statusCheckDef158(ctx, t, pool, "ri_exchange_history_status_check"))
-	seedExecution158(ctx, t, pool, legacyStatus158, nil, old)
-	_, err = insertExchange158(ctx, pool, legacyStatus158, old)
+	assert.Equal(t, peBefore, statusCheckDef159(ctx, t, pool, "purchase_executions_status_check"))
+	assert.Equal(t, riBefore, statusCheckDef159(ctx, t, pool, "ri_exchange_history_status_check"))
+	seedExecution159(ctx, t, pool, legacyStatus159, nil, old)
+	_, err = insertExchange159(ctx, pool, legacyStatus159, old)
 	require.NoError(t, err, "down must accept the legacy spelling again")
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, contract158), "up must re-apply cleanly after down")
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, contract159), "up must re-apply cleanly after down")
 }
 
 // Write statements copied from origin/main (internal/config/store_postgres.go
@@ -174,7 +174,7 @@ func TestMigration_000158_ContractCanceledSpelling(t *testing.T) {
 //
 //nolint:misspell // the SQL deliberately names the legacy British column under test
 const (
-	oldSaveExecution158 = `
+	oldSaveExecution159 = `
 		INSERT INTO purchase_executions (
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token_hash, recommendations,
@@ -209,28 +209,28 @@ const (
 				THEN purchase_executions.no_submission OR $28
 				ELSE false END,
 			updated_at = NOW()`
-	oldSetCancelledBy158 = `UPDATE purchase_executions SET canceled_by = $2, cancelled_by = $2, updated_at = NOW()
+	oldSetCancelledBy159 = `UPDATE purchase_executions SET canceled_by = $2, cancelled_by = $2, updated_at = NOW()
 	       WHERE execution_id = $1`
-	oldTransition158 = `
+	oldTransition159 = `
 		UPDATE purchase_executions
 		SET status = $2, updated_at = NOW(),
 		    transitioned_by = $4, transitioned_at = NOW(),
 		    canceled_by = COALESCE((SELECT email FROM users WHERE id = $5), canceled_by),
 		    cancelled_by = COALESCE((SELECT email FROM users WHERE id = $5), cancelled_by)
 		WHERE execution_id = $1 AND status = ANY($3)`
-	oldCancelAllExchanges158 = `
+	oldCancelAllExchanges159 = `
 		UPDATE ri_exchange_history
 		SET status = $1, updated_at = NOW()
 		WHERE status = 'pending'`
 )
 
-func requireOldBuildWritesStillWork158(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+func requireOldBuildWritesStillWork159(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	now := time.Now().UTC()
 	var execID string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&execID))
 	save := func(status, actor string) error {
-		_, err := pool.Exec(ctx, oldSaveExecution158,
+		_, err := pool.Exec(ctx, oldSaveExecution159,
 			nil, execID, status, 1, now, nil, nil, []byte(`[]`), 0, 0, nil, "", nil,
 			nil, "web", nil, actor, 100, nil, nil, 0, nil, nil, nil, nil, nil, nil, false, false)
 		return err
@@ -239,17 +239,17 @@ func requireOldBuildWritesStillWork158(ctx context.Context, t *testing.T, pool *
 	// SavePurchaseExecutionTx: insert, then the ON CONFLICT update, both with
 	// the canonical status and the legacy actor column only.
 	require.NoError(t, save("pending", ""), "old upsert insert path")
-	require.NoError(t, save(canceled158, "old-save@example.com"), "old upsert update path")
-	status, actor := readActor158(ctx, t, pool, execID)
-	assert.Equal(t, canceled158, status)
+	require.NoError(t, save(canceled159, "old-save@example.com"), "old upsert update path")
+	status, actor := readActor159(ctx, t, pool, execID)
+	assert.Equal(t, canceled159, status)
 	require.NotNil(t, actor, "an actor written to the legacy column must read back")
 	assert.Equal(t, "old-save@example.com", *actor)
 
 	// SetCancelledBy.
-	ct, err := pool.Exec(ctx, oldSetCancelledBy158, execID, "set-by@example.com")
+	ct, err := pool.Exec(ctx, oldSetCancelledBy159, execID, "set-by@example.com")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ct.RowsAffected())
-	_, actor = readActor158(ctx, t, pool, execID)
+	_, actor = readActor159(ctx, t, pool, execID)
 	require.NotNil(t, actor)
 	assert.Equal(t, "set-by@example.com", *actor)
 
@@ -257,21 +257,21 @@ func requireOldBuildWritesStillWork158(ctx context.Context, t *testing.T, pool *
 	var userID string
 	require.NoError(t, pool.QueryRow(ctx, `
 		INSERT INTO users (email, password_hash, group_ids) VALUES ('transition@example.com', 'x', ARRAY[gen_random_uuid()]) RETURNING id::text`).Scan(&userID))
-	transitionID := seedExecution158(ctx, t, pool, "pending", nil, now)
-	ct, err = pool.Exec(ctx, oldTransition158, transitionID, canceled158, []string{"pending"}, userID, userID)
+	transitionID := seedExecution159(ctx, t, pool, "pending", nil, now)
+	ct, err = pool.Exec(ctx, oldTransition159, transitionID, canceled159, []string{"pending"}, userID, userID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, ct.RowsAffected())
-	status, actor = readActor158(ctx, t, pool, transitionID)
-	assert.Equal(t, canceled158, status)
+	status, actor = readActor159(ctx, t, pool, transitionID)
+	assert.Equal(t, canceled159, status)
 	require.NotNil(t, actor)
 	assert.Equal(t, "transition@example.com", *actor)
 
 	// CancelAllPendingExchanges.
-	exchangeID, err := insertExchange158(ctx, pool, "pending", now)
+	exchangeID, err := insertExchange159(ctx, pool, "pending", now)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, oldCancelAllExchanges158, canceled158)
+	_, err = pool.Exec(ctx, oldCancelAllExchanges159, canceled159)
 	require.NoError(t, err)
 	var exchangeStatus string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status FROM ri_exchange_history WHERE id = $1`, exchangeID).Scan(&exchangeStatus))
-	assert.Equal(t, canceled158, exchangeStatus)
+	assert.Equal(t, canceled159, exchangeStatus)
 }

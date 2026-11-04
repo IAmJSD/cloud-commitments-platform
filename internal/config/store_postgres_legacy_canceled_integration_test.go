@@ -22,7 +22,7 @@ import (
 const legacyActorColumn = "cancel" + "led_by"
 
 // versionBeforeCanceledContract is the schema a deployment is at when the
-// build under test starts: the highest migration below 000158, the contract
+// build under test starts: the highest migration below 000159, the contract
 // that narrows the status CHECKs. The new build must read and write correctly
 // there, because the migration and the release roll out in either order.
 func versionBeforeCanceledContract(t *testing.T) uint {
@@ -32,7 +32,7 @@ func versionBeforeCanceledContract(t *testing.T) uint {
 	var best uint
 	for _, e := range entries {
 		v, err := strconv.ParseUint(strings.SplitN(e.Name(), "_", 2)[0], 10, 32)
-		if err == nil && v < 158 && uint(v) > best {
+		if err == nil && v < 159 && uint(v) > best {
 			best = uint(v)
 		}
 	}
@@ -41,7 +41,7 @@ func versionBeforeCanceledContract(t *testing.T) uint {
 }
 
 // TestPostgresStore_NewCodeAgainstPreContractSchema runs the new store code on
-// the schema before 000158 with rows an older build wrote: the legacy status
+// the schema before 000159 with rows an older build wrote: the legacy status
 // spelling and an actor only in the legacy column. Every reader must treat them as
 // canceled with their actor, and the new writers must not lose them.
 func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {

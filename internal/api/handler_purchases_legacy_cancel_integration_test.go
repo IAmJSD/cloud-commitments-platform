@@ -17,7 +17,7 @@ import (
 )
 
 // TestCancelOrRecoverExecution_LegacyCanceledRowBeforeContractMigration runs
-// the cancel-race recovery on the schema before 000158 against a row an older
+// the cancel-race recovery on the schema before 000159 against a row an older
 // build canceled (legacy status spelling, actor only in the legacy column). The
 // build and the migration roll out in either order, so the retry must see the
 // race as already won, return the canonical status and keep the actor.
@@ -32,7 +32,7 @@ func TestCancelOrRecoverExecution_LegacyCanceledRowBeforeContractMigration(t *te
 	var before uint
 	for _, e := range entries {
 		v, parseErr := strconv.ParseUint(strings.SplitN(e.Name(), "_", 2)[0], 10, 32)
-		if parseErr == nil && v < 158 && uint(v) > before {
+		if parseErr == nil && v < 159 && uint(v) > before {
 			before = uint(v)
 		}
 	}
