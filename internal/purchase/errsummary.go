@@ -59,6 +59,19 @@ func SummarizeProviderError(err error) (category, message string) {
 	return category, ErrCategoryMessage(category)
 }
 
+// SummarizeFailure is SummarizeProviderError for errors that may also be a
+// known server-authored refusal: those keep their own readable text, since
+// the category message would hide what to fix.
+func SummarizeFailure(err error) (category, message string) {
+	category, message = SummarizeProviderError(err)
+	if category == ErrCategoryUnknown {
+		if text, ok := ServerNoteMessage(err); ok {
+			message = text
+		}
+	}
+	return category, message
+}
+
 func classifyTypedError(err error) string {
 	var apiErr interface{ ErrorCode() string }
 	var azErr *azcore.ResponseError

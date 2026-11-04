@@ -148,7 +148,7 @@ func (h *Handler) cancelListing(ctx context.Context, purchaseID string, seen *co
 	if err != nil {
 		ended, ok := endedMarketplaceListing(ctx, ec2Client, listingID, err)
 		if !ok {
-			logging.Warnf("marketplace: CancelReservedInstancesListing for listing %s failed: %v", listingID, err)
+			logging.Warnf("marketplace: CancelReservedInstancesListing for listing %s failed", listingID)
 			return nil, mapAWSMarketplaceError("AWS cancel listing failed", err)
 		}
 		result = ended

@@ -69,7 +69,9 @@ func TestMarketplaceListCancelFailureKeepsListingRecorded(t *testing.T) {
 	require.True(t, ok, "%v", err)
 	assert.Equal(t, 502, ce.code)
 	assert.NotContains(t, ce.message, "rolled back")
-	assert.Contains(t, ce.message, "RequestLimitExceeded")
+	// The provider's text stays in the log; the user gets the summary and a reference (#1702).
+	assert.NotContains(t, ce.message, "RequestLimitExceeded")
+	assert.Contains(t, ce.message, "reference: purchase "+row.PurchaseID)
 
 	stored, err := store.GetPurchaseHistoryByPurchaseID(ctx, row.PurchaseID)
 	require.NoError(t, err)

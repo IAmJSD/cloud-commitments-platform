@@ -208,7 +208,7 @@ func (h *Handler) createAndPersistListing(ctx context.Context, purchaseID string
 		// the listing unless it rejected the request as a client fault, so only
 		// then is the token dropped; otherwise the retry resends it.
 		h.releaseMarketplaceClaim(ctx, purchaseID, claim, !isClientFaultError(mapped))
-		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed: %v", purchaseID, err)
+		logging.Warnf("marketplace: CreateReservedInstancesListing for purchase %s failed", purchaseID)
 		return ec2MarketplaceListingResult{}, mapped
 	}
 

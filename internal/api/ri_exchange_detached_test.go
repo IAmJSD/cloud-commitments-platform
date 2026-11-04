@@ -114,7 +114,7 @@ func TestExecuteApprovedExchange_RequestCancelStillRecordsFailure(t *testing.T) 
 	defer cancelRequest()
 
 	store := approvedExchangeStore(t, id)
-	store.On("FailRIExchange", liveCtx(), id, "quote no longer valid").Return(nil).Once()
+	store.On("FailRIExchange", liveCtx(), id, "the provider returned an error").Return(nil).Once()
 
 	h := &Handler{config: store, executeExchangeFn: func(_ context.Context, _ exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
 		cancelRequest()
