@@ -203,6 +203,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	// Get global config
 	globalCfg, err := s.config.GetGlobalConfig(ctx)
 	if err != nil {
+		s.recordCollectionStoppedBestEffort(collectionStoppedLoadingSettings, err)
 		return nil, err
 	}
 
@@ -238,6 +239,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	// most 3 providers.
 	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, partial, err := s.collectAllProviders(ctx, globalCfg)
 	if err != nil {
+		s.recordCollectionStoppedBestEffort(collectionStoppedIncomplete, err)
 		return nil, err
 	}
 
@@ -459,6 +461,28 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 	}
 
 	s.pruneStaleRecommendationsBestEffort(ctx)
+}
+
+// Messages recorded when a collection ends before persistCollection runs. They
+// are shown to users as the refresh outcome, so they carry no internal detail;
+// the cause is logged.
+const (
+	collectionStoppedLoadingSettings = "recommendations collection stopped before saving: could not load settings"
+	collectionStoppedIncomplete      = "recommendations collection stopped before saving: it was canceled or ran out of time"
+)
+
+// recordCollectionStoppedBestEffort records why a collection ended without
+// persisting, before the deferred marker clear runs (#1679). Without it the
+// in-flight marker clears with the previous run's (usually empty) error and a
+// refresh that collected nothing reads as a success. It uses its own context
+// because the run's context may already be done.
+func (s *Scheduler) recordCollectionStoppedBestEffort(msg string, cause error) {
+	logging.Errorf("Recommendations collection stopped before saving: %v", cause)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.config.SetRecommendationsCollectionError(ctx, msg); err != nil {
+		logging.Errorf("Failed to record collection error: %v", err)
+	}
 }
 
 // upsertWithMarker writes the rows and the collection's partial marker in one

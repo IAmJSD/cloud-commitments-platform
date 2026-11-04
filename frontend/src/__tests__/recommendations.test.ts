@@ -1836,14 +1836,131 @@ describe('Recommendations Module', () => {
 
       expect(mockShowToast).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: 'Recommendations refresh failed: aws: cost explorer throttled',
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    // Issue #1679: in Lambda mode the refresh POST returns 202 as soon as the
+    // collection is started, so the outcome is only known once the in-flight
+    // marker clears. A failed new collection must not be reported as refreshed.
+    test('202 accepted — failure toast, not success, when the started collect failed', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: 'aws: cost explorer throttled',
+        last_collection_started_at: null,
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.',
+          kind: 'error',
+        }),
+      );
+      // Raw provider error text never reaches the refresh outcome toast.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringMatching(/^Recommendations refresh.*cost explorer throttled/) }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — success toast only after the started collect finishes', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      let collecting = true;
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockImplementation(async () => ({
+        last_collected_at: collecting ? null : new Date().toISOString(),
+        last_collection_error: null,
+        last_collection_started_at: collecting ? new Date().toISOString() : null,
+      }));
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      // Marker still held: nothing announced and no reload yet.
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
+
+      collecting = false;
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Recommendations refreshed', kind: 'success' }),
+      );
+      expect(mockShowToast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'error' }),
+      );
+      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+    });
+
+    test('202 accepted — explicit failure when the started collect outlasts the poll budget', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValueOnce({
+        last_collected_at: null,
+        last_collection_error: null,
+      });
+      (recsApi.refreshRecommendations as jest.Mock).mockResolvedValue({
+        started_at: new Date().toISOString(),
+        last_collected_at: null,
+      });
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: null,
+        last_collection_error: null,
+        last_collection_started_at: new Date().toISOString(),
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(60 * 5_000);
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'Recommendations refresh is taking longer than expected; try again shortly',
           kind: 'error',
         }),
       );
       expect(mockShowToast).not.toHaveBeenCalledWith(
         expect.objectContaining({ message: 'Recommendations refreshed' }),
       );
-      expect(api.getRecommendations).toHaveBeenCalledTimes(2);
+      expect(api.getRecommendations).toHaveBeenCalledTimes(1);
     });
 
     test('dedup — concurrent stale loads fire refreshRecommendations only once', async () => {

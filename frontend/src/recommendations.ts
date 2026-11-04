@@ -403,6 +403,8 @@ export async function triggerAutoRefreshIfStale(
 // POLL_MAX_ATTEMPTS checks total, so the longest wait matches the backend's
 // own detached-collection budget (5 min in internal/scheduler/scheduler.go).
 const COLLECTION_POLL_INTERVAL_MS = 5_000;
+const REFRESH_FAILED_MESSAGE =
+  'Recommendations refresh failed: the collection reported errors. The previous recommendations are still shown.';
 const COLLECTION_POLL_MAX_ATTEMPTS = 60; // 60 * 5s = 5 min
 
 function delay(ms: number): Promise<void> {
@@ -432,8 +434,8 @@ async function pollUntilCollectionClears(): Promise<RecommendationsFreshness | n
 
 /**
  * Kick off a recommendations re-collect, surface the three-stage toast
- * (in-flight / success / failure), and reload the page-specific UI on
- * success. Dedups against a refresh already in flight (#284) so the
+ * (in-flight / success / failure), and reload the page-specific UI once the
+ * collection finishes. Dedups against a refresh already in flight (#284) so the
  * stale-on-open path and the lookback-change path (#909) can never run
  * two concurrent collects. Returns the in-flight promise (or the existing
  * one when a refresh is already running) so callers that need to await
@@ -460,50 +462,47 @@ export function startRecommendationsRefresh(
     timeout: null,
   });
 
-  autoRefreshInFlight = refreshRecommendationsAPI()
-    .then(() => {
-      inFlight.dismiss();
+  // The POST only starts the collection (202 in Lambda mode), and a 409 means
+  // one is already running; either way the outcome is known only once the
+  // in-flight marker clears (issue #1679).
+  const settleWhenCollectionClears = async (): Promise<void> => {
+    const cleared = await pollUntilCollectionClears();
+    inFlight.dismiss();
+    if (!cleared) {
+      showToast({
+        message: 'Recommendations refresh is taking longer than expected; try again shortly',
+        kind: 'error',
+      });
+      return;
+    }
+    if (cleared.last_collection_error) {
+      // last_collection_error can hold raw provider error text, so the toast
+      // names the outcome only (cf. #748).
+      showToast({
+        message: REFRESH_FAILED_MESSAGE,
+        kind: 'error',
+      });
+    } else {
       showToast({
         message: 'Recommendations refreshed',
         kind: 'success',
         timeout: 5_000,
       });
-      // Reload UI data so users see fresh content. Caller passes a
-      // page-specific reload (loadDashboard from Home, loadRecommend-
-      // ations from Opportunities) so we don't force a recs render on
-      // a page that doesn't display them.
-      return onReload();
-    })
+    }
+    // Reload either way: a partially failed collect may still have persisted
+    // rows. Callers pass a page-specific reload (loadDashboard from Home,
+    // loadRecommendations from Opportunities).
+    await onReload();
+  };
+
+  autoRefreshInFlight = refreshRecommendationsAPI()
+    .then(settleWhenCollectionClears)
     .catch(async (err: unknown) => {
       const status = err !== null && typeof err === 'object' && 'status' in err
         ? (err as { status?: unknown }).status
         : undefined;
       if (status === 409) {
-        const cleared = await pollUntilCollectionClears();
-        if (cleared) {
-          inFlight.dismiss();
-          if (cleared.last_collection_error) {
-            showToast({
-              message: `Recommendations refresh failed: ${cleared.last_collection_error}`,
-              kind: 'error',
-            });
-          } else {
-            showToast({
-              message: 'Recommendations refreshed',
-              kind: 'success',
-              timeout: 5_000,
-            });
-          }
-          // Reload either way: a partially failed collect may still have
-          // persisted rows.
-          await onReload();
-          return;
-        }
-        inFlight.dismiss();
-        showToast({
-          message: 'Recommendations refresh is taking longer than expected; try again shortly',
-          kind: 'error',
-        });
+        await settleWhenCollectionClears();
         return;
       }
       inFlight.dismiss();
