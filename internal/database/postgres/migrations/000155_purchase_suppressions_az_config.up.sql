@@ -1,7 +1,7 @@
--- Migration 000156 (issue #408): widen the purchase suppression variant with
+-- Migration 000155 (issue #408): widen the purchase suppression variant with
 -- the AWS RDS az_config ("single-az" / "multi-az").
 --
--- Migration 000155 lets a Single-AZ and a Multi-AZ RDS rec of the same class,
+-- Migration 000156 lets a Single-AZ and a Multi-AZ RDS rec of the same class,
 -- engine, term and payment coexist, but the suppression key (000134) cannot
 -- tell them apart: buying 2x Single-AZ would write a suppression that also
 -- matched, and hid, the Multi-AZ rec. The variant now carries az_config for
@@ -20,10 +20,12 @@
 -- so NULL rows stay unique per execution, 6-tuple and variant as before).
 -- A suppression with an az_config must also carry the rest of the variant.
 --
--- DEPLOY ORDER: apply this before deploying the code that writes az_config
--- (the insert names the column). Apply 000154, 000155 and this migration as
--- separate steps, each after the code it needs is live (see the 000155 header);
--- never dispatch database-migration.yml with the default of all pending steps.
+-- DEPLOY ORDER: apply this (and 000154) before deploying the code that writes
+-- az_config (the insert names the column, and the purchase path and the
+-- suppression listing need it). Both are expand steps. 000156 is the contract
+-- step and must wait until that code is live everywhere (see the 000156
+-- header); never dispatch database-migration.yml with the default of all
+-- pending steps once 000156 is pending.
 ALTER TABLE purchase_suppressions
     ADD COLUMN IF NOT EXISTS az_config TEXT;
 

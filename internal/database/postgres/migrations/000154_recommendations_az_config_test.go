@@ -117,7 +117,7 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM recommendations WHERE resource_type = 'pair'`).Scan(&n))
 	assert.Equal(t, 1, n)
 
-	// Known limitation, resolved by 000155: a row differing only by az_config
+	// Known limitation, resolved by 000156: a row differing only by az_config
 	// is still rejected by the kept indexes without az_config.
 	_, err = pool.Exec(ctx, insertRecForMigration152, "pair", `{"details":{"az_config":"multi-az"}}`)
 	var pgErr *pgconn.PgError

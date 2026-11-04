@@ -1,4 +1,4 @@
--- Migration 000155: drop the 11-column recommendations_natural_key_az_tp_idx
+-- Migration 000156: drop the 11-column recommendations_natural_key_az_tp_idx
 -- and the 12-column recommendations_natural_key_source_idx (#408, contract step
 -- of the RDS AZ-config identity work).
 --

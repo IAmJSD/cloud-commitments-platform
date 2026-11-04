@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	exec156 = "00000000-0000-0000-0000-000000156a01"
+	exec155 = "00000000-0000-0000-0000-000000155a01"
 
-	insertRDSSuppression156 = `
+	insertRDSSuppression155 = `
 		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
 		                                   resource_type, engine, suppressed_count, expires_at,
 		                                   availability_zone, platform, tenancy, az_config)
@@ -23,7 +23,7 @@ const (
 		        NOW() + INTERVAL '7 days', '', '', '', $3)`
 )
 
-// TestMigration_PurchaseSuppressionsAZConfig locks down migration 000156
+// TestMigration_PurchaseSuppressionsAZConfig locks down migration 000155
 // (issue #408): rows seeded before the migration, with and without a 000134
 // variant, survive it with a NULL az_config (the wildcard backfill rule);
 // afterwards Single-AZ and Multi-AZ rows of one execution coexist while a
@@ -35,7 +35,7 @@ func TestMigration_PurchaseSuppressionsAZConfig(t *testing.T) {
 	ctx := context.Background()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
-	prev := previousMigrationVersion(t, 156)
+	prev := previousMigrationVersion(t, 155)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
 	// Pre-migration rows: one legacy 6-tuple row (NULL variant) and one RDS
@@ -43,35 +43,35 @@ func TestMigration_PurchaseSuppressionsAZConfig(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
 		                                   resource_type, engine, suppressed_count, expires_at)
-		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.t3.micro', 'mysql', 1, NOW() + INTERVAL '7 days')`, exec156)
+		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.t3.micro', 'mysql', 1, NOW() + INTERVAL '7 days')`, exec155)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `
 		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
 		                                   resource_type, engine, suppressed_count, expires_at,
 		                                   availability_zone, platform, tenancy)
-		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.r5.large', 'mysql', 2, NOW() + INTERVAL '7 days', '', '', '')`, exec156)
+		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.r5.large', 'mysql', 2, NOW() + INTERVAL '7 days', '', '', '')`, exec155)
 	require.NoError(t, err)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 156))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 155))
 
 	var rows, nulls int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE az_config IS NULL)
-		FROM purchase_suppressions WHERE execution_id = $1`, exec156).Scan(&rows, &nulls))
+		FROM purchase_suppressions WHERE execution_id = $1`, exec155).Scan(&rows, &nulls))
 	assert.Equal(t, 2, rows, "existing rows survive")
 	assert.Equal(t, 2, nulls, "existing rows get a NULL az_config: a wildcard")
 
 	// Single-AZ and Multi-AZ rows coexist next to the NULL row of the same variant.
 	for _, v := range []string{"single-az", "multi-az"} {
-		_, err = pool.Exec(ctx, insertRDSSuppression156, exec156, 3, v)
+		_, err = pool.Exec(ctx, insertRDSSuppression155, exec155, 3, v)
 		require.NoError(t, err, v)
 	}
-	_, err = pool.Exec(ctx, insertRDSSuppression156, exec156, 3, "multi-az")
+	_, err = pool.Exec(ctx, insertRDSSuppression155, exec155, 3, "multi-az")
 	requireUniqueViolation134(t, err, "purchase_suppressions_execution_variant_azc_key")
 	// An az_config without the rest of the variant is rejected.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
 		                                   resource_type, engine, suppressed_count, expires_at, az_config)
-		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.m5.large', 'mysql', 1, NOW() + INTERVAL '7 days', 'multi-az')`, exec156)
+		VALUES ($1, 'acct', 'aws', 'relational-db', 'us-east-1', 'db.m5.large', 'mysql', 1, NOW() + INTERVAL '7 days', 'multi-az')`, exec155)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "purchase_suppressions_az_config_needs_variant")
 
@@ -80,20 +80,20 @@ func TestMigration_PurchaseSuppressionsAZConfig(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
 	var total int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*), COALESCE(SUM(suppressed_count), 0)
-		FROM purchase_suppressions WHERE execution_id = $1 AND resource_type = 'db.r5.large'`, exec156).Scan(&rows, &total))
+		FROM purchase_suppressions WHERE execution_id = $1 AND resource_type = 'db.r5.large'`, exec155).Scan(&rows, &total))
 	assert.Equal(t, 1, rows)
 	assert.Equal(t, 8, total)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM purchase_suppressions
-		WHERE execution_id = $1 AND resource_type = 'db.t3.micro'`, exec156).Scan(&rows))
+		WHERE execution_id = $1 AND resource_type = 'db.t3.micro'`, exec155).Scan(&rows))
 	assert.Equal(t, 1, rows)
 	var cols int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
 		WHERE table_name = 'purchase_suppressions' AND column_name = 'az_config'`).Scan(&cols))
 	assert.Zero(t, cols)
-	_, err = pool.Exec(ctx, insertVariantSuppression134, exec156, 1, "us-east-1a", "Linux/UNIX", "default")
+	_, err = pool.Exec(ctx, insertVariantSuppression134, exec155, 1, "us-east-1a", "Linux/UNIX", "default")
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, insertVariantSuppression134, exec156, 1, "us-east-1a", "Linux/UNIX", "default")
+	_, err = pool.Exec(ctx, insertVariantSuppression134, exec155, 1, "us-east-1a", "Linux/UNIX", "default")
 	requireUniqueViolation134(t, err, "purchase_suppressions_execution_variant_key")
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 156), "up must re-apply cleanly after down")
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 155), "up must re-apply cleanly after down")
 }

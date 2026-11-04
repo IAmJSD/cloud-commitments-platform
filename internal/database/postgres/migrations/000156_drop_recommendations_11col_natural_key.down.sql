@@ -1,4 +1,4 @@
--- Rollback of 000155: recreate the 11-column unique index exactly as defined
+-- Rollback of 000156: recreate the 11-column unique index exactly as defined
 -- by 000111 and the source-account index exactly as defined by 000120.
 --
 -- Only safe together with a code rollback to the 11-column upsert. The newer
