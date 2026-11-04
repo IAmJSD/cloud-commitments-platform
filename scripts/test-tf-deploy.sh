@@ -11,8 +11,15 @@
 #
 # The headline case is #59: `make frontend-only` used to cd into the
 # environment directory and run `terraform apply` itself, which skipped the
-# script's profile check, environment-directory bootstrap and `terraform init`.
-# It now calls the script with `-target=module.frontend`.
+# script's profile check and `terraform init`. It now calls the script with
+# `-target=module.frontend`.
+#
+# Issue #349: the script used to build terraform/environments/<provider>/<profile>,
+# a directory this repo does not have, symlink only main.tf into it and run
+# `terraform init` with no backend config. It now runs in the flat root
+# terraform/environments/<provider>, inits with
+# -backend-config=backends/<profile>.tfbackend, and gives each profile its own
+# TF_DATA_DIR so two profiles never share a backend.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -30,11 +37,16 @@ mkdir -p "$WORK/bin"
 # Stub terraform: one line per call, arguments joined by '|' so an argument
 # that is empty or contains a space stays visible. `init` and `output` are
 # recorded too, so the log shows the script's bootstrap and summary steps.
+# Where each call ran (working directory and TF_DATA_DIR) goes to a second
+# log, $TF_STUB_LOG.env. `init` creates TF_DATA_DIR, as the real one does, so
+# a second run in the same profile skips init.
 cat > "$WORK/bin/terraform" <<'STUB'
 #!/usr/bin/env bash
 line=""
 for a in "$@"; do line="${line}|${a}"; done
 printf '%s\n' "${line#|}" >> "$TF_STUB_LOG"
+printf '%s|%s\n' "$PWD" "${TF_DATA_DIR:-}" >> "$TF_STUB_LOG.env"
+if [ "${1:-}" = "init" ] && [ -n "${TF_DATA_DIR:-}" ]; then mkdir -p "$TF_DATA_DIR"; fi
 STUB
 chmod +x "$WORK/bin/terraform"
 
@@ -49,18 +61,36 @@ fail=0
 ok() { echo "PASS: $1"; pass=$((pass + 1)); }
 ko() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-# new_sandbox NAME: fresh project root with the files under test and an
-# aws/dev profile. Prints the root.
+# new_sandbox NAME: fresh project root with the files under test, the flat AWS
+# root (main.tf, backend.tf) and an aws/dev profile with its backend config.
+# Prints the root.
 new_sandbox() {
   local root="$WORK/$1"
-  mkdir -p "$root/scripts" "$root/terraform/profiles/aws" "$root/terraform/environments/aws"
+  mkdir -p "$root/scripts" "$root/terraform/profiles/aws" "$root/terraform/environments/aws/backends"
   cp "$MAKEFILE_SRC" "$root/Makefile.terraform"
   cp "$SUT_SRC" "$root/scripts/tf-deploy.sh"
   chmod +x "$root/scripts/tf-deploy.sh"
   : > "$root/terraform/profiles/aws/dev.tfvars"
   : > "$root/terraform/environments/aws/main.tf"
+  : > "$root/terraform/environments/aws/backend.tf"
+  : > "$root/terraform/environments/aws/backends/dev.tfbackend"
   : > "$root/stub.log"
+  : > "$root/stub.log.env"
   printf '%s\n' "$root"
+}
+
+# expect_env LABEL ROOT EXPECTED: the stub's cwd|TF_DATA_DIR log must equal
+# EXPECTED exactly.
+expect_env() {
+  local label="$1" root="$2" expected="$3" actual
+  actual="$(cat "$root/stub.log.env")"
+  if [ "$actual" = "$expected" ]; then
+    ok "$label"
+  else
+    ko "$label"
+    echo "  expected cwd|TF_DATA_DIR:"; printf '%s\n' "$expected" | sed 's/^/    /'
+    echo "  actual cwd|TF_DATA_DIR:";   printf '%s\n' "$actual"   | sed 's/^/    /'
+  fi
 }
 
 # expect_log LABEL ROOT EXPECTED: the stub log must equal EXPECTED exactly.
@@ -90,22 +120,26 @@ else
   ok "make -n frontend-only has no direct terraform apply"
 fi
 
-# --- 2. fresh checkout: env dir bootstrapped, init run, apply targeted --------
+# --- 2. fresh checkout: flat root, backend config, targeted apply --------------
 root="$(new_sandbox fresh)"
+aws="$root/terraform/environments/aws"
 if TF_STUB_LOG="$root/stub.log" make -s -C "$root" -f Makefile.terraform frontend-only PROVIDER=aws PROFILE=dev > "$root/out" 2>&1; then
   ok "make frontend-only succeeds on a fresh tree"
 else
   ko "make frontend-only failed on a fresh tree"; sed 's/^/    /' "$root/out"
 fi
-expect_log "make frontend-only on a fresh tree runs init, the targeted apply, then output" "$root" \
-"init
+expect_log "make frontend-only on a fresh tree inits with the profile's backend config, applies, then outputs" "$root" \
+"init|-backend-config=$aws/backends/dev.tfbackend
 apply|-var-file=$root/terraform/profiles/aws/dev.tfvars|-target=module.frontend
 output"
-if [ -L "$root/terraform/environments/aws/dev/main.tf" ] &&
-   [ "$(readlink "$root/terraform/environments/aws/dev/main.tf")" = "../../aws/main.tf" ]; then
-  ok "make frontend-only bootstraps the environment directory and main.tf symlink"
+expect_env "every call runs in the flat root with the profile's own TF_DATA_DIR" "$root" \
+"$aws|$aws/.terraform/profiles/dev
+$aws|$aws/.terraform/profiles/dev
+$aws|$aws/.terraform/profiles/dev"
+if [ -e "$aws/dev" ]; then
+  ko "tf-deploy.sh still creates the per-profile directory terraform/environments/aws/dev"
 else
-  ko "make frontend-only did not bootstrap terraform/environments/aws/dev"
+  ok "tf-deploy.sh creates no per-profile directory under terraform/environments/aws"
 fi
 if grep -q 'Deployment Outputs' "$root/out"; then
   ok "make frontend-only prints the script's Deployment Outputs summary"
@@ -118,42 +152,78 @@ else
   ko "make frontend-only skipped the AWS_PROFILE warning"
 fi
 
-# --- 3. env dir exists but was never initialised: init still runs -------------
-root="$(new_sandbox existing-env)"
-mkdir -p "$root/terraform/environments/aws/dev"
-TF_STUB_LOG="$root/stub.log" make -s -C "$root" -f Makefile.terraform frontend-only PROVIDER=aws PROFILE=dev > "$root/out" 2>&1 || true
-expect_log "make frontend-only in an uninitialised env dir runs init first" "$root" \
-"init
-apply|-var-file=$root/terraform/profiles/aws/dev.tfvars|-target=module.frontend
-output"
+# --- 3. a second profile gets its own init, backend and data dir ---------------
+# With one shared .terraform, prod would run against the dev backend's state.
+root="$(new_sandbox two-profiles)"
+aws="$root/terraform/environments/aws"
+: > "$root/terraform/profiles/aws/prod.tfvars"
+: > "$aws/backends/prod.tfbackend"
+TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" aws dev plan > "$root/out" 2>&1 || true
+TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" aws prod plan > "$root/out" 2>&1 || true
+TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" aws dev plan > "$root/out" 2>&1 || true
+expect_log "dev then prod then dev: prod inits with its own backend, dev is not re-initialised" "$root" \
+"init|-backend-config=$aws/backends/dev.tfbackend
+plan|-var-file=$root/terraform/profiles/aws/dev.tfvars
+init|-backend-config=$aws/backends/prod.tfbackend
+plan|-var-file=$root/terraform/profiles/aws/prod.tfvars
+plan|-var-file=$root/terraform/profiles/aws/dev.tfvars"
+expect_env "dev and prod each run with their own TF_DATA_DIR" "$root" \
+"$aws|$aws/.terraform/profiles/dev
+$aws|$aws/.terraform/profiles/dev
+$aws|$aws/.terraform/profiles/prod
+$aws|$aws/.terraform/profiles/prod
+$aws|$aws/.terraform/profiles/dev"
 
-# --- 4. initialised env dir: no init, targeted apply, output -------------------
+# --- 4. initialised profile: no init, targeted apply, output -------------------
 root="$(new_sandbox initialised)"
-mkdir -p "$root/terraform/environments/aws/dev/.terraform"
+mkdir -p "$root/terraform/environments/aws/.terraform/profiles/dev"
 TF_STUB_LOG="$root/stub.log" make -s -C "$root" -f Makefile.terraform frontend-only PROVIDER=aws PROFILE=dev > "$root/out" 2>&1 || true
-expect_log "make frontend-only in an initialised env dir skips init" "$root" \
+expect_log "make frontend-only with an initialised profile skips init" "$root" \
 "apply|-var-file=$root/terraform/profiles/aws/dev.tfvars|-target=module.frontend
 output"
 
-# --- 5. missing profile: fails before terraform is ever called -----------------
-root="$(new_sandbox missing-profile)"
-# The env dir exists, so only the profile check can stop the apply.
-mkdir -p "$root/terraform/environments/aws/nope/.terraform"
-if TF_STUB_LOG="$root/stub.log" make -s -C "$root" -f Makefile.terraform frontend-only PROVIDER=aws PROFILE=nope > "$root/out" 2>&1; then
-  ko "make frontend-only with a missing profile exited 0"
+# --- 5. missing inputs and bad names fail before terraform is ever called ------
+# refuse_case NAME LABEL MESSAGE ARGS...: tf-deploy.sh must exit non-zero, call
+# no terraform, and print MESSAGE. $SETUP, if set, runs in the sandbox first.
+refuse_case() {
+  local name="$1" label="$2" message="$3" root
+  shift 3
+  root="$(new_sandbox "$name")"
+  # An initialised data dir, so only the check under test can stop the run.
+  mkdir -p "$root/terraform/environments/aws/.terraform/profiles/dev"
+  if [ -n "${SETUP:-}" ]; then (cd "$root" && eval "$SETUP"); fi
+  if TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" "$@" > "$root/out" 2>&1; then
+    ko "$label exited 0"
+  else
+    ok "$label exits non-zero"
+  fi
+  expect_log "$label never calls terraform" "$root" ""
+  if grep -qF "$message" "$root/out"; then
+    ok "$label says '$message'"
+  else
+    ko "$label did not say '$message'"; sed 's/^/    /' "$root/out"
+  fi
+}
+refuse_case missing-profile "a missing profile" "Profile not found" aws nope apply
+SETUP='rm terraform/environments/aws/backends/dev.tfbackend' \
+  refuse_case missing-backend "a profile with no backend config" "Backend config not found" aws dev apply
+root="$(new_sandbox missing-backend-make)"
+rm "$root/terraform/environments/aws/backends/dev.tfbackend"
+if TF_STUB_LOG="$root/stub.log" make -s -C "$root" -f Makefile.terraform frontend-only PROVIDER=aws PROFILE=dev > "$root/out" 2>&1; then
+  ko "make frontend-only with no backend config exited 0"
 else
-  ok "make frontend-only with a missing profile exits non-zero"
+  ok "make frontend-only with no backend config exits non-zero"
 fi
-expect_log "make frontend-only with a missing profile never calls terraform" "$root" ""
-if grep -q 'Profile not found' "$root/out"; then
-  ok "make frontend-only with a missing profile names the missing file"
-else
-  ko "make frontend-only with a missing profile gave no 'Profile not found' error"; sed 's/^/    /' "$root/out"
-fi
+expect_log "make frontend-only with no backend config never calls terraform" "$root" ""
+refuse_case unknown-provider "an unknown provider" "Unknown provider" oci dev apply
+refuse_case traversal-provider "a provider that walks out of terraform/environments" "Unknown provider" ../aws dev apply
+refuse_case traversal-profile "a profile that walks out of terraform/profiles" "Invalid profile name" aws ../aws/dev apply
+SETUP='mkdir -p terraform/profiles/gcp && : > terraform/profiles/gcp/dev.tfvars' \
+  refuse_case no-root "a provider whose root is missing" "Terraform root not found" gcp dev apply
 
 # --- 6. the script forwards extra args verbatim, and adds none when absent -----
 root="$(new_sandbox forwarding)"
-mkdir -p "$root/terraform/environments/aws/dev/.terraform"
+mkdir -p "$root/terraform/environments/aws/.terraform/profiles/dev"
 TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" aws dev plan > "$root/out" 2>&1 || true
 TF_STUB_LOG="$root/stub.log" "$root/scripts/tf-deploy.sh" aws dev plan '-var=note=a b' -target=module.frontend > "$root/out" 2>&1 || true
 expect_log "tf-deploy.sh adds no empty argument without extras and forwards extras verbatim" "$root" \

@@ -68,16 +68,19 @@ func assertPartialRun502(t *testing.T, err error) {
 	assert.Equal(t, config.StatusPartiallyCompleted, ce.Details()["status"])
 }
 
-func sessionApproveHandler(ctx context.Context, execID, contact string, final *config.PurchaseExecution, token string, runErr error) (*Handler, *recordingExecutedNotifier) {
+func sessionApproveHandler(t *testing.T, ctx context.Context, execID, contact string, final *config.PurchaseExecution, token string, runErr error) (*Handler, *recordingExecutedNotifier) {
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := approvalTestExec(execID, contact, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &contact}, nil)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
 	mockAuth.grantAdminPurchaser()
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveAndExecute", ctx, execID, "admin@example.com", (*string)(nil)).Return(final, token, runErr)
 	notifier := &recordingExecutedNotifier{}
 	return &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}, notifier
@@ -87,7 +90,7 @@ func TestExecutedNotification_PartialSessionApproveEmailsRevocationToken(t *test
 	ctx := context.Background()
 	execID := "56789012-5678-5678-5678-56789012abcd"
 	row := partialRunRow(execID)
-	handler, notifier := sessionApproveHandler(ctx, execID, "contact@example.com", row, partialRunToken, errPartialRun)
+	handler, notifier := sessionApproveHandler(t, ctx, execID, "contact@example.com", row, partialRunToken, errPartialRun)
 
 	_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "")
 	assertPartialRun502(t, err)
@@ -110,7 +113,7 @@ func TestExecutedNotification_UncommittedFailureSendsNoEmail(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			handler, notifier := sessionApproveHandler(ctx, execID, "contact@example.com", tc.final, "", tc.err)
+			handler, notifier := sessionApproveHandler(t, ctx, execID, "contact@example.com", tc.final, "", tc.err)
 			_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "")
 			require.Error(t, err)
 			assert.Zero(t, notifier.calls)
@@ -125,11 +128,13 @@ func TestExecutedNotification_PartialDirectExecuteEmailsRevocationToken(t *testi
 	row := partialRunRow(execID)
 
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, ContactEmail: contact}, nil
 	}
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &contact}, nil)
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("DirectExecute", ctx, execID, "admin@example.com", (*string)(nil)).Return(row, partialRunToken, errPartialRun)
 	notifier := &recordingExecutedNotifier{}
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, emailNotifier: notifier}
@@ -145,18 +150,21 @@ func TestExecutedNotification_PartialDirectExecuteEmailsRevocationToken(t *testi
 // takes the token branch, whose ApproveExecution returns final, token and
 // runErr. The execution is read once, for the request itself: a failed run
 // answers from the returned row, never from a re-fetch.
-func tokenApproveHandler(ctx context.Context, execID, contact string, final *config.PurchaseExecution, token string, runErr error) (*Handler, *recordingExecutedNotifier, *MockConfigStore) {
+func tokenApproveHandler(t *testing.T, ctx context.Context, execID, contact string, final *config.PurchaseExecution, token string, runErr error) (*Handler, *recordingExecutedNotifier, *MockConfigStore) {
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	exec := approvalTestExec(execID, contact, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Once()
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &contact}, nil)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(final, token, runErr)
 	notifier := &recordingExecutedNotifier{}
 	return &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}, notifier, mockConfig
@@ -168,7 +176,7 @@ func TestExecutedNotification_PartialTokenApproveEmailsRevocationToken(t *testin
 	ctx := context.Background()
 	execID := "89012345-8901-8901-8901-89012345abcd"
 	row := partialRunRow(execID)
-	handler, notifier, mockConfig := tokenApproveHandler(ctx, execID, "contact@example.com", row, partialRunToken, errPartialRun)
+	handler, notifier, mockConfig := tokenApproveHandler(t, ctx, execID, "contact@example.com", row, partialRunToken, errPartialRun)
 
 	_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "valid-token")
 	assertPartialRun502(t, err)
@@ -201,7 +209,7 @@ func TestTokenApprove_FailureMappedByCause(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			handler, notifier, _ := tokenApproveHandler(ctx, execID, "contact@example.com", tc.final, "", tc.err)
+			handler, notifier, _ := tokenApproveHandler(t, ctx, execID, "contact@example.com", tc.final, "", tc.err)
 			_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "valid-token")
 			require.Error(t, err)
 			assert.Zero(t, notifier.calls)
@@ -230,12 +238,14 @@ func TestExecutedNotification_TokenApproveFailureWithoutTokenSendsNoEmail(t *tes
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Once()
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &contact}, nil)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
 	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 	mockPurchase := new(MockPurchaseManager)
+	t.Cleanup(func() { mockPurchase.AssertExpectations(t) })
 	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(nil, "", errors.New("AWS RI purchase failed"))
 	notifier := &recordingExecutedNotifier{}
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}

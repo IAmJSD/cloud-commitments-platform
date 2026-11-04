@@ -50,3 +50,23 @@ func serviceEntryProvider(key, fieldProvider string) string {
 	}
 	return strings.TrimSpace(fieldProvider)
 }
+
+// DerivePlanServices extracts the distinct service names a plan targets from
+// the "provider/service" and "provider:service" keys of plan.Services, sorted.
+func DerivePlanServices(plan *PurchasePlan) []string {
+	if plan == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(plan.Services))
+	for k := range plan.Services {
+		if i := strings.IndexAny(k, "/:"); i > 0 && i < len(k)-1 {
+			seen[k[i+1:]] = struct{}{}
+		}
+	}
+	services := make([]string, 0, len(seen))
+	for service := range seen {
+		services = append(services, service)
+	}
+	sort.Strings(services)
+	return services
+}

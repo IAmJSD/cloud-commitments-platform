@@ -267,6 +267,7 @@ func TestInsuranceComparison_DeniedAndScoped(t *testing.T) {
 	p := archera.NewProvider(s, secrets.NewEnvResolver(), &http.Client{Transport: vt})
 
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, "u1", "view", "recommendations").Return(false, nil)
 	_, err := (&Handler{auth: m, insurance: p}).getInsuranceComparison(sessionPrincipalCtx(), &events.LambdaFunctionURLRequest{})
 	ce, ok := IsClientError(err)
@@ -274,6 +275,7 @@ func TestInsuranceComparison_DeniedAndScoped(t *testing.T) {
 	assert.Equal(t, 403, ce.code)
 
 	m2 := new(MockAuthService)
+	t.Cleanup(func() { m2.AssertExpectations(t) })
 	m2.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key", "view", "recommendations").Return("u2", "key-1", true, nil)
 	m2.On("GetAllowedAccountsAPI", mock.Anything, "u2").Return([]string{"acct-1"}, nil)
 	ctx := contextWithPrincipal(context.Background(), &Principal{Kind: PrincipalUserAPIKey, UserID: "u2", APIKeyID: "key-1"})

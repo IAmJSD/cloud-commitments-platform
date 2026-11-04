@@ -29,7 +29,7 @@ func multiServicePlan() *config.PurchasePlan {
 }
 
 func legacyEdit(service string) *PlanRequest {
-	return &PlanRequest{Name: "renamed", Provider: "aws", Service: service, Term: 3, Payment: "partial-upfront",
+	return &PlanRequest{Name: "renamed", Provider: "aws", Service: service, Term: ptr(3), Payment: ptr("partial-upfront"),
 		TargetCoverage: ptr(90), RampSchedule: "immediate", NotificationDaysBefore: 3, Enabled: true}
 }
 
@@ -107,6 +107,7 @@ func TestMergeUpdatedPlan_DoesNotMutateExistingServices(t *testing.T) {
 func TestHandler_updatePlan_RenameKeepsAllServices(t *testing.T) {
 	ctx := context.Background()
 	h, store := spHandler(t)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetPurchasePlan", ctx, spPlanID).Return(multiServicePlan(), nil)
 	var stored *config.PurchasePlan
 	store.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).
@@ -119,4 +120,95 @@ func TestHandler_updatePlan_RenameKeepsAllServices(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, "renamed", stored.Name)
 	assert.Equal(t, multiServicePlan().Services, stored.Services)
+}
+
+// A PUT that omits target_coverage, term or payment keeps the stored values;
+// only create applies the 80 / 3 / no-upfront defaults.
+
+func storedTunedPlan() *config.PurchasePlan {
+	return &config.PurchasePlan{ID: spPlanID, Name: "old", Enabled: true, NotificationDaysBefore: 3, RampSchedule: immediateRamp(),
+		Services: map[string]config.ServiceConfig{
+			"aws/ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "all-upfront", Coverage: 50},
+		}}
+}
+
+func renameOnly() *PlanRequest {
+	return &PlanRequest{Name: "renamed", Provider: "aws", Service: "ec2", RampSchedule: "immediate", NotificationDaysBefore: 3, Enabled: true}
+}
+
+func TestMergeUpdatedPlan_OmittedTargetCoverageKeepsStored(t *testing.T) {
+	req := renameOnly()
+	req.Term, req.Payment = ptr(1), ptr("all-upfront")
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), req, spPlanID, false)
+	require.NoError(t, err)
+	assert.Equal(t, 50.0, plan.Services["aws/ec2"].Coverage)
+}
+
+func TestMergeUpdatedPlan_OmittedTermKeepsStored(t *testing.T) {
+	req := renameOnly()
+	req.TargetCoverage, req.Payment = ptr(50), ptr("all-upfront")
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), req, spPlanID, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, plan.Services["aws/ec2"].Term)
+}
+
+func TestMergeUpdatedPlan_OmittedPaymentKeepsStored(t *testing.T) {
+	req := renameOnly()
+	req.TargetCoverage, req.Term = ptr(50), ptr(1)
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), req, spPlanID, false)
+	require.NoError(t, err)
+	assert.Equal(t, "all-upfront", plan.Services["aws/ec2"].Payment)
+}
+
+func TestMergeUpdatedPlan_NameOnlyKeepsAllThree(t *testing.T) {
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), renameOnly(), spPlanID, false)
+	require.NoError(t, err)
+	svc := plan.Services["aws/ec2"]
+	assert.Equal(t, 50.0, svc.Coverage)
+	assert.Equal(t, 1, svc.Term)
+	assert.Equal(t, "all-upfront", svc.Payment)
+}
+
+func TestMergeUpdatedPlan_ExplicitFieldsApply(t *testing.T) {
+	req := renameOnly()
+	req.TargetCoverage, req.Term, req.Payment = ptr(90), ptr(3), ptr("no-upfront")
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), req, spPlanID, false)
+	require.NoError(t, err)
+	svc := plan.Services["aws/ec2"]
+	assert.Equal(t, 90.0, svc.Coverage)
+	assert.Equal(t, 3, svc.Term)
+	assert.Equal(t, "no-upfront", svc.Payment)
+}
+
+func TestToPurchasePlan_CreateWithoutFieldsAppliesDefaults(t *testing.T) {
+	svc := renameOnly().toPurchasePlan().Services["aws/ec2"]
+	assert.Equal(t, 80.0, svc.Coverage)
+	assert.Equal(t, 3, svc.Term)
+	assert.Equal(t, "no-upfront", svc.Payment)
+}
+
+func TestMergeUpdatedPlan_OmittedFieldsKeptOnLegacyAliasKey(t *testing.T) {
+	existing := &config.PurchasePlan{ID: spPlanID, Name: "old", Enabled: true, NotificationDaysBefore: 3, RampSchedule: immediateRamp(),
+		Services: map[string]config.ServiceConfig{
+			"azure/vm": {Provider: "azure", Service: "vm", Enabled: true, Term: 1, Payment: "upfront", Coverage: 50},
+		}}
+	req := &PlanRequest{Name: "renamed", Provider: "azure", Service: "compute", RampSchedule: "immediate", NotificationDaysBefore: 3, Enabled: true}
+	plan, err := mergeUpdatedPlan(existing, req, spPlanID, false)
+	require.NoError(t, err)
+	require.Len(t, plan.Services, 1)
+	svc := plan.Services["azure/vm"]
+	assert.Equal(t, "compute", svc.Service)
+	assert.Equal(t, 50.0, svc.Coverage)
+	assert.Equal(t, 1, svc.Term)
+	assert.Equal(t, "upfront", svc.Payment)
+}
+
+func TestMergeUpdatedPlan_EmptyPaymentAndZeroTermKeepStored(t *testing.T) {
+	req := renameOnly()
+	req.TargetCoverage, req.Term, req.Payment = ptr(50), ptr(0), ptr("")
+	plan, err := mergeUpdatedPlan(storedTunedPlan(), req, spPlanID, false)
+	require.NoError(t, err)
+	svc := plan.Services["aws/ec2"]
+	assert.Equal(t, 1, svc.Term)
+	assert.Equal(t, "all-upfront", svc.Payment)
 }

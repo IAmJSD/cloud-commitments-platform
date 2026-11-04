@@ -114,7 +114,9 @@ func TestEnforcePurchaseConstraints_NonUSDOtherDimensionKeepsItsError(t *testing
 func TestHandler_executePurchase_NonUSDStoredPriceUnderCapRefused(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	authService := new(MockAuthService)
+	t.Cleanup(func() { authService.AssertExpectations(t) })
 	authService.On("ValidateSession", ctx, "eur-cap").Return(&Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "capped@example.com"}, nil)
 	authService.grantPermissions([]auth.Permission{{Action: auth.ActionExecute, Resource: auth.ResourcePurchases, Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 1000}}})
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
@@ -148,4 +150,37 @@ func TestEnforcePurchaseConstraints_NonUSDBackendErrorPropagates(t *testing.T) {
 	_, isClient := IsClientError(err)
 	assert.False(t, isClient)
 	mockAuth.AssertNumberOfCalls(t, "HasPermissionForConstraintsAPI", 1)
+}
+
+// A priced Azure Advisor reservation (go#663) carries USD, so the cap applies
+// to its total commitment (upfront plus monthly over the term), while an
+// unpriced Savings Plan row with no currency is still refused under a cap.
+func TestEnforcePurchaseConstraints_AzureAdvisorPricedUSDCapAppliesUnpricedSPRefused(t *testing.T) {
+	ctx := context.Background()
+	session := &Session{UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd"}
+	monthly := 50.0
+	priced := config.RecommendationRecord{
+		ID: "adv-vm", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3",
+		Count: 1, Term: 1, Payment: "monthly", UpfrontCost: 100, MonthlyCost: &monthly, CommitmentCurrency: "USD",
+	}
+	require.InDelta(t, 700, priced.TotalCommitment(), 0.001)
+	unpriced := config.RecommendationRecord{
+		ID: "adv-sp", Provider: "azure", Service: "savingsplans", Region: "westeurope",
+		Count: 1, Term: 1, Payment: "monthly", UpfrontCost: 900,
+	}
+
+	require.NoError(t, handlerWithCap(auth.ActionExecute, 1000).enforcePurchaseConstraints(ctx, session, auth.ActionExecute,
+		[]config.RecommendationRecord{priced}))
+
+	err := handlerWithCap(auth.ActionExecute, 600).enforcePurchaseConstraints(ctx, session, auth.ActionExecute,
+		[]config.RecommendationRecord{priced})
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, ce.Error(), "exceeds the constraints", "the cap is compared against the 700 USD total, not upfront alone")
+	assert.NotContains(t, ce.Error(), "USD spend cap")
+
+	requireCurrencyRefusal(t, handlerWithCap(auth.ActionExecute, 1000).enforcePurchaseConstraints(ctx, session, auth.ActionExecute,
+		[]config.RecommendationRecord{unpriced}), "unknown")
 }

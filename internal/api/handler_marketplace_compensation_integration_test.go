@@ -46,6 +46,7 @@ func TestMarketplaceListCancelFailureKeepsListingRecorded(t *testing.T) {
 	require.NoError(t, store.SavePurchaseHistory(ctx, row))
 
 	authSvc := &MockAuthService{}
+	t.Cleanup(func() { authSvc.AssertExpectations(t) })
 	authSvc.On("ValidateSession", mock.Anything, "test-token").Return(&Session{UserID: "admin", Email: "admin@test.com"}, nil)
 	authSvc.On("HasPermissionAPI", mock.Anything, "admin", auth.ActionSellAny, auth.ResourcePurchases).Return(true, nil)
 	authSvc.On("GetAllowedAccountsAPI", mock.Anything, "admin").Return([]string{"*"}, nil)
@@ -126,8 +127,10 @@ func hostAWSConfig() aws.Config {
 	}
 }
 
-func newCompensationAuth() *MockAuthService {
+func newCompensationAuth(t *testing.T) *MockAuthService {
+	t.Helper()
 	authSvc := &MockAuthService{}
+	t.Cleanup(func() { authSvc.AssertExpectations(t) })
 	authSvc.On("ValidateSession", mock.Anything, "test-token").Return(&Session{UserID: "admin", Email: "admin@test.com"}, nil)
 	authSvc.On("HasPermissionAPI", mock.Anything, "admin", auth.ActionSellAny, auth.ResourcePurchases).Return(true, nil)
 	authSvc.On("GetAllowedAccountsAPI", mock.Anything, "admin").Return([]string{"*"}, nil)
@@ -146,7 +149,7 @@ func TestMarketplaceListCancelFailureAfterContextCanceledStillRecordsListing(t *
 	ec2 := &stubMarketplaceEC2{cancelFn: func(_ context.Context, _ string) (ec2svc.MarketplaceListingResult, error) {
 		return ec2svc.MarketplaceListingResult{}, errors.New("RequestLimitExceeded")
 	}}
-	h := &Handler{config: &cancelOnFirstWriteStore{StoreInterface: store, cancel: cancel}, auth: newCompensationAuth(),
+	h := &Handler{config: &cancelOnFirstWriteStore{StoreInterface: store, cancel: cancel}, auth: newCompensationAuth(t),
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}
 	h.awsCfgOnce.Do(func() { h.awsCfg = hostAWSConfig() })
 
@@ -178,7 +181,7 @@ func TestMarketplaceListCancelFailureRecordsEmptyAWSStateAsPending(t *testing.T)
 			return ec2svc.MarketplaceListingResult{}, errors.New("RequestLimitExceeded")
 		},
 	}
-	h := &Handler{config: &failFirstListingWriteStore{StoreInterface: store}, auth: newCompensationAuth(),
+	h := &Handler{config: &failFirstListingWriteStore{StoreInterface: store}, auth: newCompensationAuth(t),
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}
 	h.awsCfgOnce.Do(func() { h.awsCfg = hostAWSConfig() })
 

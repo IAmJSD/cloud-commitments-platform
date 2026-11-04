@@ -196,9 +196,9 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "Schedule expression for recommendation collection"
+  description = "EventBridge schedule expression for recommendation collection. Default: daily at 02:00 UTC, the same time as GCP and Azure. A cron() schedule lets the API report next_collection_at; a rate() schedule leaves it null because its phase is unknown (#756)."
   type        = string
-  default     = "rate(1 day)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -226,9 +226,9 @@ variable "ladder_run_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Enable the scheduled fire_scheduled_purchases sweep. Default false until auto-approve (L9) is promoted to GA."
+  description = "Schedule the fire_scheduled_purchases sweep, which carries out every purchase a person approves while a purchase delay is set (purchase_delay_hours > 0; the migrated default is 0, which executes approvals immediately) once the delay ends. With the sweep off, those approved purchases stay scheduled and never execute, with no alert, so turn it off only where purchase_delay_hours stays 0. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {
@@ -237,10 +237,89 @@ variable "fire_scheduled_purchases_schedule" {
   default     = "rate(15 minutes)"
 }
 
+# Sweeps in sweeps.tf. Names, defaults and opt-in policy match the Lambda module.
+
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Enable scheduled sweep of purchase_executions stuck in approved/running. Issue #678 backstop for executor crashes."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "EventBridge schedule for the stuck-purchase reaper. Should be more frequent than PURCHASE_APPROVED_REAP_AFTER (default 10m) so a stuck row is reaped within ~1 threshold-window."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "enable_analytics_collect_schedule" {
+  description = "Enable the scheduled savings-snapshot analytics collection (issues #1023/#1033): snapshot, partition maintenance, retention and view refresh."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "EventBridge schedule for the analytics_collect task. rate() starts from deployment time; use cron() for fixed clock times."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Enable the scheduled process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false so no purchase proposal runs unless an operator asks for it."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the process_scheduled_purchases sweep."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Enable the scheduled send_notifications sweep. Opt-in: default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "EventBridge schedule for the send_notifications sweep."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair of revoked purchases, plus the RI Marketplace listing poll, which has no schedule of its own: disabling this also stops recording listing sales and proceeds)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "EventBridge schedule for the finalize_revocations sweep."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 variable "task_timeout" {
-  description = "Timeout in seconds for one-off scheduled tasks"
+  description = "Timeout in seconds for one-off scheduled tasks (TASK_TIMEOUT)"
   type        = number
   default     = 900
+
+  validation {
+    condition     = var.task_timeout >= 300 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 300 (one purchase can run 270s; a shorter task deadline defers every delayed purchase)."
+  }
 }
 
 variable "additional_env_vars" {

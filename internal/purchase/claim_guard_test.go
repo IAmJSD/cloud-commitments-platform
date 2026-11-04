@@ -30,6 +30,7 @@ func purchasedExec(status string) *config.PurchaseExecution {
 func TestSaveOrRecoverTerminal_GuardsOnRunning(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	m := &Manager{config: store}
 	exec := purchasedExec("completed")
 	store.On("SaveExecutionIfStatus", ctx, exec, []string{"running"}).Return(nil).Once()
@@ -43,6 +44,7 @@ func TestSaveOrRecoverTerminal_GuardsOnRunning(t *testing.T) {
 func TestSaveOrRecoverTerminal_ReapedButPurchasedIsRecovered(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	m := &Manager{config: store}
 	exec := purchasedExec("partially_completed")
 	store.On("SaveExecutionIfStatus", ctx, exec, []string{"running"}).Return(lostGuard())
@@ -56,6 +58,7 @@ func TestSaveOrRecoverTerminal_ReapedButPurchasedIsRecovered(t *testing.T) {
 func TestSaveOrRecoverTerminal_RetryLinkedFailsLoudWithDoubleBuyFlag(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	m := &Manager{config: store}
 	exec := purchasedExec("completed")
 	store.On("SaveExecutionIfStatus", ctx, exec, []string{"running"}).Return(lostGuard())
@@ -69,6 +72,7 @@ func TestSaveOrRecoverTerminal_RetryLinkedFailsLoudWithDoubleBuyFlag(t *testing.
 func TestSaveOrRecoverTerminal_NothingPurchasedIsNeverOverwritten(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	m := &Manager{config: store}
 	exec := &config.PurchaseExecution{ExecutionID: "exec-x", Status: "failed"}
 	store.On("SaveExecutionIfStatus", ctx, exec, []string{"running"}).Return(lostGuard())
@@ -83,6 +87,7 @@ func TestSaveOrRecoverTerminal_NothingPurchasedIsNeverOverwritten(t *testing.T) 
 func TestReapOne_AnnotationLostToRecoveryIsBenign(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	row := stuckExec("exec-R", "running")
 	failed := row
 	failed.Status = failedStatus
@@ -105,6 +110,9 @@ func TestApprove_ClaimsRunningAndStampsGuarded(t *testing.T) {
 	store.On("GetExecutionByID", mock.Anything, "exec-g").Return(&config.PurchaseExecution{ExecutionID: "exec-g", PlanID: "plan-g", Status: "pending"}, nil).Maybe()
 	store.On("TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-g")
+	// This path makes no unguarded full-row write (AssertNotCalled below), so the
+	// shared chain's SavePurchaseExecution stub is optional here.
+	optionalCalls(&store.Mock, "SavePurchaseExecution")
 	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil).Once()
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil).Once()
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"completed"}).Return(nil).Once()

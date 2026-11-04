@@ -110,7 +110,7 @@ func newRecoverRig(t *testing.T) *recoverRig {
 	rig := &recoverRig{store: store, hook: &listingWriteHook{StoreInterface: store}, aws: &lockedMarketplaceAWS{}}
 	rig.row = setupCompensationRow(t, store)
 	rig.ec2 = &stubMarketplaceEC2{createFn: rig.aws.create, cancelFn: rig.aws.cancel, describeFn: rig.aws.describe}
-	rig.h = &Handler{config: rig.hook, auth: newCompensationAuth(),
+	rig.h = &Handler{config: rig.hook, auth: newCompensationAuth(t),
 		marketplaceEC2Factory:    func(aws.Config) marketplaceEC2Client { return rig.ec2 },
 		marketplaceFinderFactory: func(aws.Config) marketplaceListingFinder { return rig.aws }}
 	rig.h.awsCfgOnce.Do(func() { rig.h.awsCfg = hostAWSConfig() })

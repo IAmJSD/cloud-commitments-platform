@@ -26,24 +26,42 @@ const tokenErrRawToken = "raw-secret-token"
 
 func tokenErrHandler(t *testing.T, exec *config.PurchaseExecution, getErr error) *Handler {
 	t.Helper()
+	return tokenErrHandlerFor(t, exec, getErr, true)
+}
+
+// tokenErrHandlerFor is tokenErrHandler for a caller that is signedIn or not.
+// A caller without a session is refused before the execution is looked up
+// (issue #435), so for it neither the session, the row nor the approver
+// address is expected, and a lookup would hit an unregistered method.
+func tokenErrHandlerFor(t *testing.T, exec *config.PurchaseExecution, getErr error, signedIn bool) *Handler {
+	t.Helper()
 	approver := "admin@example.com"
 	accountID := "acct-1"
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
 	}
-	if getErr != nil {
-		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(nil, getErr)
-	} else {
+	if exec != nil {
 		exec.ExecutionID = tokenErrExecID
 		exec.Recommendations = []config.RecommendationRecord{{ID: "r1", CloudAccountID: &accountID}}
-		store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(exec, nil)
 	}
-	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+	if signedIn {
+		if getErr != nil {
+			store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(nil, getErr)
+		} else {
+			store.On("GetExecutionByID", mock.Anything, tokenErrExecID).Return(exec, nil)
+			// The approver address is resolved only for a row that exists.
+			store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
+		}
+	}
 
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	auth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	if signedIn {
+		auth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	}
 	// CSRF is validated before the execution lookup (issue #597).
 	auth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil).Maybe()
 	for _, perm := range []string{"approve-any", "approve-own", "cancel-any", "cancel-own", "revoke-any", "revoke-own"} {
@@ -114,6 +132,7 @@ func TestHandleRequest_ApproveViaToken_NonPendingExecutionIs409(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "completed", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, mock.Anything, "running", mock.Anything, tokenErrRawToken).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
@@ -134,6 +153,7 @@ func TestHandleRequest_CancelViaToken_LostCASIs409(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "pending", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything, tokenErrRawToken).
 		Return(false, "approved", nil)
 

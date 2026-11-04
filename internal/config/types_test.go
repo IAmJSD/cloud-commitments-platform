@@ -486,3 +486,11 @@ func TestPurchaseExecution_IsCancelable(t *testing.T) {
 		assert.Equal(t, want, (&PurchaseExecution{Status: status}).IsCancelable(), status)
 	}
 }
+
+func TestIsUSDCommitmentCurrency(t *testing.T) {
+	for in, want := range map[string]bool{"USD": true, "usd": true, " Usd\t": true, "": false, "  ": false, "EUR": false, "USDT": false} {
+		if got := IsUSDCommitmentCurrency(in); got != want {
+			t.Errorf("IsUSDCommitmentCurrency(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

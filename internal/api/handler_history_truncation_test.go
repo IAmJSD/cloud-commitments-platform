@@ -49,11 +49,12 @@ func runAdminHistory(t *testing.T, completed []config.PurchaseHistoryRecord, exe
 	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
 	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(execs, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil).Maybe()
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore}
 
 	result, err := handler.getHistory(ctx, req, params)
@@ -164,6 +165,7 @@ func TestHandler_getHistory_ScopedUserTruncationLeaksNoCounts(t *testing.T) {
 	execs[len(execs)-1].CreatedByUserID = &own
 
 	mockStore := new(MockConfigStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
 	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(execs, nil)
@@ -172,6 +174,7 @@ func TestHandler_getHistory_ScopedUserTruncationLeaksNoCounts(t *testing.T) {
 		return nil, nil
 	}
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "scoped-token").Return(&Session{UserID: scopedUserID, Email: "s@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, scopedUserID, "view", "purchases").Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, scopedUserID).Return([]string{"aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"}, nil)

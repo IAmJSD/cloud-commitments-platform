@@ -8,7 +8,9 @@ package api
 // pending because AWS gave no status when it was created (issue #1494). It
 // records the listing as active with its AWS CreateDate while it is for sale,
 // and its terminal state with the realized proceeds and the AWS fee once it
-// closes (all sold) or is canceled after a partial sale.
+// closes (all sold) or is canceled after a partial sale. A listing the RI was
+// relisted from is still read and settled, from the per-listing settlement
+// rows the store keeps (issue #1494).
 //
 // It runs from the finalize_revocations scheduled task (see
 // internal/server/handler_marketplace_poll.go), so only where that task is

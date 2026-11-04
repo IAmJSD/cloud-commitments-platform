@@ -20,11 +20,13 @@ func historyScopeIDs(t *testing.T, scope []string, accounts []config.CloudAccoun
 	t.Helper()
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil)
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything).Return(append([]config.PurchaseHistoryRecord(nil), rows...), nil)
 	store.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {

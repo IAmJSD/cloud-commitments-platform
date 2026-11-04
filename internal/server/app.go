@@ -147,6 +147,10 @@ type ApplicationConfig struct {
 	DefaultTerm                 int
 	EnableDashboard             bool
 	IsLambda                    bool
+	// TrustedProxyHops is the number of proxies that append to
+	// X-Forwarded-For before the app (CUDLY_TRUSTED_PROXY_HOPS). 0 ignores
+	// the header and uses the peer address.
+	TrustedProxyHops int
 	// ReportSQSBatchItemFailures gates whether handleLambdaSQSEvent returns
 	// the partial events.SQSEventResponse{BatchItemFailures} shape (true) or
 	// the old whole-batch aggregate error (false, default). See
@@ -154,6 +158,11 @@ type ApplicationConfig struct {
 	// SQS event source mapping's function_response_types actually includes
 	// "ReportBatchItemFailures" (issue #108 follow-up).
 	ReportSQSBatchItemFailures bool
+	// RecommendationSchedule is RECOMMENDATION_SCHEDULE: the schedule
+	// Terraform gave the deployment's recommendation-collection trigger
+	// (EventBridge rate()/cron() or five-field cron), empty when scheduled
+	// collection is off. Only read to report the next run (issue #756).
+	RecommendationSchedule string
 	// authBcryptCost is passed to auth.ServiceConfig.BcryptCost. Only tests
 	// in this package set it; zero keeps the production bcrypt cost.
 	authBcryptCost int
@@ -319,8 +328,13 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 	if err != nil {
 		return ApplicationConfig{}, err
 	}
+	hops, err := parseTrustedProxyHops(os.Getenv("CUDLY_TRUSTED_PROXY_HOPS"))
+	if err != nil {
+		return ApplicationConfig{}, err
+	}
 
 	return ApplicationConfig{
+		TrustedProxyHops:            hops,
 		Version:                     version,
 		NotificationDaysBefore:      getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
 		ScheduledPurchaseMaxOverdue: maxOverdue,
@@ -341,6 +355,7 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
 		IsLambda:                runtime.IsLambda(),
 		Analytics:               analyticsConfig,
+		RecommendationSchedule:  os.Getenv("RECOMMENDATION_SCHEDULE"),
 	}, nil
 }
 
@@ -363,6 +378,23 @@ func loadScheduledPurchaseMaxOverdue() (time.Duration, error) {
 		return 0, fmt.Errorf("invalid SCHEDULED_PURCHASE_MAX_OVERDUE: %q must be a positive duration", raw)
 	}
 	return d, nil
+}
+
+// maxTrustedProxyHops bounds CUDLY_TRUSTED_PROXY_HOPS; no real chain is deeper.
+const maxTrustedProxyHops = 8
+
+// parseTrustedProxyHops parses CUDLY_TRUSTED_PROXY_HOPS. Unset means 0 (the
+// X-Forwarded-For header is ignored); anything but an integer in 0..8 is a
+// startup error.
+func parseTrustedProxyHops(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	hops, err := strconv.Atoi(raw)
+	if err != nil || hops < 0 || hops > maxTrustedProxyHops {
+		return 0, fmt.Errorf("invalid CUDLY_TRUSTED_PROXY_HOPS %q: want an integer 0-%d", raw, maxTrustedProxyHops)
+	}
+	return hops, nil
 }
 
 // validateAppConfigEnvDefaults validates the money-moving env-sourced defaults
@@ -583,6 +615,8 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		OIDCIssuerURL:     resolveOIDCIssuerURL(cfg),
 		Insurance:         archeraProvider,
 		IsLambda:          cfg.IsLambda,
+
+		RecommendationSchedule: cfg.RecommendationSchedule,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -904,6 +938,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EmailSender:            app.Email,
 		STSClient:              sts.NewFromConfig(awsCfg),
 		AssumeRoleSTS:          sts.NewFromConfig(awsCfg),
+		BastionSTSFactory:      credentials.NewSTSClientFactory(awsCfg),
 		AmbientAWSCreds:        awsCfg.Credentials,
 		CredentialStore:        credStore,
 		NotificationDaysBefore: app.appConfig.NotificationDaysBefore,
@@ -921,15 +956,17 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 
 	// Re-initialize scheduler with per-account credential resolution.
 	reinitScheduler := scheduler.NewScheduler(scheduler.SchedulerConfig{
-		ConfigStore:     app.Config,
-		PurchaseManager: app.Purchase,
-		EmailSender:     app.Email,
-		CredentialStore: credStore,
-		OIDCSigner:      app.signer,
-		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
-		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
-		STSClient:       sts.NewFromConfig(awsCfg),
-		IsLambda:        app.appConfig.IsLambda,
+		ConfigStore:       app.Config,
+		PurchaseManager:   app.Purchase,
+		EmailSender:       app.Email,
+		CredentialStore:   credStore,
+		OIDCSigner:        app.signer,
+		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
+		AssumeRoleSTS:     sts.NewFromConfig(awsCfg),
+		BastionSTSFactory: credentials.NewSTSClientFactory(awsCfg),
+		AmbientAWSCreds:   awsCfg.Credentials,
+		STSClient:         sts.NewFromConfig(awsCfg),
+		IsLambda:          app.appConfig.IsLambda,
 	})
 	app.Scheduler = reinitScheduler
 	reinitPurchase.SetRecommendationSource(reinitScheduler)
@@ -943,7 +980,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	commitmentOpts := commitmentopts.New(
 		commitmentopts.NewPostgresStore(dbConn),
 		app.Config,
-		newCommitmentProbeConfigBuilder(credStore, awsCfg.Credentials, sts.NewFromConfig(awsCfg)),
+		newCommitmentProbeConfigBuilder(credStore, app.Config, awsCfg, sts.NewFromConfig(awsCfg)),
 		commitmentopts.DefaultProbers(),
 	)
 
@@ -973,6 +1010,8 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EncryptionKeySource: app.encKeySource,
 		Insurance:           app.archera,
 		IsLambda:            app.appConfig.IsLambda,
+
+		RecommendationSchedule: app.appConfig.RecommendationSchedule,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
@@ -995,12 +1034,19 @@ type hostAndAssumeRoleSTS interface {
 }
 
 // newCommitmentProbeConfigBuilder resolves the aws.Config the commitment-options
-// probe uses for an account. ambient and stsClient let a role_arn account with
-// no role ARN use the host credentials only when it is the host account.
-func newCommitmentProbeConfigBuilder(credStore credentials.CredentialStore, ambient aws.CredentialsProvider, stsClient hostAndAssumeRoleSTS) commitmentopts.BuildConfigFn {
+// probe uses for an account. hostCfg's credentials and stsClient let a role_arn
+// account with no role ARN use the host credentials only when it is the host
+// account. accounts and hostCfg let a bastion account be reached through its
+// bastion's own credentials (issue #263).
+func newCommitmentProbeConfigBuilder(credStore credentials.CredentialStore, accounts credentials.CloudAccountGetter, hostCfg aws.Config, stsClient hostAndAssumeRoleSTS) commitmentopts.BuildConfigFn {
+	opts := credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(accounts),
+		STSClientFactory: credentials.NewSTSClientFactory(hostCfg),
+		AmbientProvider:  hostCfg.Credentials,
+		AmbientSTS:       stsClient,
+	}
 	return func(ctx context.Context, acct *config.CloudAccount) (aws.Config, error) {
-		prov, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, credStore, stsClient,
-			credentials.AWSResolveOptions{AmbientProvider: ambient, AmbientSTS: stsClient})
+		prov, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, credStore, stsClient, opts)
 		if err != nil {
 			return aws.Config{}, err
 		}
@@ -1132,6 +1178,7 @@ func (a *authServiceAdapter) Login(ctx context.Context, req api.LoginRequest) (*
 		Email:    req.Email,
 		Password: req.Password,
 		MFACode:  req.MFACode,
+		MFAToken: req.MFAToken,
 	}
 	resp, err := a.service.Login(ctx, authReq)
 	if err != nil {

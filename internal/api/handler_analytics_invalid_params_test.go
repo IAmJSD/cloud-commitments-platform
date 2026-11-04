@@ -20,12 +20,14 @@ func TestHandler_getHistoryAnalytics_UnsupportedIntervalIs400(t *testing.T) {
 		t.Run(interval, func(t *testing.T) {
 			ctx := context.Background()
 			mockClient := new(MockAnalyticsClient)
+			t.Cleanup(func() { mockClient.AssertExpectations(t) })
 			// What the Postgres client answers for an interval outside its
 			// allowlist, so the pre-fix handler fails this test with a 500
 			// instead of panicking on an unexpected call.
 			mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, interval).
 				Return(nil, nil, fmt.Errorf("unsupported interval %q", interval)).Maybe()
 			mockAuth, req := adminAnalyticsReq(ctx)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 			_, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"interval": interval})
@@ -47,6 +49,7 @@ func TestHandler_getHistoryAnalytics_SupportedIntervalsReachStore(t *testing.T) 
 			mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, interval).
 				Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
 			mockAuth, req := adminAnalyticsReq(ctx)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 			result, err := handler.getHistoryAnalytics(ctx, req, map[string]string{"interval": interval})
@@ -64,10 +67,12 @@ func TestHandler_getHistoryBreakdown_UnsupportedDimensionIs400(t *testing.T) {
 		t.Run(dimension, func(t *testing.T) {
 			ctx := context.Background()
 			mockClient := new(MockAnalyticsClient)
+			t.Cleanup(func() { mockClient.AssertExpectations(t) })
 			// The Postgres client's answer for an unknown dimension; see above.
 			mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, dimension).
 				Return(nil, fmt.Errorf("unsupported dimension %q", dimension)).Maybe()
 			mockAuth, req := adminAnalyticsReq(ctx)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 			_, err := handler.getHistoryBreakdown(ctx, req, map[string]string{"dimension": dimension})
@@ -89,6 +94,7 @@ func TestHandler_getHistoryBreakdown_SupportedDimensionsReachStore(t *testing.T)
 			mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, dimension).
 				Return(map[string]BreakdownValue{}, nil)
 			mockAuth, req := adminAnalyticsReq(ctx)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 			handler := &Handler{auth: mockAuth, analyticsClient: mockClient, config: new(MockConfigStore)}
 
 			result, err := handler.getHistoryBreakdown(ctx, req, map[string]string{"dimension": dimension})

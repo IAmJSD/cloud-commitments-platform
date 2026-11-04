@@ -30,12 +30,6 @@ const (
 	// never the caller's request.
 	apiKeyUsageFlushTimeout = 5 * time.Second
 
-	// maxAPIKeyUsageFlushRounds bounds how many times one flush goroutine
-	// re-drains a key before handing off. Without it, a key under sustained
-	// load would keep a single goroutine writing forever; with it, the
-	// leftover count is simply picked up by the next request's flush.
-	maxAPIKeyUsageFlushRounds = 16
-
 	// MaxAPIKeyLifetime caps how far in the future ExpiresAt may be set on
 	// creation. A key that never expires (nil ExpiresAt) survived
 	// indefinitely, including past a password rotation intended to lock out
@@ -403,74 +397,91 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 // times over. The API layer owns that guarantee (see
 // Handler.validateSecurityContext).
 //
-// The count is accumulated in memory first and the flush writes the whole
-// accumulated delta, because singleflight.Group collapses concurrent flushes
-// for the same key into one DB write. Incrementing by a fixed 1 inside the
-// flush would therefore drop every request that arrived while a write was in
-// flight -- a systematic undercount that grows with the key's request rate,
-// i.e. worst exactly on the busy keys the usage stats exist to surface.
+// The count is accumulated in memory first and a flush writes the whole
+// accumulated delta, so requests that arrive while a write is in flight are
+// carried by the next write instead of being dropped.
 //
-// singleflight is still what bounds the write rate: at most one in-flight DB
-// write per keyID at any moment, so a flood of requests on one key cannot
-// amplify into a flood of database writes.
+// At most one flush goroutine runs per keyID at any moment, which bounds both
+// the write rate (one in-flight DB write per key) and the goroutine count: a
+// request whose key already has a flusher only books its count and returns,
+// and that flusher picks the count up (issue #104; earlier, every request
+// spawned a goroutine that then parked in a singleflight.Group).
 func (s *Service) RecordUsageAsync(keyID string) {
-	// Book the request BEFORE starting the flush goroutine, so it can never
-	// be missed by a flush that is already draining the counter.
-	s.addPendingUsage(keyID)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logging.Warnf("service_apikeys: RecordUsage goroutine panic: %v", r)
-			}
-		}()
-
-		// singleflight hands a late joiner the in-flight flush's result, and
-		// that flush may have drained the counter before this request was
-		// booked. Re-check once the shared flush returns and go round again
-		// while work remains, so a request is never stranded until the key
-		// happens to be used again. Bounded so a key under sustained load
-		// hands off instead of pinning one goroutine to the database.
-		for range maxAPIKeyUsageFlushRounds {
-			if _, sfErr, _ := s.lastUsedSFG.Do(keyID, func() (any, error) {
-				s.flushPendingUsage(keyID)
-				return nil, nil
-			}); sfErr != nil {
-				logging.Debugf("service_apikeys: lastUsedSFG returned error for key %s: %v", keyID, sfErr)
-				return
-			}
-			if s.peekPendingUsage(keyID) == 0 {
-				return
-			}
-		}
-	}()
+	// Book the request BEFORE trying to start a flusher, so it can never be
+	// missed by a flusher that is already draining the counter.
+	entry := s.addPendingUsage(keyID)
+	if !entry.flushing.CompareAndSwap(false, true) {
+		return
+	}
+	go s.runUsageFlusher(keyID, entry)
 }
 
-// addPendingUsage books one not-yet-flushed request against keyID.
+// runUsageFlusher writes keyID's pending count until none is left, then
+// releases the key's flusher slot. The caller has set entry.flushing.
+func (s *Service) runUsageFlusher(keyID string, entry *apiKeyUsageEntry) {
+	defer func() {
+		if r := recover(); r != nil {
+			entry.flushing.Store(false)
+			logging.Warnf("service_apikeys: RecordUsage flush panic: %v", r)
+		}
+	}()
+	for {
+		for entry.count.Load() != 0 {
+			s.flushPendingUsage(keyID)
+		}
+		if !entry.releaseFlusher() {
+			return
+		}
+	}
+}
+
+// apiKeyUsageEntry is one API key's not-yet-flushed request count and whether
+// a flush goroutine currently owns the key.
+type apiKeyUsageEntry struct {
+	count    atomic.Int64
+	flushing atomic.Bool
+}
+
+// releaseFlusher gives up the key's flusher slot after a drain. It reports
+// true, with the slot taken again, when there is a count to write that no
+// other flusher will: a request booked after the last drain may have seen the
+// slot still taken and returned without starting a flusher. The
+// CompareAndSwap keeps a single flusher if a new request started one in the
+// meantime. Go atomics are sequentially consistent, so a request whose
+// CompareAndSwap failed booked its count before the Store(false) below, and
+// the Load that follows sees it.
+func (e *apiKeyUsageEntry) releaseFlusher() bool {
+	e.flushing.Store(false)
+	return e.count.Load() != 0 && e.flushing.CompareAndSwap(false, true)
+}
+
+// addPendingUsage books one not-yet-flushed request against keyID and
+// returns the key's entry.
 //
-// Entries are never removed: an entry is one atomic int64 and the number of
+// Entries are never removed: an entry is two atomics and the number of
 // distinct keys is bounded by the number of API keys that exist, so this is
 // a fixed small cost rather than unbounded growth. Removing entries would
 // race with in-flight increments and risk losing counts.
-func (s *Service) addPendingUsage(keyID string) {
+func (s *Service) addPendingUsage(keyID string) *apiKeyUsageEntry {
 	s.pendingUsageMu.Lock()
 	if s.pendingUsage == nil {
-		s.pendingUsage = make(map[string]*atomic.Int64)
+		s.pendingUsage = make(map[string]*apiKeyUsageEntry)
 	}
-	counter, ok := s.pendingUsage[keyID]
+	entry, ok := s.pendingUsage[keyID]
 	if !ok {
-		counter = new(atomic.Int64)
-		s.pendingUsage[keyID] = counter
+		entry = new(apiKeyUsageEntry)
+		s.pendingUsage[keyID] = entry
 	}
 	s.pendingUsageMu.Unlock()
 
-	counter.Add(1)
+	entry.count.Add(1)
+	return entry
 }
 
-// pendingCounter returns the counter for keyID, or nil if the key has never
+// pendingEntry returns the entry for keyID, or nil if the key has never
 // booked a request. The mutex covers only the map lookup; reads and writes
-// of the returned counter are atomic.
-func (s *Service) pendingCounter(keyID string) *atomic.Int64 {
+// of the returned entry are atomic.
+func (s *Service) pendingEntry(keyID string) *apiKeyUsageEntry {
 	s.pendingUsageMu.Lock()
 	defer s.pendingUsageMu.Unlock()
 	return s.pendingUsage[keyID]
@@ -480,7 +491,7 @@ func (s *Service) pendingCounter(keyID string) *atomic.Int64 {
 // store. A no-op when nothing is pending.
 //
 // On a store error the drained count is lost rather than retried: the caller
-// is a fire-and-forget goroutine on the auth path, and retrying a usage
+// is the key's background flusher on the auth path, and retrying a usage
 // counter is not worth holding a database connection during an outage. The
 // loss is logged and bounded to the requests in that one flush.
 func (s *Service) flushPendingUsage(keyID string) {
@@ -498,20 +509,20 @@ func (s *Service) flushPendingUsage(keyID string) {
 // drainPendingUsage atomically takes the pending count for keyID, resetting
 // it to zero. Returns 0 when nothing is pending.
 func (s *Service) drainPendingUsage(keyID string) int64 {
-	counter := s.pendingCounter(keyID)
-	if counter == nil {
+	entry := s.pendingEntry(keyID)
+	if entry == nil {
 		return 0
 	}
-	return counter.Swap(0)
+	return entry.count.Swap(0)
 }
 
 // peekPendingUsage reports the pending count for keyID without consuming it.
 func (s *Service) peekPendingUsage(keyID string) int64 {
-	counter := s.pendingCounter(keyID)
-	if counter == nil {
+	entry := s.pendingEntry(keyID)
+	if entry == nil {
 		return 0
 	}
-	return counter.Load()
+	return entry.count.Load()
 }
 
 // RecordUsage updates last_used_at and adds delta to both the lifetime

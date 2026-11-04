@@ -49,6 +49,7 @@ func TestGetOrCreateExecution_ExistingNonAdoptableRowBlocks(t *testing.T) {
 	for name, row := range cases {
 		t.Run(name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			assertMocksOnCleanup(t, store)
 			plan := stepTestPlan()
 			expectStepRows(store, plan, row)
 			m := &Manager{config: store}
@@ -69,6 +70,7 @@ func TestGetOrCreateExecution_ExistingNonAdoptableRowBlocks(t *testing.T) {
 func TestGetOrCreateExecution_AdoptsPendingRootOnly(t *testing.T) {
 	acct := "acct-A"
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	plan := stepTestPlan()
 	child := stepRow("pending", func(e *config.PurchaseExecution) { e.ExecutionID = "child"; e.CloudAccountID = &acct })
 	root := stepRow("notified", func(e *config.PurchaseExecution) { e.ExecutionID = "root" })
@@ -86,6 +88,7 @@ func TestGetOrCreateExecution_AdoptsPendingRootOnly(t *testing.T) {
 // The step is keyed on the locked plan's CurrentStep, not on the date.
 func TestGetOrCreateExecution_KeysOnStepNotDate(t *testing.T) {
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	plan := stepTestPlan()
 	row := stepRow("pending", nil)
 	row.ScheduledDate = time.Now().AddDate(0, 0, -30) // differs from NextExecutionDate
@@ -102,6 +105,7 @@ func TestAttachResolvedRecommendations(t *testing.T) {
 	recs := []config.RecommendationRecord{scopedTestRec("acct-A"), scopedTestRec("acct-B")}
 	t.Run("attaches recs and writes one suppression per tuple in the same tx", func(t *testing.T) {
 		store := new(MockConfigStore)
+		assertMocksOnCleanup(t, store)
 		store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 		store.On("SetExecutionRecommendationsIfEmptyTx", mock.Anything, mock.Anything, "row-1", recs, 600.0, 150.0).Return(true, nil)
 		store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Twice()
@@ -201,6 +205,7 @@ func TestSaveTerminalExecution_ReleasesSuppressionsOnlyBeforeSubmission(t *testi
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			store := new(MockConfigStore)
+			assertMocksOnCleanup(t, store)
 			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 			store.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, "e").Return(nil).Maybe()
 			exec := c.exec
@@ -228,6 +233,7 @@ func TestExecuteAndFinalize_SuppressionReleaseFollowsSubmission(t *testing.T) {
 	acct := "acct-A"
 	run := func(rec config.RecommendationRecord) (*MockConfigStore, error) {
 		store := new(MockConfigStore)
+		assertMocksOnCleanup(t, store)
 		store.On("GetPurchasePlan", mock.Anything, "p").Return(&config.PurchasePlan{ID: "p"}, nil)
 		store.On("GetPlanAccounts", mock.Anything, "p").Return([]config.CloudAccount{}, nil).Maybe()
 		store.On("GetCloudAccount", mock.Anything, acct).Return(nil, errors.New("account lookup failed")).Maybe()
@@ -275,6 +281,7 @@ func TestExecuteAndFinalize_PostSubmissionFailureKeepsSuppressions(t *testing.T)
 			store := new(MockConfigStore)
 			factory := new(MockProviderFactory)
 			prov := new(MockProvider)
+			assertMocksOnCleanup(t, store, factory, prov)
 			svc := new(MockServiceClient)
 			stsMock := new(MockSTSClient)
 			store.On("GetPurchasePlan", mock.Anything, "p").Return(&config.PurchasePlan{ID: "p"}, nil)

@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -909,7 +910,9 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //     An execution whose effective account ID is "" (nil exec field AND recs
 //     disagree or have no account) is excluded once account_ids is non-empty.
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
-//     both sides; End is the end-of-day for YYYY-MM-DD inputs.
+//     both sides; End is the end-of-day for YYYY-MM-DD inputs. Actionable
+//     statuses skip this check so a pending approval scheduled after the
+//     range end still reaches the approval queue (#1685).
 func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if !f.matchesExecutionProviderAndAccount(exec) {
 		return false
@@ -917,7 +920,7 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	if f.PlanID != "" && exec.PlanID != f.PlanID {
 		return false
 	}
-	if f.HasDate {
+	if f.HasDate && !slices.Contains(actionableExecutionStatuses, exec.Status) {
 		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
 			return false
 		}
@@ -1129,34 +1132,51 @@ func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, se
 	return scope.filter(purchases), nil
 }
 
-// historyRowAccountName returns the registered account name for a history row,
-// or "" when it cannot be determined unambiguously. Without CloudAccountID it
+// historyRowAccount returns the registered account a history row belongs to,
+// or nil when it cannot be determined unambiguously. Without CloudAccountID it
 // tries the account UUID first (in-flight rows store the UUID in AccountID),
 // then provider plus external id, since external ids are unique only per
 // provider. A legacy row without a provider matches only when exactly one
 // account across all providers has that external id.
-func historyRowAccountName(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) string {
+func historyRowAccount(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) *config.CloudAccount {
 	if p.CloudAccountID != nil {
-		return accountNameByID(accounts, *p.CloudAccountID)
+		return accountByID(accounts, *p.CloudAccountID)
 	}
-	if name := accountNameByID(accounts, p.AccountID); name != "" {
-		return name
+	if a := accountByID(accounts, p.AccountID); a != nil {
+		return a
 	}
 	if p.Provider != "" {
-		return accountNameByExternalID(accounts, p.Provider, p.AccountID)
+		return uniqueAccountByExternalID(accounts, p.Provider, p.AccountID)
 	}
-	var name string
-	matches := 0
+	var found *config.CloudAccount
 	for i := range accounts {
-		if accounts[i].ExternalID == p.AccountID {
-			name = accounts[i].Name
-			matches++
+		if accounts[i].ExternalID != p.AccountID {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = &accounts[i]
+	}
+	return found
+}
+
+func accountByID(accounts []config.CloudAccount, id string) *config.CloudAccount {
+	for i := range accounts {
+		if accounts[i].ID == id {
+			return &accounts[i]
 		}
 	}
-	if matches != 1 {
-		return ""
+	return nil
+}
+
+// historyRowAccountName returns the registered account name for a history row,
+// or "" when it cannot be determined unambiguously (see historyRowAccount).
+func historyRowAccountName(accounts []config.CloudAccount, p config.PurchaseHistoryRecord) string {
+	if a := historyRowAccount(accounts, p); a != nil {
+		return a.Name
 	}
-	return name
+	return ""
 }
 
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {

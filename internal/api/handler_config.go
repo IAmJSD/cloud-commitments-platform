@@ -74,6 +74,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	}
 	_, gracePresent := present["grace_period_days"]
 	modeSent := riExchangeModeSent(present)
+	providersSent := bodyHasKey(present, "enabled_providers")
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
 			return NewClientError(400, "invalid request body")
 		}
-		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode); vErr != nil {
+		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode, providersSent); vErr != nil {
 			return vErr
 		}
 		if gErr := requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), grants.riExchange); gErr != nil {
@@ -145,6 +146,17 @@ func globalConfigWriteFields(body string) (map[string]json.RawMessage, error) {
 	return present, nil
 }
 
+// bodyHasKey reports whether the body carries the key under any casing, as
+// json.Unmarshal matches keys case-insensitively. An explicit null counts.
+func bodyHasKey(present map[string]json.RawMessage, name string) bool {
+	for key := range present {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
 // null does not: json.Unmarshal leaves the stored value in place for it.
 func riExchangeModeSent(present map[string]json.RawMessage) bool {
@@ -166,7 +178,12 @@ func riExchangeModeSent(present map[string]json.RawMessage) bool {
 // such as "Auto". Such a row keeps its value until a caller sends a valid one,
 // and armed() keeps treating it as auto. Runs before the arming gates so a
 // malformed write never reveals grant state.
-func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent bool) error {
+func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent bool) error {
+	// Presence-based, not in Validate: a fresh install stores [] and partial
+	// saves that omit the key must keep working.
+	if providersSent && len(cfg.EnabledProviders) == 0 {
+		return NewClientError(400, "enabled_providers must list at least one provider")
+	}
 	if modeSent && !config.IsValidRIExchangeMode(cfg.RIExchangeMode) {
 		return NewClientError(400, "ri_exchange_mode must be 'manual' or 'auto'")
 	}
@@ -186,16 +203,36 @@ func requireSwitchGrants(ctx context.Context, session *Session, purchasesGrant e
 	return requireLadderExecutionSwitchGrant(ctx, session, purchasesGrant, ladderBefore, cfg)
 }
 
+const globalConfigScopeMsg = "permission denied: global configuration requires unrestricted account access"
+
 func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session) error {
+	return h.requireGlobalScope(ctx, session, auth.ActionUpdate, auth.ResourceConfig, globalConfigScopeMsg)
+}
+
+// requireGlobalScope gates a deployment-wide action for a session that already
+// holds action:resource (callers keep their own validation order by calling
+// requirePermission first). It needs an unrestricted account scope and a grant
+// with no constraints on any dimension, checked on the key and the owner for
+// user API keys. msg is the 403 text for a restricted account scope.
+func (h *Handler) requireGlobalScope(ctx context.Context, session *Session, action, resource, msg string) error {
 	scope, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return err
 	}
 	if !scope.AllowsAll() {
-		return NewClientError(403, "permission denied: global configuration requires unrestricted account access")
+		return NewClientError(403, msg)
 	}
-	return h.requirePermissionConstraints(ctx, session, auth.ActionUpdate, auth.ResourceConfig,
-		[]auth.PermissionConstraints{{StrictScope: true}})
+	return h.requirePermissionConstraints(ctx, session, action, resource,
+		[]auth.PermissionConstraints{auth.GlobalConstraints()})
+}
+
+// requireGlobalPermission is requirePermission followed by requireGlobalScope.
+func (h *Handler) requireGlobalPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource, msg string) error {
+	session, err := h.requirePermission(ctx, req, action, resource)
+	if err != nil {
+		return err
+	}
+	return h.requireGlobalScope(ctx, session, action, resource, msg)
 }
 
 // checkCommitmentOptionCombo rejects saves that carry a (term, payment)

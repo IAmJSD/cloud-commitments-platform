@@ -50,10 +50,13 @@ func TestExecutePurchase_AdminAPIKey_FourEyesOn_RefusedBeforeAnyWrite(t *testing
 	} {
 		ctx := context.Background()
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 		expectStoredRecs(store, config.RecommendationRecord{
 			ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
 		})
+		// The unattributed caller is refused before the stored-price lookup.
+		relaxUnreachedStubs(&store.Mock, "ListStoredRecommendations")
 		handler := &Handler{config: store, apiKey: fourEyesAdminKey}
 
 		_, err := handler.executePurchase(ctx, adminKeyRequest(body))
@@ -68,6 +71,7 @@ func TestExecutePurchase_AdminAPIKey_FourEyesOn_RefusedBeforeAnyWrite(t *testing
 func TestExecutePurchase_AdminAPIKey_FourEyesOff_ReachesPersistence(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
 	expectStoredRecs(store, config.RecommendationRecord{
 		ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
@@ -91,6 +95,7 @@ func TestRetryPurchase_UnattributedSession_FourEyesOn_RefusedBeforeAnyWrite(t *t
 	}
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionByID", ctx, retryExecID).Return(failed, nil)
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 	handler := &Handler{config: store, auth: unattributedRetryAuth(t)}
@@ -114,6 +119,7 @@ func TestRetryPurchase_UnattributedSession_FourEyesOff_ReachesPersistence(t *tes
 	}
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetExecutionByID", ctx, retryExecID).Return(failed, nil)
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
 	store.On("WithTx", ctx, mock.Anything).Return(errPersistReached)
@@ -132,6 +138,7 @@ func unattributedRetryAuth(t *testing.T) *MockAuthService {
 	t.Helper()
 	session := &Session{UserID: "service-principal"}
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
 	auth.On("HasPermissionAPI", mock.Anything, session.UserID, "retry-any", "purchases").Return(true, nil).Maybe()
 	auth.On("GetAllowedAccountsAPI", mock.Anything, session.UserID).Return([]string{}, nil).Maybe()
@@ -144,6 +151,7 @@ const fourEyesPlanID = "11111111-1111-1111-1111-111111111111"
 func TestCreatePlannedPurchases_AdminAPIKey_FourEyesOn_RefusedBeforeAnyWrite(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 	handler := &Handler{config: store, apiKey: fourEyesAdminKey}
 
@@ -157,6 +165,7 @@ func TestCreatePlannedPurchases_AdminAPIKey_FourEyesOn_RefusedBeforeAnyWrite(t *
 func TestCreatePlannedPurchases_AdminAPIKey_FourEyesOff_ReachesPersistence(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
 	store.On("GetPurchasePlan", ctx, fourEyesPlanID).Return(&config.PurchasePlan{ID: fourEyesPlanID, Enabled: true}, nil)
 	store.On("WithTx", ctx, mock.Anything).Return(errPersistReached)
@@ -174,6 +183,7 @@ func TestRequireAttributablePurchaseCreator(t *testing.T) {
 
 	t.Run("user session passes without reading config", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		h := &Handler{config: store}
 		require.NoError(t, h.requireAttributablePurchaseCreator(ctx, &Session{UserID: retryCallerID, Email: "u@example.com"}))
 		require.NoError(t, h.requireAttributablePurchaseCreator(ctx, &Session{UserID: retryCallerID, UserAPIKeyID: "key-1"}))
@@ -182,6 +192,7 @@ func TestRequireAttributablePurchaseCreator(t *testing.T) {
 
 	t.Run("config load failure fails closed", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetGlobalConfig", ctx).Return(nil, errors.New("db down"))
 		h := &Handler{config: store}
 		err := h.requireAttributablePurchaseCreator(ctx, adminKey)
@@ -191,6 +202,7 @@ func TestRequireAttributablePurchaseCreator(t *testing.T) {
 
 	t.Run("nil config means 4-eyes off", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetGlobalConfig", ctx).Return(nil, nil)
 		h := &Handler{config: store}
 		require.NoError(t, h.requireAttributablePurchaseCreator(ctx, adminKey))
@@ -198,6 +210,7 @@ func TestRequireAttributablePurchaseCreator(t *testing.T) {
 
 	t.Run("nil session under 4-eyes is refused", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 		h := &Handler{config: store}
 		requireFourEyesUnattributedRefusal(t, h.requireAttributablePurchaseCreator(ctx, nil))
@@ -205,6 +218,7 @@ func TestRequireAttributablePurchaseCreator(t *testing.T) {
 
 	t.Run("non-UUID user id under 4-eyes is refused", func(t *testing.T) {
 		store := new(MockConfigStore)
+		t.Cleanup(func() { store.AssertExpectations(t) })
 		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 		h := &Handler{config: store}
 		requireFourEyesUnattributedRefusal(t, h.requireAttributablePurchaseCreator(ctx, &Session{UserID: "not-a-uuid"}))

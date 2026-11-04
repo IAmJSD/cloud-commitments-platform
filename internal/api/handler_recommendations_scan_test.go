@@ -82,6 +82,7 @@ func scanTestHandler(recs []config.RecommendationRecord, chunk int, scoped bool)
 func legacyResponse(t *testing.T, recs []config.RecommendationRecord, scoped bool) *RecommendationsResponse {
 	t.Helper()
 	ms := new(MockScheduler)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
 	ms.On("ListRecommendations", mock.Anything, mock.Anything).
 		Return(append([]config.RecommendationRecord(nil), recs...), nil)
 	accounts := []string(nil)
@@ -100,6 +101,7 @@ func legacyResponse(t *testing.T, recs []config.RecommendationRecord, scoped boo
 func TestGetRecommendations_PaginatedRequestDoesNotLoadFullList(t *testing.T) {
 	recs := pageTestRecs(5)
 	ms := new(MockScheduler)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
 	ms.On("ScanRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(recs, nil)
 	h := &Handler{scheduler: ms, apiKey: "test-key"}
 

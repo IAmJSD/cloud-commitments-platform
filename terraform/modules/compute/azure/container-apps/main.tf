@@ -140,6 +140,12 @@ resource "azurerm_container_app" "main" {
             # would require Entra-issued tokens, which Logic Apps does
             # not emit on the HTTP Connector trigger we use.
             SCHEDULED_TASK_AUTH_MODE = "bearer"
+            # The recurrence the recommendations Logic App actually runs
+            # (daily at local.schedule_hour:00 UTC, see scheduled-tasks.tf),
+            # not the raw cron, so GET /api/recommendations/freshness reports
+            # the real next run (next_collection_at, #756). Empty when the
+            # Logic App is not created.
+            RECOMMENDATION_SCHEDULE = var.enable_scheduled_tasks ? "0 ${local.schedule_hour} * * *" : ""
           },
           local.archera_env,
           var.additional_env_vars

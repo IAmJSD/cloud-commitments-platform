@@ -96,6 +96,7 @@ func TestAddPurchasesValidatesLockedPlan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			plan := bareStepAPIPlan()
 			cap := 100.0
 			plan.MaxStepCommitment = &cap
@@ -128,6 +129,7 @@ func TestAddPurchasesAnchorsPartlyCompletedRamp(t *testing.T) {
 		t.Run(fmt.Sprint(step), func(t *testing.T) {
 			ctx := context.Background()
 			store := new(MockConfigStore)
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			plan := bareStepAPIPlan()
 			plan.AutoPurchase = false
 			plan.RampSchedule.CurrentStep = step

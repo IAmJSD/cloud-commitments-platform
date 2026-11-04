@@ -20,11 +20,14 @@ func routerReq(method, path, body string) (*events.LambdaFunctionURLRequest, str
 // setupRouterForDispatch returns a Router whose Handler has admin auth configured.
 // The MockConfigStore uses hardcoded stubs for account methods; the tests verify
 // dispatch decisions, not end-to-end handler outcomes.
-func setupRouterForDispatch(ctx context.Context) *Router {
+func setupRouterForDispatch(t *testing.T, ctx context.Context) *Router {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminAccountSession(), nil)
 	mockAuth.grantAdmin()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	h := &Handler{auth: mockAuth, config: store}
 	return NewRouter(h)
 }
@@ -37,7 +40,7 @@ func setupRouterForDispatch(ctx context.Context) *Router {
 // the newly built override — the important thing is no client/not-found error.
 func TestRouterDispatch_UpdateServiceOverride(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	accountID := "11111111-1111-1111-1111-111111111111"
 	req, method, path := routerReq("PUT", "/api/accounts/"+accountID+"/service-overrides/aws/ec2", `{"term":1}`)
@@ -51,7 +54,7 @@ func TestRouterDispatch_UpdateServiceOverride(t *testing.T) {
 // valid account so updateAccount succeeds — confirming the correct handler ran.
 func TestRouterDispatch_UpdateAccount_RoutesCorrectly(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	accountID := "11111111-1111-1111-1111-111111111111"
 	req, method, path := routerReq("PUT", "/api/accounts/"+accountID, `{"name":"Updated","provider":"aws","external_id":"123456789012"}`)
@@ -65,7 +68,7 @@ func TestRouterDispatch_UpdateAccount_RoutesCorrectly(t *testing.T) {
 // routes to deleteAccountServiceOverride.
 func TestRouterDispatch_DeleteServiceOverride(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	accountID := "11111111-1111-1111-1111-111111111111"
 	req, method, path := routerReq("DELETE", "/api/accounts/"+accountID+"/service-overrides/aws/ec2", "")
@@ -80,7 +83,7 @@ func TestRouterDispatch_DeleteServiceOverride(t *testing.T) {
 // would be called, so a missing-component error would be returned instead.
 func TestRouterDispatch_DeleteAccount_RoutesCorrectly(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	accountID := "11111111-1111-1111-1111-111111111111"
 	req, method, path := routerReq("DELETE", "/api/accounts/"+accountID, "")
@@ -96,7 +99,7 @@ func TestRouterDispatch_DeleteAccount_RoutesCorrectly(t *testing.T) {
 // (non-error) result proves the more-specific exact-path route won. (#949/#951).
 func TestRouterDispatch_AccountsList_RoutesToMinimalHandler(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	req, method, path := routerReq("GET", "/api/accounts/list", "")
 	result, err := r.Route(ctx, method, path, req)
@@ -113,7 +116,7 @@ func TestRouterDispatch_AccountsList_RoutesToMinimalHandler(t *testing.T) {
 // would receive id="uuid/accounts", which contains a slash → "invalid ID" error.
 func TestRouterDispatch_PlanAccountsGET_CorrectDispatch(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	planID := "22222222-2222-2222-2222-222222222222"
 	req, method, path := routerReq("GET", "/api/plans/"+planID+"/accounts", "")
@@ -125,7 +128,7 @@ func TestRouterDispatch_PlanAccountsGET_CorrectDispatch(t *testing.T) {
 
 func TestRouterDispatch_PlanAccountsPUT_CorrectDispatch(t *testing.T) {
 	ctx := context.Background()
-	r := setupRouterForDispatch(ctx)
+	r := setupRouterForDispatch(t, ctx)
 
 	planID := "22222222-2222-2222-2222-222222222222"
 	// Body uses a single valid UUID — universal-plans fix rejects empty

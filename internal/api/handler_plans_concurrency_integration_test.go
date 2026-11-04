@@ -120,6 +120,7 @@ func TestCreatePlannedPurchases_MembershipChangesBeforeLock(t *testing.T) {
 	var userID string
 	require.NoError(t, f.pool.QueryRow(ctx, `SELECT id FROM users WHERE email='creator@example.com'`).Scan(&userID))
 	auth := new(MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: userID}, nil)
 	auth.grantScoped(accounts[0].ID)
 	f.handler.auth = auth
@@ -135,6 +136,7 @@ func TestCreatePlannedPurchases_RoutedDatesAndRollback(t *testing.T) {
 	ctx := context.Background()
 	f := newCreateConcurrencyFixture(ctx, t)
 	auth := f.handler.auth.(*MockAuthService)
+	t.Cleanup(func() { auth.AssertExpectations(t) })
 	auth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	first := time.Now().AddDate(0, 0, 7).UTC().Truncate(24 * time.Hour)
 	request := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token", "X-CSRF-Token": "test-csrf", "Content-Type": "application/json"},
@@ -363,6 +365,7 @@ func TestUpdatePlan_CapPresencePostgres(t *testing.T) {
 			before, err := f.store.GetPurchasePlan(ctx, f.planID)
 			require.NoError(t, err)
 			auth := f.handler.auth.(*MockAuthService)
+			t.Cleanup(func() { auth.AssertExpectations(t) })
 			auth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			body := fmt.Sprintf(`{"name":"Concurrent Create Plan","provider":"aws","service":"ec2","term":1,"payment":"no-upfront","target_coverage":80,"ramp_schedule":"weekly-25pct","enabled":true,"auto_purchase":%t,"notification_days_before":2%s}`, tc.auto, tc.field)
 			req := &events.LambdaFunctionURLRequest{
@@ -413,7 +416,9 @@ func TestUpdatePlan_CapNullPreservesConcurrentWinner(t *testing.T) {
 	cap100 := 100.0
 	plan.MaxStepCommitment = &cap100
 	require.NoError(t, f.store.UpdatePurchasePlan(ctx, plan))
-	f.handler.auth.(*MockAuthService).On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	fixtureAuth := f.handler.auth.(*MockAuthService)
+	t.Cleanup(func() { fixtureAuth.AssertExpectations(t) })
+	fixtureAuth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	f.handler.config = concurrentCapStore{StoreInterface: f.store}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token", "Content-Type": "application/json", "X-CSRF-Token": "test-csrf"}, Body: `{"name":"Concurrent Create Plan","ramp_schedule":"weekly-25pct","enabled":false,"auto_purchase":false,"max_step_commitment":null}`, RequestContext: events.LambdaFunctionURLRequestContext{HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "PUT", Path: "/api/plans/" + f.planID}}}
 	response, err := f.handler.HandleRequest(ctx, req)

@@ -64,6 +64,7 @@ func TestRecoverStrandedApprovals_RedrivesClaimedRowNotSnapshot(t *testing.T) {
 	stsClient := new(MockSTSClient)
 	factory := new(MockProviderFactory)
 	prov := new(MockProvider)
+	assertMocksOnCleanup(t, emailSender, stsClient, factory, prov)
 	client := new(MockServiceClient)
 	t.Cleanup(func() { store.AssertExpectations(t) })
 	t.Cleanup(func() { client.AssertExpectations(t) })

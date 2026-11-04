@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -317,7 +318,7 @@ func (m *Manager) checkDifferentApprover(ctx context.Context, executionID string
 		return fmt.Errorf("%w: 4-eyes approval mode is enabled but the creator's account could not be resolved; an admin must investigate before approving", ErrFourEyesDenied)
 	}
 
-	if strings.EqualFold(creatorEmail, actorEmail) {
+	if email.SameAddress(creatorEmail, actorEmail) {
 		logging.Warnf("purchase[%s]: 4-eyes mode on; creator %s attempted self-approval via actor %q, denied",
 			executionID, *execution.CreatedByUserID, maskActor(actorEmail))
 		return fmt.Errorf("%w: 4-eyes mode requires a different approver than the requester", ErrFourEyesDenied)

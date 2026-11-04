@@ -472,10 +472,43 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 // completed run does, before the 502 (issue #532). final is the row the
 // funnel returned, carrying the per-rec outcome and completed_at.
 func (h *Handler) executeFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID, action string, final *config.PurchaseExecution, revocationToken, executedBy string, err error) error {
+	h.emailCommittedPartialRun(ctx, req, final, revocationToken, executedBy, err)
+	return executeFailureError(executionID, action, final, err)
+}
+
+func (h *Handler) emailCommittedPartialRun(ctx context.Context, req *events.LambdaFunctionURLRequest, final *config.PurchaseExecution, revocationToken, executedBy string, err error) {
 	if purchase.IsCommittedPartialRun(final, err) {
 		h.sendPurchaseExecutedEmail(ctx, req, final, revocationToken, executedBy)
 	}
-	return executeFailureError(executionID, action, final, err)
+}
+
+// tokenFailureError is executeFailureError with fixed messages: a token
+// approver is not scoped to every account on the execution, so the run
+// error's text stays in the server log. Statuses and details are unchanged.
+func tokenFailureError(executionID string, final *config.PurchaseExecution, err error) error {
+	if final == nil || errors.Is(err, purchase.ErrFourEyesDenied) {
+		// No row, or a static policy denial: nothing from the run to hide.
+		return executeFailureError(executionID, "approved", final, err)
+	}
+	// Every branch below is fixed text; audit loss is first because it wraps
+	// whatever else the run failed with.
+	details := map[string]any{"execution_id": executionID, "status": final.Status}
+	switch {
+	case errors.Is(err, config.ErrAuditLoss):
+		return NewClientError(500, "purchase audit could not be completed")
+	case errors.Is(err, purchase.ErrStaleAzurePricing):
+		return NewClientErrorWithDetails(409, purchase.ErrStaleAzurePricing.Error(), details)
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		code := 500
+		if ce, ok := IsClientError(err); ok {
+			code = ce.code
+		}
+		return NewClientErrorWithDetails(code, "the purchase changed after it was authorized and no longer passes your permission checks, so nothing was bought and it is now marked failed", details)
+	case purchase.IsCommittedPartialRun(final, err):
+		return NewClientErrorWithDetails(502, "purchase partially completed: some commitments were purchased and can be revoked, others failed", details)
+	default:
+		return NewClientErrorWithDetails(502, "purchase execution failed", details)
+	}
 }
 
 // Stale Azure prices are refused before purchase, even after a successful claim.
@@ -686,6 +719,11 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
+	err = h.requirePlanUpdateIfPlanBearing(ctx, req, executionID)
+	if err != nil {
+		return nil, err
+	}
+
 	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
@@ -744,6 +782,20 @@ func (h *Handler) requirePlannedCancelPlanScope(ctx context.Context, session *Se
 	if IsNotFoundError(err) {
 		return errPlannedCancelPlanOutOfScope
 	}
+	return err
+}
+
+// requirePlanUpdateIfPlanBearing requires update:plans when the execution has a
+// plan, because canceling it also disables that plan. Call before any write.
+func (h *Handler) requirePlanUpdateIfPlanBearing(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) error {
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if execution.PlanID == "" {
+		return nil
+	}
+	_, err = h.requirePermission(ctx, req, auth.ActionUpdate, auth.ResourcePlans)
 	return err
 }
 
@@ -1112,7 +1164,9 @@ func (h *Handler) tokenApproveFailure(ctx context.Context, req *events.LambdaFun
 	if final == nil && !errors.Is(err, purchase.ErrFourEyesDenied) {
 		return tokenActionError(err)
 	}
-	return h.executeFailure(ctx, req, executionID, "approved", final, revocationToken, actor, err)
+	logging.Errorf("purchase[%s]: token approve failed: %v", executionID, err)
+	h.emailCommittedPartialRun(ctx, req, final, revocationToken, actor, err)
+	return tokenFailureError(executionID, final, err)
 }
 
 // emailTokenApproveOutcome sends the executed email for a token approve that
@@ -1412,6 +1466,11 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 			// is no longer in a schedulable status. Return 409 so the client knows to
 			// reload and not retry with the same payload.
 			return nil, NewClientError(409, "purchase no longer schedulable: state changed concurrently (concurrent cancel)")
+		}
+		if approvalToken != "" {
+			// A token approver is not scoped to the store's error text.
+			logging.Errorf("purchase[%s]: token approve failed to schedule: %v", execution.ExecutionID, err)
+			return nil, NewClientError(500, "failed to schedule execution")
 		}
 		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution %s: %v", execution.ExecutionID, err))
 	}
@@ -4507,11 +4566,8 @@ func (h *Handler) authorizeApprovalAction(ctx context.Context, req *events.Lambd
 		// can proceed.
 		return "", NewClientError(403, "no per-account contact email configured for this execution; set the cloud account's contact_email before approving")
 	}
-	actorLower := strings.ToLower(strings.TrimSpace(actor))
-	for _, addr := range approvers {
-		if strings.ToLower(strings.TrimSpace(addr)) == actorLower {
-			return actor, nil
-		}
+	if email.ContainsAddress(approvers, actor) {
+		return actor, nil
 	}
 	return "", NewClientError(403, "your session email is not the authorized approver for this purchase")
 }

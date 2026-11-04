@@ -11,7 +11,7 @@
 
 import * as api from './api';
 import type { AzureCompatibleOfferingsResponse, AzureExecuteExchangeRequest, ExchangeableAzureRI } from './api';
-import { openModal, closeModal } from './modal';
+import { openModal, closeModal, createModalHeader } from './modal';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
 import { isRIExchanger } from './permissions';
@@ -138,7 +138,10 @@ export function openAzureExchangeModal(sources: readonly ExchangeableAzureRI[], 
   content.textContent = '';
   const root = el('div', 'azure-exchange');
   content.appendChild(root);
-  root.appendChild(el('h3', undefined, 'Azure Reservation Exchange'));
+  // The header sits beside the root (the dialog chrome keys off a direct
+  // child of .modal-content). "Close dialog", not "Close": the error state's
+  // only action is a Close button.
+  content.insertBefore(createModalHeader(el('h3', undefined, 'Azure Reservation Exchange'), { closeLabel: 'Close dialog' }), root);
   const resultBox = el('div', 'azure-exchange-result');
   resultBox.id = 'azure-exchange-result';
 

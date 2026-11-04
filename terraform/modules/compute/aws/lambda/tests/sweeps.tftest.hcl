@@ -34,8 +34,20 @@ run "defaults" {
     error_message = "reap and analytics_collect need their target and permission too."
   }
   assert {
-    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 0 && length(aws_cloudwatch_event_rule.ladder_run) == 0 && length(aws_cloudwatch_event_rule.ri_exchange) == 0
-    error_message = "fire, ladder_run and ri_exchange stay opt-in."
+    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 1 && length(aws_cloudwatch_event_target.fire_scheduled_purchases) == 1 && length(aws_lambda_permission.eventbridge_fire_scheduled_purchases) == 1
+    error_message = "The fire sweep is on by default (#712), with its target and permission."
+  }
+  assert {
+    condition     = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].schedule_expression == "rate(15 minutes)"
+    error_message = "The fire sweep runs every 15 minutes by default."
+  }
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.ladder_run) == 0 && length(aws_cloudwatch_event_rule.ri_exchange) == 0
+    error_message = "ladder_run and ri_exchange stay opt-in."
+  }
+  assert {
+    condition     = aws_cloudwatch_event_rule.scheduled_recommendations[0].schedule_expression == "cron(0 2 * * ? *)"
+    error_message = "Recommendations are collected daily at 02:00 UTC by default, on a cron the API can report next_collection_at for (#756)."
   }
   assert {
     condition = alltrue([
@@ -107,5 +119,18 @@ run "opt_in" {
       for k, t in aws_cloudwatch_event_target.sweep : t.input == jsonencode({ action = k })
     ])
     error_message = "Each target input must name its task."
+  }
+}
+
+run "fire_opt_out" {
+  command = plan
+
+  variables {
+    enable_fire_scheduled_purchases_schedule = false
+  }
+
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 0 && length(aws_cloudwatch_event_target.fire_scheduled_purchases) == 0 && length(aws_lambda_permission.eventbridge_fire_scheduled_purchases) == 0
+    error_message = "Setting enable_fire_scheduled_purchases_schedule = false must remove the fire rule, target and permission."
   }
 }

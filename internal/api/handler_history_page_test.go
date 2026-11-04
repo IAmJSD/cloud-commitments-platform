@@ -111,10 +111,11 @@ func TestHandler_getHistory_PagesThroughEveryRowOnce(t *testing.T) {
 	execs = append(execs, pending)
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(purchases, nil)
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(execs, nil)
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: store}
 
 	pages := walkHistoryPages(t, h, req, map[string]string{"limit": "4"})
@@ -194,13 +195,14 @@ func TestHandler_getHistory_ScopedPagingStaysInScope(t *testing.T) {
 	hidden[fOther.key.ID] = true
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(purchases, nil)
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(execs, nil)
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
-	auth := scopedAuthMock(ctx)
+	auth := scopedAuthMock(t, ctx)
 	auth.On("GetUser", ctx, mock.Anything).Return(&User{Email: "creator@example.com"}, nil).Maybe()
 	h := &Handler{auth: auth, config: store}
 
@@ -237,8 +239,9 @@ func TestHandler_getHistory_CursorPageOmitsActionableRows(t *testing.T) {
 		purchases = append(purchases, row)
 	}
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(purchases, nil)
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: store, isLambda: true}
 
 	cursor := encodeHistoryCursor(purchases[0].Key())
@@ -264,9 +267,10 @@ func TestHandler_getHistory_TerminalExecutionsFailureFlagsTruncated(t *testing.T
 	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	row, _ := purchaseFixture("p-0", "acct", base, pageUUID(0xa, 0))
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryPageRow{row}, nil)
 	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(nil, errors.New("db down"))
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: store}
 
 	cursor := encodeHistoryCursor(config.HistoryPageKey{Timestamp: base.Add(time.Hour), Source: config.HistorySourcePurchase, ID: pageUUID(0xa, 9)})
@@ -283,8 +287,9 @@ func TestHandler_getHistory_TerminalExecutionsFailureFlagsTruncated(t *testing.T
 func TestHandler_getHistory_PurchaseHistoryFailureFailsRequest(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("db down"))
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: store}
 
 	_, err := h.getHistory(ctx, req, map[string]string{})
@@ -375,7 +380,7 @@ func TestParseHistoryFilters_PagingParams(t *testing.T) {
 func TestHandler_getHistory_InvalidCursorReadsNothing(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
-	mockAuth, req := adminHistoryReq(ctx)
+	mockAuth, req := adminHistoryReq(t, ctx)
 	h := &Handler{auth: mockAuth, config: store}
 
 	_, err := h.getHistory(ctx, req, map[string]string{"cursor": "garbage"})

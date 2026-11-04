@@ -10,11 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	"golang.org/x/sync/singleflight"
 )
 
 // Configuration constants.
@@ -48,13 +46,13 @@ const (
 type Service struct {
 	store       StoreInterface
 	emailSender EmailSenderInterface
-	lastUsedSFG singleflight.Group
 	// pendingUsage accumulates per-API-key request counts that have not yet
-	// been flushed to the store, keyed by API key ID. pendingUsageMu guards
-	// the map itself; the counters are incremented and drained atomically
-	// without it. See Service.RecordUsageAsync for why the count is buffered
-	// instead of incremented once per flush.
-	pendingUsage       map[string]*atomic.Int64
+	// been flushed to the store, keyed by API key ID, with a flag marking the
+	// key's single in-flight flusher. pendingUsageMu guards the map itself;
+	// the entries are updated atomically without it. See
+	// Service.RecordUsageAsync for why the count is buffered instead of
+	// incremented once per flush.
+	pendingUsage       map[string]*apiKeyUsageEntry
 	pendingUsageMu     sync.Mutex
 	onPasswordChange   func(ctx context.Context, userID, newPassword string)
 	dashboardURL       string
@@ -162,6 +160,10 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 	}
 	req.Email = parsed.Address
 
+	if req.MFAToken != "" {
+		return s.loginWithMFAToken(ctx, req)
+	}
+
 	user, err := s.getUserAndValidateStatus(ctx, req.Email)
 	if err != nil {
 		// Run a dummy bcrypt compare so the response time for a non-existent
@@ -173,6 +175,9 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 	}
 
 	if err := s.verifyPasswordAndMFA(ctx, user, req); err != nil {
+		if errors.Is(err, ErrMFARequired) {
+			return nil, s.issueMFAChallenge(ctx, user)
+		}
 		return nil, err
 	}
 
@@ -194,7 +199,7 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
-	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+	if accountLocked(user) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
@@ -209,6 +214,11 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	// previously-locked user, with no security benefit.
 
 	return user, nil
+}
+
+// accountLocked reports whether the user's lockout window is still open.
+func accountLocked(user *User) bool {
+	return user.LockedUntil != nil && time.Now().Before(*user.LockedUntil)
 }
 
 // verifyPasswordAndMFA verifies password and MFA code if enabled.
@@ -243,39 +253,46 @@ func (s *Service) verifyPasswordAndMFA(ctx context.Context, user *User, req Logi
 		if req.MFACode == "" {
 			return ErrMFARequired
 		}
-		if user.MFASecret == "" {
-			// Data integrity anomaly: MFA is flagged enabled but has no secret.
-			// Log internally for operator visibility without leaking internal state
-			// to the caller -- a distinct message would confirm the password was correct.
-			logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
-			return errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
-		}
-		// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
-		// secret, and base32-decode errors all return false rather than a match.
-		claimed, err := s.verifyAndClaimTOTP(ctx, user.ID, user.MFASecret, req.MFACode)
-		if err != nil {
-			logging.Warnf("Failed to record TOTP use for user %s: %v", user.ID, err)
-			return ErrInvalidMFACode
-		}
-		if claimed {
-			return nil
-		}
-		// TOTP miss — try a recovery code. consumeRecoveryCode mutates
-		// the user's slice on a match; persist the slice so the
-		// consumed code can't be reused.
-		readCodes := slices.Clone(user.MFARecoveryCodes)
-		if s.consumeRecoveryCode(user, req.MFACode) {
-			if err := s.store.ConsumeMFARecoveryCode(ctx, user.ID, readCodes, user.MFARecoveryCodes); err != nil {
-				logging.Warnf("Failed to persist recovery-code consumption for user %s: %v", user.ID, err)
-				return ErrInvalidMFACode
-			}
-			return nil
-		}
-		s.recordFailedLogin(ctx, user)
-		return ErrInvalidMFACode
+		return s.verifyLoginMFACode(ctx, user, req.MFACode)
 	}
 
 	return nil
+}
+
+// verifyLoginMFACode checks a TOTP or recovery code for an MFA-enabled user
+// at login, for both the password + code form and the mfa_token form. A wrong
+// code counts toward the account lockout.
+func (s *Service) verifyLoginMFACode(ctx context.Context, user *User, code string) error {
+	if user.MFASecret == "" {
+		// Data integrity anomaly: MFA is flagged enabled but has no secret.
+		// Log internally for operator visibility without leaking internal state
+		// to the caller -- a distinct message would confirm the password was correct.
+		logging.Errorf("MFA enabled but secret missing for user %s -- possible data integrity issue", user.ID)
+		return errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
+	}
+	// verifyTOTP fails closed on empty or malformed inputs: empty code, empty
+	// secret, and base32-decode errors all return false rather than a match.
+	claimed, err := s.verifyAndClaimTOTP(ctx, user.ID, user.MFASecret, code)
+	if err != nil {
+		logging.Warnf("Failed to record TOTP use for user %s: %v", user.ID, err)
+		return ErrInvalidMFACode
+	}
+	if claimed {
+		return nil
+	}
+	// TOTP miss — try a recovery code. consumeRecoveryCode mutates
+	// the user's slice on a match; persist the slice so the
+	// consumed code can't be reused.
+	readCodes := slices.Clone(user.MFARecoveryCodes)
+	if s.consumeRecoveryCode(user, code) {
+		if err := s.store.ConsumeMFARecoveryCode(ctx, user.ID, readCodes, user.MFARecoveryCodes); err != nil {
+			logging.Warnf("Failed to persist recovery-code consumption for user %s: %v", user.ID, err)
+			return ErrInvalidMFACode
+		}
+		return nil
+	}
+	s.recordFailedLogin(ctx, user)
+	return ErrInvalidMFACode
 }
 
 // completeSuccessfulLogin creates session and updates user login info.

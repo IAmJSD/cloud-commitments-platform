@@ -91,6 +91,7 @@ import * as state from '../state';
 import { getCurrentUser } from '../state';
 import { getAccountName } from '../recommendations';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { flushPromises } from './flush-promises';
 
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
 
@@ -212,7 +213,7 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     const btn = queue.querySelector<HTMLButtonElement>('.history-approve-btn[data-approve-id="p-pending"]');
     expect(btn).toBeTruthy();
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(confirmDialog).toHaveBeenCalled();
     expect(api.approvePurchase).toHaveBeenCalledWith('p-pending');
@@ -237,7 +238,7 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     const btn = queue.querySelector<HTMLButtonElement>('.history-cancel-btn[data-cancel-id="p-pending"]');
     expect(btn).toBeTruthy();
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(confirmDialog).toHaveBeenCalled();
     expect(api.cancelPurchase).toHaveBeenCalledWith('p-pending');
@@ -263,7 +264,7 @@ describe('Approval queue card (issue #340 sub-task)', () => {
       const queue = document.getElementById('purchases-approval-queue')!;
       const btn = queue.querySelector<HTMLButtonElement>('.history-approve-btn');
       btn?.click();
-      await new Promise((r) => setTimeout(r, 10));
+      await flushPromises();
 
       expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
       // No reload after failure.
@@ -427,9 +428,9 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     await loadHistory();
 
     const queue = document.getElementById('purchases-approval-queue')!;
-    // formatTerm mock renders "3 Years"
-    expect(queue.textContent).toContain('3 Years');
-    expect(queue.textContent).toContain('no-upfront');
+    // Table cells use the compact term and the human payment label.
+    expect(queue.textContent).toContain('3 yr');
+    expect(queue.textContent).toContain('No Upfront');
   });
 
   test('renders Monthly Cost column when monthly_cost is present', async () => {
@@ -488,8 +489,8 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     // Find by content rather than column index so a reorder doesn't break this.
     expect(cellTexts).toEqual(expect.arrayContaining([
       expect.stringContaining('Production Account'),
-      expect.stringContaining('1 Year'),
-      expect.stringContaining('all-upfront'),
+      expect.stringContaining('1 yr'),
+      expect.stringContaining('All Upfront'),
       expect.stringContaining('7.5'),
     ]));
     // No dash fallback may appear on the populated cells.

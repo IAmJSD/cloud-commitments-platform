@@ -59,6 +59,11 @@ type PermissionConstraints struct {
 	// StrictScope is request-only: unknown or unbounded dimensions require an unrestricted grant.
 	StrictScope bool `json:"-" dynamodbav:"-"`
 
+	// Global is request-only: the action is deployment-wide, so only a grant
+	// carrying no constraint on any dimension satisfies it. Build it with
+	// GlobalConstraints.
+	Global bool `json:"-" dynamodbav:"-"`
+
 	// AccountIDs limits to specific AWS/Azure/GCP accounts
 	AccountIDs []string `json:"account_ids,omitempty" dynamodbav:"AccountIDs"`
 
@@ -73,6 +78,17 @@ type PermissionConstraints struct {
 
 	// MaxPurchaseAmount limits the maximum purchase amount
 	MaxPurchaseAmount float64 `json:"max_purchase_amount,omitempty" dynamodbav:"MaxPurchaseAmount"`
+}
+
+// GlobalConstraints is the request-side constraint set for a deployment-wide
+// action: it is satisfied only by a permission with no constraints at all.
+func GlobalConstraints() PermissionConstraints { return PermissionConstraints{Global: true} }
+
+// restricts reports whether c narrows a permission on any dimension. Nil and
+// the zero value are unrestricted; a NaN or negative cap counts as a cap.
+func (c *PermissionConstraints) restricts() bool {
+	return c != nil &&
+		(len(c.AccountIDs)+len(c.Providers)+len(c.Services)+len(c.Regions) > 0 || c.MaxPurchaseAmount != 0)
 }
 
 // UserAPIKey represents a personal API key for a user with scoped permissions.
@@ -239,6 +255,9 @@ type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 	MFACode  string `json:"mfa_code,omitempty"`
+	// MFAToken is the continuation token an mfa_required answer issued
+	// (issue #134). Sent with Email and MFACode instead of Password.
+	MFAToken string `json:"mfa_token,omitempty"`
 }
 
 // LoginResponse is returned after successful login.

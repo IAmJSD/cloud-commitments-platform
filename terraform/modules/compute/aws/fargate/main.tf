@@ -647,6 +647,13 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "SCHEDULED_TASK_SECRET_NAME"
             value = var.scheduled_task_secret_name
+          },
+          # The EventBridge schedule of aws_cloudwatch_event_rule.recommendations,
+          # so GET /api/recommendations/freshness can report the next run
+          # (next_collection_at, #756). Empty when the rule is not created.
+          {
+            name  = "RECOMMENDATION_SCHEDULE"
+            value = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
           }
         ],
         [

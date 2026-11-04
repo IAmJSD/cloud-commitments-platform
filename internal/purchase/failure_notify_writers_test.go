@@ -97,6 +97,7 @@ func TestNotifyRootFailure_FanOutRootLogsMarkerWithoutEmail(t *testing.T) {
 	t.Run("non fan-out root emails too", func(t *testing.T) {
 		logs := captureMarkers(t)
 		sender := allowFailedNotification(new(MockEmailSender))
+		assertMocksOnCleanup(t, sender)
 		m := &Manager{config: new(MockConfigStore), email: sender}
 		root := &config.PurchaseExecution{ExecutionID: "root", Status: "failed"}
 		m.notifyRootFailure(context.Background(), root, errors.New("provider down"))
@@ -115,8 +116,11 @@ func fanOutRun(t *testing.T, other config.CloudAccount, loadRaw func(string) ([]
 	store := new(MockConfigStore)
 	sender := new(MockEmailSender)
 	rec := &failedEmailRecorder{}
-	rec.expect(sender)
+	// Optional: callers assert the exact set of emailed rows, which is empty
+	// when the failing child never reached its own notification.
+	rec.expect(sender).Maybe()
 	factory, prov, svc := new(MockProviderFactory), new(MockProvider), new(MockServiceClient)
+	assertMocksOnCleanup(t, store, sender, factory, prov, svc)
 
 	accounts := []config.CloudAccount{
 		{ID: "acct-ok", Name: "OK", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},

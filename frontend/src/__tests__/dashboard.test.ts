@@ -121,6 +121,7 @@ jest.mock('../utils', () => ({
 
 import * as api from '../api';
 import * as state from '../state';
+import { flushPromises } from './flush-promises';
 
 describe('Dashboard Module', () => {
   beforeEach(() => {
@@ -152,6 +153,23 @@ describe('Dashboard Module', () => {
   });
 
   describe('loadDashboard', () => {
+    // #1709: committed_monthly sums the active commitments' estimated monthly
+    // savings (handler_dashboard.go), not what they cost, so the card must not
+    // call it "committed".
+    test('Active Commitments detail names the figure as estimated savings', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        total_recommendations: 0, active_commitments: 3, committed_monthly: 500,
+        current_coverage: 70, target_coverage: 80, ytd_savings: 0, by_service: {},
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadDashboard();
+
+      const tile = document.querySelector('#summary [data-kpi="commitments"]');
+      expect(tile?.textContent).toContain('$500/mo estimated savings');
+      expect(tile?.textContent).not.toContain('committed');
+    });
+
     test('fetches dashboard summary and upcoming purchases', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
@@ -631,7 +649,7 @@ describe('Dashboard Module', () => {
       const cancelBtn = document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement;
       cancelBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-123');
       // Cancel must NOT delete the entire plan — that was the wrong fix
@@ -669,7 +687,7 @@ describe('Dashboard Module', () => {
       const cancelBtn = document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement;
       cancelBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
     });
@@ -702,7 +720,7 @@ describe('Dashboard Module', () => {
       const cancelBtn = document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement;
       cancelBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
         message: 'Failed to cancel purchase',
@@ -741,6 +759,13 @@ describe('Dashboard Module', () => {
         expect(document.activeElement).toBe(viewBtn);
       });
 
+      // #1653: opening the dialog must not put focus on the destructive action.
+      test('initial focus lands on Close, not Cancel Purchase', async () => {
+        const { modal } = await openDetails();
+        expect(modal.querySelector('#cancel-purchase-detail-btn')).not.toBeNull();
+        expect(document.activeElement?.id).toBe('close-purchase-details-btn');
+      });
+
       test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
         const { modal } = await openDetails();
         let finishDelete: () => void = () => {};
@@ -764,7 +789,7 @@ describe('Dashboard Module', () => {
 
         (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
         finishDelete();
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await flushPromises();
         expect(document.getElementById('purchase-details-modal')).toBeNull();
         expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-731');
       });
@@ -2013,7 +2038,8 @@ describe('Dashboard Module', () => {
           // ec2: 40 current + 60 lowest option + 200 upside = 300; rds: 50. Total 350.
           expect(label).toContain('2 services');
           expect(label).toContain('$350 in total');
-          expect(label).toContain('Largest: ec2 at $300');
+          // #1649: the text alternative uses the same names as the axis.
+          expect(label).toContain('Largest: EC2 at $300');
         });
 
         test('lists every layer value per service in a "View as table" disclosure', () => {
@@ -2025,9 +2051,10 @@ describe('Dashboard Module', () => {
           expect(document.querySelector('#savings-by-service-table summary')?.textContent).toBe('View as table');
           const headers = Array.from(document.querySelectorAll('#savings-by-service-table thead th')).map((th) => th.textContent);
           expect(headers).toEqual(['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total']);
+          // #1649: display names, matching the chart axis.
           expect(tableRows()).toEqual([
-            ['ec2', '$40', '$60', '$200', '$300'],
-            ['rds', '$0', '$50', '$0', '$50'],
+            ['EC2', '$40', '$60', '$200', '$300'],
+            ['RDS', '$0', '$50', '$0', '$50'],
           ]);
         });
 
@@ -2050,9 +2077,10 @@ describe('Dashboard Module', () => {
           buildDOM();
           renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
           const calls = (Chart as unknown as jest.Mock).mock.calls;
-          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { top: number }; borderColor: string }[] } }).data.datasets;
+          // The bars are horizontal, so each segment's gap is on its right (end) edge.
+          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { right: number }; borderColor: string }[] } }).data.datasets;
           for (const d of datasets) {
-            expect(d.borderWidth.top).toBe(2);
+            expect(d.borderWidth.right).toBe(2);
             expect(d.borderColor).toBe('#ffffff');
           }
         });

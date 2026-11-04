@@ -41,13 +41,19 @@ func pageTestRecs(n int) []config.RecommendationRecord {
 	return recs
 }
 
-func pageTestHandler(t *testing.T, recs []config.RecommendationRecord) *Handler {
+// pageTestHandler serves recs through the read each request mode uses:
+// unpaginated requests read the full list, paginated ones scan it in ID order
+// (issue #981). list and scan say which reads the test's requests must make.
+func pageTestHandler(t *testing.T, recs []config.RecommendationRecord, list, scan bool) *Handler {
 	t.Helper()
 	ms := new(MockScheduler)
-	// Unpaginated requests read the full list; paginated ones scan it in
-	// ID order (issue #981).
-	ms.On("ListRecommendations", mock.Anything, mock.Anything).Return(recs, nil)
-	ms.On("ScanRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(recs, nil)
+	t.Cleanup(func() { ms.AssertExpectations(t) })
+	if list {
+		ms.On("ListRecommendations", mock.Anything, mock.Anything).Return(recs, nil)
+	}
+	if scan {
+		ms.On("ScanRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(recs, nil)
+	}
 	return &Handler{scheduler: ms, apiKey: "test-key"}
 }
 
@@ -75,7 +81,7 @@ func pageTestReq() *events.LambdaFunctionURLRequest {
 func TestGetRecommendations_PaginationBoundsResponse(t *testing.T) {
 	const total = 8000
 	recs := pageTestRecs(total)
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, false, true)
 
 	full, err := json.Marshal(buildRecommendationsResponse(append([]config.RecommendationRecord(nil), recs...)))
 	require.NoError(t, err)
@@ -128,7 +134,7 @@ func TestGetRecommendations_UnpaginatedShapeUnchanged(t *testing.T) {
 	for i := range recs {
 		wantIDs[i] = recs[i].ID
 	}
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, true, false)
 
 	resp, err := h.getRecommendations(context.Background(), pageTestReq(), map[string]string{})
 	require.NoError(t, err)
@@ -154,7 +160,7 @@ func TestGetRecommendations_UnpaginatedShapeUnchanged(t *testing.T) {
 func TestGetRecommendations_PaginationRejectsDuplicateIDs(t *testing.T) {
 	recs := pageTestRecs(4)
 	recs[1].ID = recs[2].ID
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, true, true)
 	ctx := context.Background()
 
 	_, err := h.getRecommendations(ctx, pageTestReq(), map[string]string{"limit": "2"})
@@ -168,7 +174,7 @@ func TestGetRecommendations_PaginationRejectsDuplicateIDs(t *testing.T) {
 
 func TestGetRecommendations_PaginationPages(t *testing.T) {
 	recs := pageTestRecs(5) // rec-000000 .. rec-000004, stored in reverse
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, false, true)
 	ctx := context.Background()
 
 	first, err := h.getRecommendations(ctx, pageTestReq(), map[string]string{"limit": "2"})
@@ -214,7 +220,7 @@ func TestGetRecommendations_PaginationPages(t *testing.T) {
 
 func TestGetRecommendations_CursorWithoutLimitUsesDefaultPageSize(t *testing.T) {
 	recs := pageTestRecs(DefaultRecommendationsPageSize + 3)
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, false, true)
 
 	resp, err := h.getRecommendations(context.Background(), pageTestReq(), map[string]string{
 		"cursor": encodeRecommendationsCursor("rec-"),
@@ -258,7 +264,7 @@ func TestGetRecommendations_PaginationRejectsBadParams(t *testing.T) {
 }
 
 func TestGetRecommendations_PaginationMaxLimitAccepted(t *testing.T) {
-	h := pageTestHandler(t, pageTestRecs(3))
+	h := pageTestHandler(t, pageTestRecs(3), false, true)
 	resp, err := h.getRecommendations(context.Background(), pageTestReq(), map[string]string{
 		"limit": strconv.Itoa(MaxRecommendationsPageSize),
 	})
@@ -307,7 +313,7 @@ func lambdaPayloadLen(t *testing.T, resp *RecommendationsResponse) (bodyInEnvelo
 func TestGetRecommendations_PageCutByByteBudget(t *testing.T) {
 	const total = 1500
 	recs := bigDetailsRecs(total, 1500) // ~10 KB per row in the envelope
-	h := pageTestHandler(t, recs)
+	h := pageTestHandler(t, recs, false, true)
 
 	_, fullSize := lambdaPayloadLen(t, buildRecommendationsResponse(append([]config.RecommendationRecord(nil), recs...)))
 	require.Greater(t, fullSize, 2*lambdaResponseCapBytes, "fixture must be far over the cap")

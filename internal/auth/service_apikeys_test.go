@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -658,66 +660,74 @@ func TestService_DeleteAPIKey(t *testing.T) {
 	})
 }
 
+// validateBooksNoUsage is the "successfully validate API key" case. It must
+// run inside a synctest bubble.
+func validateBooksNoUsage(ctx context.Context, t *testing.T) {
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	apiKey := "test-api-key-123456"
+	hash := sha256.Sum256([]byte(apiKey))
+	keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	user := &User{
+		ID:     "user-123",
+		Email:  "test@example.com",
+		Active: true,
+	}
+
+	apiKeyRecord := &UserAPIKey{
+		ID:          "key-1",
+		UserID:      "user-123",
+		Name:        "Test Key",
+		KeyHash:     keyHash,
+		IsActive:    true,
+		ExpiresAt:   nil,
+		Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+	}
+
+	mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
+	mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+	// Validation must book NO usage: one HTTP request validates the same
+	// credential several times, so counting here would multiply every
+	// reported figure. The API layer books once per request instead --
+	// see Handler.validateSecurityContext and the exactly-once tests in
+	// internal/server/apikey_usage_booking_test.go.
+	//
+	// Registered with .Maybe() rather than left unregistered because an
+	// unexpected call would panic inside the flush goroutine, where
+	// RecordUsageAsync's recover() would swallow it and the test would
+	// pass regardless.
+	usageRecorded := make(chan struct{}, 1)
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
+		Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
+		Return(nil).Maybe()
+
+	resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
+
+	require.NoError(t, err)
+	assert.Equal(t, user, resultUser)
+	assert.Equal(t, apiKeyRecord, resultKey)
+	// A booking would be flushed by a goroutine started before
+	// ValidateUserAPIKey returned. synctest.Wait returns only once that
+	// goroutine has finished or is durably blocked, so by then any flush
+	// has already reached the store and the non-blocking receive is exact.
+	// A fixed quiet window could pass a flusher a loaded runner had not
+	// scheduled yet.
+	synctest.Wait()
+	select {
+	case <-usageRecorded:
+		t.Fatal("ValidateUserAPIKey must not record usage: booking on the validation path counts validations, not requests")
+	default:
+	}
+	mockStore.AssertExpectations(t)
+}
+
 func TestService_ValidateUserAPIKey(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("successfully validate API key", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		apiKey := "test-api-key-123456"
-		hash := sha256.Sum256([]byte(apiKey))
-		keyHash := base64.RawURLEncoding.EncodeToString(hash[:])
-
-		user := &User{
-			ID:     "user-123",
-			Email:  "test@example.com",
-			Active: true,
-		}
-
-		apiKeyRecord := &UserAPIKey{
-			ID:          "key-1",
-			UserID:      "user-123",
-			Name:        "Test Key",
-			KeyHash:     keyHash,
-			IsActive:    true,
-			ExpiresAt:   nil,
-			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
-		}
-
-		mockStore.On("GetAPIKeyByHash", ctx, keyHash).Return(apiKeyRecord, nil)
-		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
-		// Validation must book NO usage: one HTTP request validates the same
-		// credential several times, so counting here would multiply every
-		// reported figure. The API layer books once per request instead --
-		// see Handler.validateSecurityContext and the exactly-once tests in
-		// internal/server/apikey_usage_booking_test.go.
-		//
-		// Registered with .Maybe() rather than left unregistered because an
-		// unexpected call would panic inside the flush goroutine, where
-		// RecordUsageAsync's recover() would swallow it and the test would
-		// pass regardless.
-		usageRecorded := make(chan struct{}, 1)
-		mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
-			Run(func(mock.Arguments) { usageRecorded <- struct{}{} }).
-			Return(nil).Maybe()
-
-		resultKey, resultUser, err := service.ValidateUserAPIKey(ctx, apiKey)
-
-		require.NoError(t, err)
-		assert.Equal(t, user, resultUser)
-		assert.Equal(t, apiKeyRecord, resultKey)
-		// A booking would be flushed by a goroutine started before
-		// ValidateUserAPIKey returned, so a bounded quiet window is the only
-		// way to establish its absence. Unlike the positive waits elsewhere
-		// in this suite (where too short a deadline flakes), too short a
-		// window here can only miss a regression, never fail spuriously.
-		select {
-		case <-usageRecorded:
-			t.Fatal("ValidateUserAPIKey must not record usage: booking on the validation path counts validations, not requests")
-		case <-time.After(2 * time.Second):
-		}
-		mockStore.AssertExpectations(t)
+		synctest.Test(t, func(t *testing.T) { validateBooksNoUsage(ctx, t) })
 	})
 
 	t.Run("fail when owner's password changed after minting", func(t *testing.T) {
@@ -927,8 +937,9 @@ func TestService_RecordUsage(t *testing.T) {
 	})
 }
 
-// Regression: singleflight collapses concurrent flushes for the same key
-// into one DB write. Writing a fixed "+1" inside that flush silently dropped
+// Regression: concurrent requests for the same key share one flush (first a
+// singleflight.Group, now a single flusher per key). Writing a fixed "+1"
+// inside that flush silently dropped
 // every request that arrived while a write was in flight, undercounting the
 // busiest keys -- precisely the keys the usage stats exist to surface. The
 // pending count is accumulated first and the flush writes the whole delta.
@@ -1023,6 +1034,103 @@ func TestService_RecordUsageAsync_CountsConcurrentRequests(t *testing.T) {
 		t.Fatalf("only %d of %d requests were recorded", recorded.Load(), requests)
 	}
 	assert.Equal(t, int64(requests), recorded.Load())
+}
+
+// Issue #104: RecordUsageAsync spawned a goroutine per request before the
+// singleflight dedupe, so N concurrent requests on one key parked N goroutines
+// behind a slow write. A request whose key already has a flusher must only
+// book its count, and that flusher must still write it.
+func TestService_RecordUsageAsync_OneFlusherPerKey(t *testing.T) {
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	service := &Service{store: mockStore}
+
+	const requests = 200
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	var (
+		recorded atomic.Int64
+		writes   atomic.Int32
+	)
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
+		Run(func(args mock.Arguments) {
+			if writes.Add(1) == 1 {
+				close(writeStarted)
+				<-releaseWrite
+			}
+			recorded.Add(args.Get(2).(int64))
+		}).
+		Return(nil)
+
+	service.RecordUsageAsync("key-1")
+	select {
+	case <-writeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first flush never reached the store")
+	}
+
+	before := runtime.NumGoroutine()
+	for range requests {
+		service.RecordUsageAsync("key-1")
+	}
+	spawned := runtime.NumGoroutine() - before
+	close(releaseWrite)
+
+	assert.Less(t, spawned, 10, "requests booked during an in-flight flush must not each start a goroutine")
+	require.Eventually(t, func() bool { return recorded.Load() == requests+1 }, 5*time.Second, time.Millisecond,
+		"recorded %d of %d requests", recorded.Load(), requests+1)
+	assert.Equal(t, int32(2), writes.Load(), "the requests booked during the first write are carried by one more write")
+	require.Eventually(t, func() bool { return !service.pendingEntry("key-1").flushing.Load() }, 5*time.Second, time.Millisecond,
+		"the flusher must release the key once nothing is pending")
+}
+
+// A request can book its count just after the flusher's last drain and see
+// the slot still taken. Releasing the slot must notice that count and keep
+// the flusher going rather than leave it stranded until the key is used
+// again.
+func TestAPIKeyUsageEntry_ReleaseFlusher(t *testing.T) {
+	t.Run("keeps the slot when a count was booked after the drain", func(t *testing.T) {
+		var entry apiKeyUsageEntry
+		entry.flushing.Store(true)
+		entry.count.Add(1) // a request that lost the CompareAndSwap
+
+		assert.True(t, entry.releaseFlusher(), "the late request's count must be written by this flusher")
+		assert.True(t, entry.flushing.Load(), "the flusher must hold the slot again")
+	})
+
+	t.Run("frees the slot when nothing is pending", func(t *testing.T) {
+		var entry apiKeyUsageEntry
+		entry.flushing.Store(true)
+
+		assert.False(t, entry.releaseFlusher())
+		assert.False(t, entry.flushing.Load(), "the next request must be able to start a flusher")
+	})
+}
+
+// A flush that panics must release the key's flusher slot; otherwise every
+// later request on the key would see a flusher that no longer exists and its
+// usage would never be written again.
+func TestService_RecordUsageAsync_PanicReleasesFlusher(t *testing.T) {
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	service := &Service{store: mockStore}
+
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(1)).
+		Run(func(mock.Arguments) { panic("store exploded") }).
+		Return(nil).Once()
+	service.RecordUsageAsync("key-1")
+	require.Eventually(t, func() bool { return !service.pendingEntry("key-1").flushing.Load() }, 5*time.Second, time.Millisecond)
+
+	done := make(chan struct{})
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(1)).
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
+	service.RecordUsageAsync("key-1")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("usage after a panicked flush was never written")
+	}
 }
 
 func TestService_ComputeEffectivePermissions(t *testing.T) {

@@ -38,14 +38,18 @@ func TestRecommendationIdentity_TwoRegisteredAccounts(t *testing.T) {
 		t.Run("provider_account="+reported, func(t *testing.T) {
 			ctx := context.Background()
 			store := &issue235Store{}
+			t.Cleanup(func() { store.AssertExpectations(t) })
 			accounts := []config.CloudAccount{
 				{ID: "11111111-1111-4111-8111-111111111111", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::111111111111:role/cudly", Enabled: true},
 				{ID: "22222222-2222-4222-8222-222222222222", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::222222222222:role/cudly", Enabled: true},
 			}
 			store.On("ListCloudAccounts", mock.Anything, mock.Anything).Return(accounts, nil)
 			factory := new(MockProviderFactory)
+			t.Cleanup(func() { factory.AssertExpectations(t) })
 			prov := new(MockProvider)
+			t.Cleanup(func() { prov.AssertExpectations(t) })
 			client := new(MockRecommendationsClient)
+			t.Cleanup(func() { client.AssertExpectations(t) })
 			factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil)
 			prov.On("GetRecommendationsClient", mock.Anything).Return(client, nil)
 			client.On("GetAllRecommendations", mock.Anything).Return([]common.Recommendation{{Provider: common.ProviderAWS, Account: reported, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "m5.large", Count: 1, Term: "1yr", PaymentOption: "all-upfront"}}, nil)

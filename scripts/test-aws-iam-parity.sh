@@ -36,12 +36,11 @@ run_case() {
   fi
 }
 
-# seed_fixture <dest> copies the six compared files from the repo into a
+# seed_fixture <dest> copies the compared files from the repo into a
 # fixture tree that mirrors the repo layout.
 seed_fixture() {
   local dest="$1"
   local files=(
-    cloudformation/stacks/CUDly/template.yaml
     terraform/modules/compute/aws/lambda/main.tf
     terraform/modules/compute/aws/fargate/main.tf
     iac/federation/aws-cross-account/cloudformation/template.yaml
@@ -66,7 +65,7 @@ trap 'rm -rf "$TMP_BASE"' EXIT
 run_case "real repository is in parity" 0
 
 # Case 2: pre-fix INF-02 shape - TF Lambda module missing the CE Coverage
-# actions while the CFN stack grants them.
+# actions while the TF Fargate module grants them.
 FIX2="$TMP_BASE/drift-runtime"
 seed_fixture "$FIX2"
 grep -v 'ce:GetReservationCoverage\|ce:GetSavingsPlansCoverage' \
@@ -138,10 +137,10 @@ sed 's/^\( *\)- ec2:DescribeInstanceTypes$/\1# - ec2:DescribeInstanceTypes/' \
   > "$FIX10/cloudformation/stacks/CUDly-CrossAccount/template.yaml"
 run_case "commented-out required action exits 1" 1 --root "$FIX10"
 
-# Case 11: a required read missing from all three runtime copies (parity holds) must fail.
+# Case 11: a required read missing from both runtime copies (parity holds) must fail.
 FIX11="$TMP_BASE/drift-required-runtime"
 seed_fixture "$FIX11"
-for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+for f in terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
   sed 's/ce:GetCostAndUsage//' "$REPO_ROOT/$f" > "$FIX11/$f"
 done
 run_case "required action missing from all runtime copies exits 1" 1 --root "$FIX11"
@@ -176,32 +175,29 @@ cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX15/terraform/m
 printf '%s\n' '    "Resource": "*",' >> "$FIX15/terraform/modules/compute/aws/lambda/main.tf"
 run_case "Resource \"*\" is not treated as an action wildcard" 0 --root "$FIX15"
 
-# Case 16 (#69): the pre-fix shape - all three runtime copies grant the unused
+# Case 16 (#69): the pre-fix shape - both runtime copies grant the unused
 # organizations:DescribeAccount / DescribeOrganization. Parity holds, so only
 # the runtime organizations allowlist catches it.
 FIX16="$TMP_BASE/dead-runtime-org-grants"
 seed_fixture "$FIX16"
-sed 's/^\( *\)- organizations:ListAccounts$/&\
-\1- organizations:DescribeAccount\
-\1- organizations:DescribeOrganization/' \
-  "$REPO_ROOT/cloudformation/stacks/CUDly/template.yaml" \
-  > "$FIX16/cloudformation/stacks/CUDly/template.yaml"
 for f in terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
   sed 's/^\( *\)"organizations:ListAccounts",$/&\
 \1"organizations:DescribeAccount",\
 \1"organizations:DescribeOrganization",/' \
     "$REPO_ROOT/$f" > "$FIX16/$f"
 done
-for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+for f in terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
   grep -q 'organizations:DescribeOrganization' "$FIX16/$f" || { echo "FAIL: case 16 fixture did not inject into $f"; (( fail++ )) || true; }
 done
-run_case "runtime grants unused organizations actions in all three copies exits 1" 1 --root "$FIX16"
+run_case "runtime grants unused organizations actions in both copies exits 1" 1 --root "$FIX16"
 
 # --- #1136: bare "*" Action written across lines, NotAction, lookalikes -------
-# Each case widens (or pretends to widen) one runtime copy only, so parity
-# fails exactly when the extractor reports a bare "*" for it.
+# Each case widens (or pretends to widen) one compared copy only, so parity
+# fails exactly when the extractor reports a bare "*" for it. The YAML cases
+# use the federation cross-account CloudFormation template, the YAML file in
+# a parity group now that the CloudFormation install stack is retired (#1432).
 
-CFN_STACK_REL=cloudformation/stacks/CUDly/template.yaml
+FED_XACC_CFN_REL=iac/federation/aws-cross-account/cloudformation/template.yaml
 TF_LAMBDA_REL=terraform/modules/compute/aws/lambda/main.tf
 TF_FARGATE_REL=terraform/modules/compute/aws/fargate/main.tf
 
@@ -211,11 +207,11 @@ new_fixture() {
   echo "$TMP_BASE/$1"
 }
 
-# cfn_statement <fixture> inserts stdin as a statement of the CFN stack's
-# Lambda policy, ahead of the CostExplorer statement. A missing anchor counts
+# cfn_statement <fixture> inserts stdin as a statement of the federation
+# cross-account role policy, ahead of the CostExplorer statement. A missing anchor counts
 # as a failure, so a moved anchor cannot turn a case into a silent no-op.
 cfn_statement() {
-  local file="$1/$CFN_STACK_REL" snip="$1/statement.snip"
+  local file="$1/$FED_XACC_CFN_REL" snip="$1/statement.snip"
   cat > "$snip"
   if awk -v snip="$snip" '
       !done && index($0, "- Sid: CostExplorer") { while ((getline l < snip) > 0) print l; done = 1 }
@@ -238,7 +234,7 @@ cfn_statement "$FIX17" <<'YAML'
               - "*"
             Resource: "*"
 YAML
-run_case "bare \"*\" as a YAML block list item (CFN stack) exits 1" 1 --root "$FIX17"
+run_case "bare \"*\" as a YAML block list item (federation CFN) exits 1" 1 --root "$FIX17"
 
 # Case 18: YAML compact block list (items at the key's indent), single-quoted.
 FIX18=$(new_fixture bare-star-yaml-compact)
@@ -250,7 +246,7 @@ cfn_statement "$FIX18" <<'YAML'
             - '*'
             Resource: "*"
 YAML
-run_case "bare '*' in a compact YAML block list (CFN stack) exits 1" 1 --root "$FIX18"
+run_case "bare '*' in a compact YAML block list (federation CFN) exits 1" 1 --root "$FIX18"
 
 # Case 19: YAML flow list where "*" is not the first item.
 FIX19=$(new_fixture bare-star-yaml-flow)
@@ -260,7 +256,7 @@ cfn_statement "$FIX19" <<'YAML'
             Action: [logs:CreateLogGroup, "*"]
             Resource: "*"
 YAML
-run_case "bare \"*\" after another item in a YAML flow list (CFN stack) exits 1" 1 --root "$FIX19"
+run_case "bare \"*\" after another item in a YAML flow list (federation CFN) exits 1" 1 --root "$FIX19"
 
 # Case 20: HCL policy-document actions list across lines.
 FIX20=$(new_fixture bare-star-hcl-actions)
@@ -356,7 +352,7 @@ cfn_statement "$FIX24" <<'YAML'
               - "*"
             Resource: "*"
 YAML
-run_case "NotAction \"*\" (CFN stack) is not an action wildcard" 0 --root "$FIX24"
+run_case "NotAction \"*\" (federation CFN) is not an action wildcard" 0 --root "$FIX24"
 
 # Case 25: same for HCL not_actions and JSON/jsonencode NotAction.
 FIX25=$(new_fixture notaction-hcl-json)
@@ -489,7 +485,7 @@ cfn_statement "$FIX28" <<'YAML'
             Effect: Allow
             Resource: "*"
 YAML
-run_case "bare \"*\" Action opening the statement after an Action block list (CFN stack) exits 1" 1 --root "$FIX28"
+run_case "bare \"*\" Action opening the statement after an Action block list (federation CFN) exits 1" 1 --root "$FIX28"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."

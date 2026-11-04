@@ -77,6 +77,12 @@ func TestConfigPermissionConstraintsHTTP(t *testing.T) {
 				if route.name == "global" && tc.name == "non-admin" {
 					want = http.StatusForbidden
 				}
+				if route.name == "global" && tc.name == "amount-not-purchase" {
+					want = http.StatusForbidden // a capped {admin,*} grant is not the admin capability
+				}
+				if route.name == "exchange" && tc.name == "amount-not-purchase" {
+					want = http.StatusForbidden // deployment-wide writes need an unconstrained grant
+				}
 				if route.name == "ladder" && tc.name == "independent-account-scope" {
 					want = http.StatusNotFound
 				}

@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
@@ -107,11 +108,12 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
+	readCtx := h.recommendationsReadContext(ctx, session, scope)
 	if page.enabled {
-		return h.getRecommendationsPage(ctx, scope, filter, page)
+		return h.getRecommendationsPage(readCtx, scope, filter, page)
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), filter)
+	recommendations, err := h.scheduler.ListRecommendations(readCtx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
@@ -332,21 +334,57 @@ func stampComputeCapacity(rec *config.RecommendationRecord) {
 // getRecommendationsFreshness returns the cache-freshness state (last
 // successful collection timestamp + most recent collection error) so the
 // frontend can render a "Data from <N> min ago" indicator and surface a
-// warning banner when the last collect was partial or failed.
+// warning banner when the last collect was partial or failed. It also
+// reports when the deployment's schedule fires next (next_collection_at,
+// null when unknown; issue #756), computed from the schedule rather than
+// stored.
 //
-// Gated by view:recommendations permission inside the handler. The route
-// itself inherits AuthAdmin (the router default) so the permission check
-// is currently defense-in-depth, matching the pattern used by other
-// scoped handlers in this package.
+// The route is AuthUser: any caller holding view:recommendations reaches it,
+// so the held account IDs in the payload are narrowed to the caller's allowed
+// accounts (scopeHeldAccounts).
 func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.LambdaFunctionURLRequest) (*config.RecommendationsFreshness, error) {
-	if _, err := h.requirePermission(ctx, req, "view", "recommendations"); err != nil {
+	session, err := h.requirePermission(ctx, req, "view", "recommendations")
+	if err != nil {
 		return nil, err
 	}
 	freshness, err := h.config.GetRecommendationsFreshness(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations freshness: %w", err)
 	}
-	return freshness, nil
+	if freshness == nil {
+		return nil, nil
+	}
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	scoped := scopeHeldAccounts(freshness, scope)
+	scoped.NextCollectionAt = h.NextCollectionAt(h.clock())
+	return scoped, nil
+}
+
+// scopeHeldAccounts returns a copy of f whose held_account_ids name only
+// accounts the scope allows. The state row is global, so naming an account the
+// caller cannot see would leak that it exists. An unrestricted scope sees all
+// of it; an account-less (ambient) hold has no IDs to show a restricted caller.
+func scopeHeldAccounts(f *config.RecommendationsFreshness, scope auth.AccountScope) *config.RecommendationsFreshness {
+	out := *f
+	if scope.AllowsAll() || f.LastCollectionPartial == nil {
+		return &out
+	}
+	partial := *f.LastCollectionPartial
+	partial.Providers = slices.Clone(partial.Providers)
+	for i := range partial.Providers {
+		var allowed []string
+		for _, id := range partial.Providers[i].HeldAccountIDs {
+			if scope.Allows(id, "") {
+				allowed = append(allowed, id)
+			}
+		}
+		partial.Providers[i].HeldAccountIDs = allowed
+	}
+	out.LastCollectionPartial = &partial
+	return &out
 }
 
 // getRecommendationDetail returns the per-id drill-down payload backing

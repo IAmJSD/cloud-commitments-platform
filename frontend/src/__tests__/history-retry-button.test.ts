@@ -85,6 +85,7 @@ import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
 import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
+import { flushPromises } from './flush-promises';
 
 // Admin user includes Purchaser membership (mirrors the auto-migration for
 // existing admins on first deploy of issue #923). retry-any:purchases is
@@ -339,7 +340,7 @@ describe('History inline Retry button (issue #47)', () => {
     expect(btn?.textContent).toContain('Retried 5×');
 
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(api.retryPurchase).toHaveBeenCalledWith('r-1', { force: true });
   });
@@ -433,7 +434,7 @@ describe('History inline Retry button (issue #47)', () => {
     expect(api.getHistory).toHaveBeenCalledTimes(1);
     const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(api.retryPurchase).toHaveBeenCalledWith('r-1', undefined);
     expect(api.getHistory).toHaveBeenCalledTimes(2);
@@ -460,7 +461,7 @@ describe('History inline Retry button (issue #47)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'success', message: 'Purchase request sent for approval' }),
@@ -486,7 +487,7 @@ describe('History inline Retry button (issue #47)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -517,7 +518,7 @@ describe('History inline Retry button (issue #47)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -543,7 +544,7 @@ describe('History inline Retry button (issue #47)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-retry-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     expect(btn?.disabled).toBe(false);

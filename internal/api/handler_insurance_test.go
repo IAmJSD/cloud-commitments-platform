@@ -72,6 +72,7 @@ func TestInsuranceStatus_UnwiredIsOff(t *testing.T) {
 
 func TestInsuranceStatus_DeniedUserGets403(t *testing.T) {
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, "u1", "view", "recommendations").Return(false, nil)
 	h := &Handler{auth: m, insurance: insuranceProvider(t, archera.Settings{})}
 	_, err := h.getInsuranceStatus(sessionPrincipalCtx(), &events.LambdaFunctionURLRequest{})
@@ -82,6 +83,7 @@ func TestInsuranceStatus_DeniedUserGets403(t *testing.T) {
 
 func TestInsuranceStatus_ScopedSessionGets404(t *testing.T) {
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, "u1", "view", "recommendations").Return(true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, "u1").Return([]string{"acct-1"}, nil)
 	h := &Handler{auth: m, insurance: insuranceProvider(t, archera.Settings{})}
@@ -91,8 +93,10 @@ func TestInsuranceStatus_ScopedSessionGets404(t *testing.T) {
 
 func TestInsuranceStatus_UnrestrictedSessionAllowed(t *testing.T) {
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasPermissionAPI", mock.Anything, "u1", "view", "recommendations").Return(true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, "u1").Return([]string(nil), nil)
+	m.On("HasPermissionForConstraintsAPI", mock.Anything, "u1", "view", "recommendations", mock.MatchedBy(isGlobalSet)).Return(true, nil)
 	h := &Handler{auth: m, insurance: insuranceProvider(t, archera.Settings{})}
 	st, err := h.getInsuranceStatus(sessionPrincipalCtx(), &events.LambdaFunctionURLRequest{})
 	require.NoError(t, err)
@@ -101,6 +105,7 @@ func TestInsuranceStatus_UnrestrictedSessionAllowed(t *testing.T) {
 
 func TestInsuranceStatus_ScopedUserAPIKeyGets404(t *testing.T) {
 	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
 	m.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key", "view", "recommendations").Return("u2", "key-1", true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, "u2").Return([]string{"acct-1"}, nil)
 	h := &Handler{auth: m, insurance: insuranceProvider(t, archera.Settings{})}

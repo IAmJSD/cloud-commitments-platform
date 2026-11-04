@@ -86,6 +86,7 @@ func TestLadderTimelineUnavailableIsNotEmpty(t *testing.T) {
 
 func TestLadderTimelineUnsupportedProvider(t *testing.T) {
 	h, original := scopedHandler(t, scopedInAccount)
+	t.Cleanup(func() { original.AssertExpectations(t) })
 	original.On("GetCloudAccount", mock.Anything, scopedInAccount).
 		Return(&config.CloudAccount{ID: scopedInAccount, Name: "azure", Provider: "azure"}, nil)
 	store := &timelineTestStore{MockConfigStore: original}

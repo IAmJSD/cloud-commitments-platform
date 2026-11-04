@@ -24,6 +24,8 @@ import { LADDER_CONFIG_TABLE_COLUMNS, renderLadderConfigTable } from './ladder-c
 import { renderLadderConfigModal } from './ladder-config-modal';
 import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { readLadderNumbers } from './ladder-form-numbers';
+import { initRampEditor, rampScheduleProblem, showRampJsonError } from './ladder-ramp-editor';
+import { DEFAULT_RAMP_STEPS, formatRampJson } from './ladder-ramp-schedule';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // ==========================================
@@ -134,7 +136,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
   </div>
 
   <div id="ladder-configs-section">
-    <h4>Per-Account Configurations</h4>
+    <h4 class="ladder-configs-heading">Per-Account Configurations</h4>
     <div id="ladder-configs-table-container"></div>
     ${canEdit ? `
     <button type="button" id="ladder-add-config-btn" class="btn btn-secondary">
@@ -256,9 +258,11 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
     : '');
   setValue('ladder-cfg-max-actions', String(existing?.max_actions_per_run ?? 10));
 
-  const defaultRamp = JSON.stringify({ steps: [{ after_days: 0, fraction: 1.0 }] }, null, 2);
+  const defaultRamp = formatRampJson({ steps: DEFAULT_RAMP_STEPS });
   setValue('ladder-cfg-ramp-schedule',
-    existing?.ramp_schedule ? JSON.stringify(existing.ramp_schedule, null, 2) : defaultRamp);
+    existing?.ramp_schedule ? formatRampJson(existing.ramp_schedule) : defaultRamp);
+  // The step rows are drawn from (and write back to) that JSON.
+  initRampEditor(document.getElementById('ladder-config-form')!);
 
   selectedAccount = initLadderAccountSelector(document.getElementById('ladder-config-form')!, existing);
   // openModal shows it, moves focus inside, traps Tab and closes on Escape (#731).
@@ -281,12 +285,23 @@ export async function saveLadderConfig(): Promise<void> {
     return;
   }
 
-  const rampRaw = (document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement | null)?.value?.trim() ?? '';
+  const rampField = document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement | null;
+  const rampRaw = rampField?.value?.trim() ?? '';
   let rampSchedule: api.LadderConfig['ramp_schedule'];
   try {
     rampSchedule = JSON.parse(rampRaw);
-  } catch {
+  } catch (err) {
     showToast({ message: 'Ramp schedule is not valid JSON.', kind: 'error' });
+    // Also say what is wrong under the field itself; it clears on the next valid edit.
+    showRampJsonError(`Not valid JSON: ${(err as Error).message}`);
+    return;
+  }
+  // The same rules the backend applies (RampSchedule.Validate), refused here
+  // the same way: a toast, the message beside the step, focus on it.
+  const rampProblem = rampScheduleProblem();
+  if (rampProblem) {
+    showToast({ message: `Check the ramp schedule. ${rampProblem.message}`, kind: 'error' });
+    rampProblem.focus?.focus();
     return;
   }
 

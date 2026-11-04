@@ -7,6 +7,7 @@ import * as state from './state';
 import type { CostPeriod } from './state';
 import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VALUE } from './utils';
 import { filterByEnabledProviders } from './lib/enabled-providers';
+import { serviceLabel } from './lib/service-labels';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
@@ -21,11 +22,12 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
-import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, type CommitmentLine } from './commitmentSummary';
+import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, paymentLabel, type CommitmentLine } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderErrorCallout } from './lib/error-callout';
 import { renderKpiTiles } from './lib/kpi-tile';
 import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
@@ -38,9 +40,11 @@ function canActOnRecommendations(): boolean {
   return canAccess('execute', 'purchases') || canAccess('create', 'plans');
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { formatPaymentOption, formatTermShort } from './lib/table-format';
 import { fetchOverridesForAccounts } from './lib/overrides';
 import { ownValue } from './lib/own-property';
 import { HOURS_PER_MONTH } from './lib/hours-per-month';
+import { anchorInView } from './lib/table-scroll';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -714,7 +718,10 @@ export async function loadRecommendations(): Promise<void> {
     if (list) {
       teardownSkeleton(list);
       const err = error as Error;
-      list.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
+      renderErrorCallout(list, {
+        message: `Failed to load recommendations: ${err.message}`,
+        onRetry: () => void loadRecommendations(),
+      });
     }
   }
 }
@@ -889,7 +896,7 @@ async function onLookbackChange(rawValue: string): Promise<void> {
 function savingsScopeText(visibleCount: number, loadedCount: number): string | null {
   const active = Object.keys(state.getRecommendationsColumnFilters());
   if (loadedServerFilters.length > 0) {
-    const pushed = loadedServerFilters.map((f) => `${columnLabel(f.column)}: ${f.value}`);
+    const pushed = loadedServerFilters.map((f) => `${columnLabel(f.column)}: ${categoricalDisplayLabel(f.column, f.value)}`);
     const others = active.filter((col) => !loadedServerFilters.some((f) => f.column === col)).length;
     if (others > 0) pushed.push(`+${others} more ${others === 1 ? 'filter' : 'filters'}`);
     return `Filtered: ${visibleCount} recommendations (${pushed.join(', ')})`;
@@ -1589,17 +1596,21 @@ export function formatSavingsRange(min: number, max: number): string {
 
 /** Format a payback-months range, collapsing identical endpoints to a
  * single value and rounding to 1 decimal. Used by the Payback Period
- * summary card after #279 broadened it to a range. */
+ * summary card after #279 broadened it to a range. A 0 lower bound is a
+ * no-upfront choice, which has no payback (shown as NO_VALUE on its own),
+ * so the range reads "Up to X months" instead of "0.0 – X" (issue #1684). */
 function formatPaybackRange(min: number, max: number): string {
   const lo = min.toFixed(1);
   const hi = max.toFixed(1);
-  return lo === hi ? `${lo} months` : `${lo} – ${hi} months`;
+  if (lo === hi) return `${lo} months`;
+  return min > 0 ? `${lo} – ${hi} months` : `Up to ${hi} months`;
 }
 
-/** Format a term range, collapsing "1yr – 1yr" to "1yr". */
+/** Format a term range, collapsing "1 yr – 1 yr" to "1 yr". */
 function formatTermRange(min: number, max: number): string {
-  const lo = formatTerm(min);
-  const hi = formatTerm(max);
+  const lo = formatTermShort(min);
+  const hi = formatTermShort(max);
+  if (!lo || !hi) return lo || hi || NO_VALUE;
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -1800,6 +1811,11 @@ export function periodSuffix(period: CostPeriod): string {
     case 'monthly': return '/ mo';
     case 'yearly':  return '/ yr';
   }
+}
+
+/** Suffix appended directly to a value ("$20/mo"); periodSuffix spaces it for labels. */
+function periodUnit(period: CostPeriod): string {
+  return periodSuffix(period).replace('/ ', '/');
 }
 
 /**
@@ -2261,10 +2277,16 @@ function categoricalDisplayLabel(
   }
   if (column === 'term') {
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return n > 0 ? formatTermShort(n) : value;
+  }
+  if (column === 'payment') {
+    return formatPaymentOption(value);
   }
   if (column === 'provider') {
     return providerDisplayName(value);
+  }
+  if (column === 'service') {
+    return serviceLabel(value);
   }
   return value;
 }
@@ -2640,6 +2662,14 @@ function attachPopoverGlobalListeners(): void {
     // contents dismisses it before the user can reach values below the fold.
     const target = e.target as Node | null;
     if (target && openPopover.el.contains(target)) return;
+    // While its header button is still on screen the popover follows it
+    // (a sideways table scroll, the mirrored strip catching up a frame
+    // later, a page scroll); it closes once the button scrolls out of view.
+    const trigger = getColumnTriggerButton(openPopover.column);
+    if (trigger && anchorInView(trigger)) {
+      positionPopover(openPopover.el, trigger);
+      return;
+    }
     closePopover();
   };
   resizeHandler = (): void => {
@@ -3063,6 +3093,8 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   // reflect any active hidden-column count.
   mountColumnsButton(bar);
 
+  mountSavingsStripeLegend(bar);
+
   // Sort-hidden indicator: show a note when the active sort column is hidden
   // so users aren't confused by inexplicable row ordering (#318).
   let sortHiddenNote = bar.querySelector<HTMLSpanElement>('.sort-hidden-note');
@@ -3080,6 +3112,30 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
   } else {
     if (sortHiddenNote) sortHiddenNote.remove();
   }
+}
+
+// Rows with large savings carry a coloured stripe on their left edge
+// (tr.high-savings / tr.medium-savings, set in buildVariantRowMarkup from the
+// monthly savings). The legend names the two thresholds; mounted once.
+function mountSavingsStripeLegend(bar: HTMLElement): void {
+  if (bar.querySelector('.savings-stripe-legend')) return;
+  const legend = document.createElement('span');
+  legend.className = 'savings-stripe-legend';
+  const items: Array<[string, string]> = [
+    ['high', 'Over $1,000/mo savings'],
+    ['medium', 'Over $100/mo'],
+  ];
+  for (const [tone, text] of items) {
+    const item = document.createElement('span');
+    item.className = 'savings-stripe-legend-item';
+    const swatch = document.createElement('span');
+    swatch.className = `savings-stripe-swatch savings-stripe-swatch--${tone}`;
+    swatch.setAttribute('aria-hidden', 'true');
+    item.append(swatch, text);
+    legend.appendChild(item);
+  }
+  legend.title = 'Row marker on the left edge: monthly savings of the recommendation';
+  bar.appendChild(legend);
 }
 
 /**
@@ -3181,7 +3237,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
+  return formatPaymentOption(payment);
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3238,11 +3294,11 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'provider':
       return `<td><span class="provider-badge ${providerBadgeClass(rec.provider)}">${escapeHtml(providerDisplayName(rec.provider))}</span></td>`;
     case 'account':
-      return `<td>${escapeHtml(ctx.accountName)}</td>`;
+      return `<td><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(ctx.accountName)}">${escapeHtml(ctx.accountName)}</span></td>`;
     case 'service':
-      return `<td><span class="service-badge">${escapeHtml(rec.service)}</span></td>`;
+      return `<td><span class="service-badge" title="${escapeHtml(serviceLabel(rec.service))}">${escapeHtml(serviceLabel(rec.service))}</span></td>`;
     case 'resource_type':
-      return `<td title="${escapeHtml(rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}${ctx.badge}</td>`;
+      return `<td title="${escapeHtml(rec.resource_type)}"><span class="cell-truncate cell-truncate--sm" title="${escapeHtml(rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type)}">${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}</span>${ctx.badge}</td>`;
     case 'capacity': {
       const cap = formatCapacity(rec.vcpu, rec.memory_gb);
       return `<td>${cap !== null ? escapeHtml(cap) : '—'}</td>`;
@@ -3252,7 +3308,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'count':
       return `<td class="num">${rec.count}</td>`;
     case 'term':
-      return `<td>${formatTerm(rec.term)}</td>`;
+      return `<td>${formatTermShort(rec.term) || NO_VALUE}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
@@ -3279,6 +3335,16 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
   }
 }
 
+// 'flat' is a single-variant cell, 'sp-child' a single-variant cell under a
+// Savings Plans group row, and 'variant' one of several variants of a cell
+// whose summary row already shows its identity (issue #1684).
+type VariantRowNesting = 'flat' | 'sp-child' | 'variant';
+
+// Columns every variant of a cell shares (cellKey), left blank on 'variant' rows.
+const CELL_IDENTITY_KEYS: ReadonlySet<state.RecommendationsColumnId> = new Set(
+  ['provider', 'account', 'service', 'resource_type', 'region'] as state.RecommendationsColumnId[],
+);
+
 // Helper: render one variant row (a single LocalRecommendation) with optional
 // indentation styling for multi-variant cells.
 //
@@ -3287,7 +3353,7 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
 function buildVariantRowMarkup(
   rec: LocalRecommendation,
   selectedRecs: ReadonlySet<string>,
-  isNested: boolean,
+  nesting: VariantRowNesting,
   cols: readonly ColumnDef[] = COLUMN_DEFS,
   showCheckboxes = true,
 ): string {
@@ -3303,7 +3369,7 @@ function buildVariantRowMarkup(
   const pct = displaySavingsPct(rec);
   const pctClass = pct !== null && pct < 0 ? ' class="num effective-pct-negative"' : ' class="num"';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
-  const nestedClass = isNested ? ' rec-variant-row' : '';
+  const nestedClass = nesting === 'flat' ? '' : ' rec-variant-row';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
   // Issue #869: viewer (readonly) sessions get no checkbox or action buttons
   // in the leading column; the cell is still emitted so column widths align
@@ -3312,7 +3378,7 @@ function buildVariantRowMarkup(
   // modal pre-seeded with this rec. Only rendered when the session has
   // create:plans permission (mirrors the bulk Create Plan button gate).
   const planBtnHtml = canAccess('create', 'plans')
-    ? `<button type="button" class="btn btn-small rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">Plan</button>`
+    ? `<button type="button" class="btn-small icon-btn rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">${iconSvg('clipboard-check')}</button>`
     : '';
   const selectLabel = escapeHtml(
     [
@@ -3326,15 +3392,24 @@ function buildVariantRowMarkup(
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
-    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</td>`
+    ? `<td class="checkbox-col"><span class="rec-select-cell"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</span></td>`
     : `<td class="checkbox-col"></td>`;
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
     ${checkboxCell}
-    ${cols.map((c) => renderColumnCell(c.key, rec, cellCtx)).join('')}
+    ${cols.map((c) => (nesting === 'variant' && CELL_IDENTITY_KEYS.has(c.key)
+      ? '<td class="rec-variant-identity"></td>'
+      : renderColumnCell(c.key, rec, cellCtx))).join('')}
   </tr>`;
 }
 
+
+// Escaped "resource type (engine)" for a group summary row; empty when the
+// provider sends no resource type (e.g. Azure savings plans).
+function cellIdentityLabel(rec: LocalRecommendation): string {
+  if (!rec.resource_type) return '';
+  return `${escapeHtml(rec.resource_type)}${rec.engine ? ` (${escapeHtml(rec.engine)})` : ''}`;
+}
 
 function buildListMarkup(
   recommendations: LocalRecommendation[],
@@ -3367,7 +3442,9 @@ function buildListMarkup(
     const ariaSort = sort.column === col.key
       ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
       : '';
-    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
+    // .th-inner is a nowrap flex row: when the table is squeezed the sort
+    // label wraps inside its button and the funnel stays in the cell.
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><span class="th-inner"><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</span></th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -3429,7 +3506,7 @@ function buildListMarkup(
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
       // Aggregate savings: sum the best-variant savings across all child cells.
-      const sfxLabel = periodSuffix(period);
+      const sfxLabel = periodUnit(period);
       let spSavingsTotal = 0;
       for (const ck of childCellKeys) {
         const cv = groups.get(ck)!;
@@ -3460,7 +3537,7 @@ function buildListMarkup(
       for (const ck of childCellKeys) {
         const childVariants = groups.get(ck)!;
         if (childVariants.length === 1) {
-          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, true, visibleCols, showCheckboxes));
+          rows.push(buildVariantRowMarkup(childVariants[0]!, selectedRecs, 'sp-child', visibleCols, showCheckboxes));
           continue;
         }
 
@@ -3481,12 +3558,10 @@ function buildListMarkup(
           ? formatCurrency(selectedChildVariant.upfront_cost)
           : formatSavingsRange(childSummary.upfrontMin, childSummary.upfrontMax);
         const childTermDisplay = selectedChildVariant
-          ? formatTerm(selectedChildVariant.term)
+          ? formatTermShort(selectedChildVariant.term) || NO_VALUE
           : formatTermRange(childSummary.termMin, childSummary.termMax);
         const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
-        const childIdentityParts = [
-          `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
-        ];
+        const childIdentityParts = [cellIdentityLabel(childRep)];
         if (visibleKeys.has('region')) childIdentityParts.push(escapeHtml(childRep.region));
         childIdentityParts.push(`${childVariants.length} variants`);
         const childRangeParts: string[] = [];
@@ -3503,16 +3578,18 @@ function buildListMarkup(
     </td>
     <td><span class="provider-badge ${providerBadgeClass(childRep.provider)}">${escapeHtml(providerDisplayName(childRep.provider))}</span></td>
     <td>${escapeHtml(childAccountName)}</td>
-    <td><span class="service-badge">${escapeHtml(childRep.service)}</span></td>
+    <td><span class="service-badge">${escapeHtml(serviceLabel(childRep.service))}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${childIdentityParts.join(' &mdash; ')}</span>
-      ${childRangeParts.length > 0 ? `<span class="rec-cell-range">${childRangeParts.join(' &middot; ')}</span>` : ''}
+      <div class="rec-cell-summary-inner">
+        <span class="rec-cell-identity">${childIdentityParts.filter(Boolean).join(' &mdash; ')}</span>
+        ${childRangeParts.length > 0 ? `<span class="rec-cell-range">${childRangeParts.join(' &middot; ')}</span>` : ''}
+      </div>
     </td>
   </tr>`);
         if (isCellExpanded) {
           const sortedChildVariants = sortVariantsInCell(childVariants);
           for (const v of sortedChildVariants) {
-            rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
+            rows.push(buildVariantRowMarkup(v, selectedRecs, 'variant', visibleCols, showCheckboxes));
           }
         }
       }
@@ -3522,7 +3599,7 @@ function buildListMarkup(
     // Non-SP cell (or SP singleton scope -- only one plan type in scope).
     if (variants.length === 1) {
       // Single-variant: render flat, no group header, no indent.
-      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, false, visibleCols, showCheckboxes));
+      rows.push(buildVariantRowMarkup(variants[0]!, selectedRecs, 'flat', visibleCols, showCheckboxes));
       continue;
     }
 
@@ -3538,7 +3615,7 @@ function buildListMarkup(
     // Summary row savings display: selected variant value if one is selected;
     // otherwise the range across all variants.
     // issue #319: scale savings by the active period.
-    const sfxLabel = periodSuffix(period);
+    const sfxLabel = periodUnit(period);
     const scaledSavingsMin = scaleCost(summary.savingsMin, period) ?? summary.savingsMin;
     const scaledSavingsMax = scaleCost(summary.savingsMax, period) ?? summary.savingsMax;
     const savingsDisplay = selectedVariant
@@ -3550,13 +3627,11 @@ function buildListMarkup(
       : formatSavingsRange(summary.upfrontMin, summary.upfrontMax);
 
     const termDisplay = selectedVariant
-      ? formatTerm(selectedVariant.term)
+      ? formatTermShort(selectedVariant.term) || NO_VALUE
       : formatTermRange(summary.termMin, summary.termMax);
 
     const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
-    const identityParts = [
-      `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
-    ];
+    const identityParts = [cellIdentityLabel(rep)];
     if (visibleKeys.has('region')) {
       identityParts.push(escapeHtml(rep.region));
     }
@@ -3587,17 +3662,19 @@ function buildListMarkup(
     ${chevronCell}
     <td><span class="provider-badge ${providerBadgeClass(rep.provider)}">${escapeHtml(providerDisplayName(rep.provider))}</span></td>
     <td>${escapeHtml(accountName)}</td>
-    <td><span class="service-badge">${escapeHtml(rep.service)}</span></td>
+    <td><span class="service-badge">${escapeHtml(serviceLabel(rep.service))}</span></td>
     <td colspan="${summaryColspan}" class="rec-cell-summary-content">
-      <span class="rec-cell-identity">${identityParts.join(' &mdash; ')}</span>
-      ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
+      <div class="rec-cell-summary-inner">
+        <span class="rec-cell-identity">${identityParts.filter(Boolean).join(' &mdash; ')}</span>
+        ${rangeParts.length > 0 ? `<span class="rec-cell-range">${rangeParts.join(' &middot; ')}</span>` : ''}
+      </div>
     </td>
   </tr>`);
 
     if (isExpanded) {
       const sortedVariants = sortVariantsInCell(variants);
       for (const v of sortedVariants) {
-        rows.push(buildVariantRowMarkup(v, selectedRecs, true, visibleCols, showCheckboxes));
+        rows.push(buildVariantRowMarkup(v, selectedRecs, 'variant', visibleCols, showCheckboxes));
       }
     }
   }
@@ -3628,7 +3705,7 @@ function buildListMarkup(
   }
 
   return `
-    <table>
+    <table class="table-compact table-sticky-start">
       <thead>
         <tr>
           ${checkboxColHeader}
@@ -3800,14 +3877,29 @@ interface ColumnVisibilitySchema {
   hidden: string[];
 }
 
-/** Load hidden columns from localStorage. Returns empty set on any error. Exported for tests. */
+// Columns hidden until the user picks their own set in the Columns menu.
+// With all sixteen columns the table is ~1700px wide, so at a 1440px
+// window Monthly Savings and everything after it sat behind the sideways
+// scroll. These five are the least needed to choose a commitment: capacity
+// restates the resource type, monthly cost and on-demand monthly are the
+// inputs behind Monthly Savings, Effective % is savings over on-demand, and
+// the 7-day coverage sparkline is AWS-only. All stay one click away.
+export const DEFAULT_HIDDEN_COLUMNS: ReadonlySet<state.RecommendationsColumnId> = new Set<state.RecommendationsColumnId>([
+  'capacity', 'monthly_cost', 'on_demand_monthly', 'effective_savings_pct', 'usage_history',
+]);
+
+/**
+ * Load hidden columns from localStorage. A saved choice (even "show all")
+ * wins; with nothing saved, or an unreadable entry, the defaults above
+ * apply. Exported for tests.
+ */
 export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
   try {
     const raw = localStorage.getItem(COLUMN_VISIBILITY_LS_KEY);
-    if (!raw) return new Set();
+    if (!raw) return new Set(DEFAULT_HIDDEN_COLUMNS);
     const parsed = JSON.parse(raw) as Partial<ColumnVisibilitySchema>;
-    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set();
-    if (!Array.isArray(parsed.hidden)) return new Set();
+    if (parsed.schemaVersion !== COLUMN_VISIBILITY_SCHEMA_VERSION) return new Set(DEFAULT_HIDDEN_COLUMNS);
+    if (!Array.isArray(parsed.hidden)) return new Set(DEFAULT_HIDDEN_COLUMNS);
     // Whitelist: only accept known toggleable column keys so stale/unknown
     // values from future versions are silently dropped.
     const valid = parsed.hidden.filter(
@@ -3815,7 +3907,7 @@ export function loadColumnVisibility(): Set<state.RecommendationsColumnId> {
     );
     return new Set(valid);
   } catch {
-    return new Set();
+    return new Set(DEFAULT_HIDDEN_COLUMNS);
   }
 }
 
@@ -4165,7 +4257,7 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     } else if (visibleCount === 0) {
       summary.textContent = '(0 visible — adjust filters)';
     } else if (selectedVisibleCount === 0) {
-      summary.textContent = '(Select cells to act on)';
+      summary.textContent = '(Select rows to act on)';
     } else if (targetRange.cellCount > 0) {
       const savingsText = targetRange.savingsMax > 0
         ? formatSavingsRange(targetRange.savingsMin, targetRange.savingsMax)
@@ -4173,8 +4265,8 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
       const upfrontText = targetRange.upfrontMax > 0
         ? formatSavingsRange(targetRange.upfrontMin, targetRange.upfrontMax)
         : formatCurrency(0);
-      const cellWord = targetRange.cellCount === 1 ? 'cell' : 'cells';
-      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${cellWord})`;
+      const rowWord = targetRange.cellCount === 1 ? 'row' : 'rows';
+      summary.textContent = `(${savingsText}/mo · ${upfrontText} upfront across ${targetRange.cellCount} ${rowWord})`;
     } else {
       // Shouldn't happen given the gating above, but defensive.
       summary.textContent = `(${selectedVisibleCount} selected)`;
@@ -4189,7 +4281,7 @@ function updateBottomActionBox(visibleCount: number, loadedCount: number): void 
     ? 'No recommendations loaded'
     : visibleCount === 0
       ? 'No rows visible — adjust filters'
-      : 'Select at least one cell to enable';
+      : 'Select at least one row to enable';
 
   // Compute the selected-visible slice once; both the plan-button gating and
   // the hint span need it.
@@ -4709,26 +4801,38 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
   summary.appendChild(emailNote);
 
   const totals = computeFanOutTotals(submittable);
+  // A key/value grid: each total is a small tile with its label above the
+  // value. The text still reads "Label: value" for assistive tech and copy;
+  // only the colon is hidden visually.
+  const grid = document.createElement('div');
+  grid.className = 'fanout-totals';
   const totalLine = (label: string, value: string, cls = ''): HTMLParagraphElement => {
     const p = document.createElement('p');
+    p.className = cls ? `fanout-total fanout-total-${cls}` : 'fanout-total';
+    const labelEl = document.createElement('span');
+    labelEl.className = 'fanout-total-label';
+    labelEl.textContent = label;
+    const sep = document.createElement('span');
+    sep.className = 'fanout-total-sep';
+    sep.textContent = ': ';
     const strong = document.createElement('strong');
     if (cls) strong.className = cls;
     strong.textContent = value;
-    p.appendChild(document.createTextNode(label + ': '));
-    p.appendChild(strong);
+    p.append(labelEl, sep, strong);
     return p;
   };
   // issue #319: scale total savings by the active cost period.
   const fanOutPeriod = state.getCostPeriod();
-  summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
-  summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  grid.appendChild(totalLine('Total commitments', String(totals.totalCount)));
+  grid.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
   // Issue #711: upfront alone reads $0 for no-upfront buckets that bill
   // monthly for one or three years, so state the recurring charge and the
   // total over the term next to it.
   const termText = formatCommitmentTotals(submittable.flatMap(bucketCommitmentLines), CURRENCY_DEFAULT_DIGITS);
-  summary.appendChild(totalLine('Monthly recurring', termText.monthly));
-  summary.appendChild(totalLine('Total over term', termText.termTotal));
-  summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
+  grid.appendChild(totalLine('Monthly recurring', termText.monthly));
+  grid.appendChild(totalLine('Total over term', termText.termTotal));
+  grid.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
+  summary.appendChild(grid);
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn) {
@@ -4783,8 +4887,17 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     ? savingsPlansBucketLabel(b.recs.map((r) => r.service))
     : b.service;
 
+  // The header counts recommendations (table rows); the totals line below
+  // counts the commitments (units) they buy, so the two numbers no longer
+  // share a word.
   const title = document.createElement('h4');
-  title.textContent = `${b.provider.toUpperCase()} / ${fanOutBucketAccountLabel(b)} / ${serviceLabel} — ${b.recs.length} commitment${b.recs.length === 1 ? '' : 's'}`;
+  title.className = 'fanout-bucket-title';
+  const titleText = document.createElement('span');
+  titleText.textContent = `${b.provider.toUpperCase()} / ${fanOutBucketAccountLabel(b)} / ${serviceLabel}`;
+  const recCount = document.createElement('span');
+  recCount.className = 'fanout-bucket-rec-count';
+  recCount.textContent = `${b.recs.length} recommendation${b.recs.length === 1 ? '' : 's'}`;
+  title.append(titleText, recCount);
   section.appendChild(title);
 
   const status = document.createElement('p');
@@ -4794,7 +4907,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     const compat = isSubmittableBucket(b);
     status.className = compat ? 'fanout-bucket-ok' : 'fanout-bucket-error';
     status.textContent = compat
-      ? `${b.capacityPercent}% capacity · ${b.term}yr · ${b.payment}`
+      ? `${b.capacityPercent}% capacity · ${b.term}-year term · ${paymentLabel(b.payment).toLowerCase()}`
       : `A selected payment option is unavailable at ${b.capacityPercent}% capacity. This bucket will be skipped.`;
   };
   renderStatus();
@@ -4811,9 +4924,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   // right value per POST.
   const paymentRow = document.createElement('div');
   paymentRow.className = 'fanout-bucket-payment-row';
-  const paymentLabel = document.createElement('label');
-  paymentLabel.className = 'fanout-bucket-payment-label';
-  paymentLabel.appendChild(document.createTextNode('Payment: '));
+  const paymentLabelEl = document.createElement('label');
+  paymentLabelEl.className = 'fanout-bucket-payment-label';
+  paymentLabelEl.appendChild(document.createTextNode('Payment'));
   const paymentSelect = document.createElement('select');
   paymentSelect.className = 'fanout-bucket-payment';
   const purchasePending = document.getElementById('execute-purchase-btn')?.dataset['submitting'] === 'true';
@@ -4835,7 +4948,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   for (const opt of bucketOptions) {
     const option = document.createElement('option');
     option.value = opt;
-    option.textContent = opt;
+    option.textContent = paymentLabel(opt);
     option.selected = opt === b.payment;
     paymentSelect.appendChild(option);
   }
@@ -4874,12 +4987,12 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
     section.replaceWith(refreshed);
     refreshed.querySelector<HTMLSelectElement>('.fanout-bucket-payment')?.focus();
   });
-  paymentLabel.appendChild(paymentSelect);
-  paymentRow.appendChild(paymentLabel);
+  paymentLabelEl.appendChild(paymentSelect);
+  paymentRow.appendChild(paymentLabelEl);
   if (b.paymentSource === 'override') {
     const sourceNote = document.createElement('span');
     sourceNote.className = 'fanout-bucket-payment-source';
-    sourceNote.textContent = ' (from account override)';
+    sourceNote.textContent = 'Set by account override';
     paymentRow.appendChild(sourceNote);
   }
   section.appendChild(paymentRow);
@@ -4898,7 +5011,7 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   totals.className = 'fanout-bucket-totals';
   const bucketMonthly = commitmentTotals(bucketCommitmentLines(b)).monthly;
   const monthlyPart = bucketMonthly === null ? 'monthly cost not reported' : `${formatCurrency(bucketMonthly)}/mo recurring`;
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+  totals.textContent = `${bucketTotal.count} commitment${bucketTotal.count === 1 ? '' : 's'} · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render

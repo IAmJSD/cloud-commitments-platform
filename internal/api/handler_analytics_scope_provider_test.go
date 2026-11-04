@@ -35,24 +35,33 @@ func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID
 func analyticsParamsCall(t *testing.T, path string, scope []string, params map[string]string, accounts []config.CloudAccount) (status int, uuids []string, externals map[string][]string) {
 	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
-	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil)
+	// A malformed account id is refused before the allow-list is read; a
+	// served request must have read it (checked below).
+	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil).Maybe()
 
+	// Each endpoint runs only its own queries and a refused request runs
+	// none, so the query stubs are optional here; a served request is checked
+	// against analyticsPathQueries below.
 	client := new(MockAnalyticsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 	client.On("QueryHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]HistoryDataPoint{}, &HistorySummary{}, nil)
+		Return([]HistoryDataPoint{}, &HistorySummary{}, nil).Maybe()
 	client.On("QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(map[string]BreakdownValue{}, nil)
+		Return(map[string]BreakdownValue{}, nil).Maybe()
 	snaps := new(MockAnalyticsSnapshotStore)
+	t.Cleanup(func() { snaps.AssertExpectations(t) })
 	snaps.On("QueryMonthlyTotals", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]analytics.MonthlySummary{}, nil)
+		Return([]analytics.MonthlySummary{}, nil).Maybe()
 	snaps.On("QueryByProvider", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]analytics.ProviderBreakdown{}, nil)
+		Return([]analytics.ProviderBreakdown{}, nil).Maybe()
 	snaps.On("QueryByService", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]analytics.ServiceBreakdown{}, nil)
+		Return([]analytics.ServiceBreakdown{}, nil).Maybe()
 
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return accounts, nil
 	}
@@ -76,11 +85,27 @@ func analyticsParamsCall(t *testing.T, path string, scope []string, params map[s
 		}
 		uuids, externals = u, e
 	}
+	if resp.StatusCode == 200 {
+		mockAuth.AssertCalled(t, "GetAllowedAccountsAPI", mock.Anything, "u-1")
+		ran := make([]string, 0, len(calls))
+		for _, c := range calls {
+			ran = append(ran, c.Method)
+		}
+		assert.ElementsMatch(t, analyticsPathQueries[path], ran, "a served %s runs each of its queries once", path)
+	}
 	return resp.StatusCode, uuids, externals
 }
 
 // analyticsPaths are the endpoints that run resolveAnalyticsAccountFilter.
 var analyticsPaths = []string{"/api/history/analytics", "/api/history/breakdown", "/api/analytics/trends"}
+
+// analyticsPathQueries are the queries each of analyticsPaths runs once it
+// serves a request.
+var analyticsPathQueries = map[string][]string{
+	"/api/history/analytics": {"QueryHistory"},
+	"/api/history/breakdown": {"QueryBreakdown"},
+	"/api/analytics/trends":  {"QueryMonthlyTotals", "QueryByProvider", "QueryByService"},
+}
 
 // Issue #520: a raw external id shared by accounts of different providers
 // cannot be attributed to one of them. The scope decision used to read the
@@ -187,14 +212,17 @@ func TestHandleRequest_Analytics_UnregisteredRawID(t *testing.T) {
 func TestHandleRequest_Analytics_AccountListFailureIsAnError(t *testing.T) {
 	t.Parallel()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return([]string{"999"}, nil)
 	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return nil, assert.AnError
 	}
 	client := new(MockAnalyticsClient)
+	t.Cleanup(func() { client.AssertExpectations(t) })
 
 	h := &Handler{auth: mockAuth, analyticsClient: client, config: store}
 	resp, _ := h.HandleRequest(context.Background(), &events.LambdaFunctionURLRequest{

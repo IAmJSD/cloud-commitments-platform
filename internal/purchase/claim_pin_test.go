@@ -23,9 +23,13 @@ var errPinLost = errors.New("pin lost")
 // plan the gate reads is gatePlan; every later GetPurchasePlan read (the
 // post-claim re-check) returns claimPlan.
 func newPinManager(ctx context.Context, store *MockConfigStore, factory *MockProviderFactory, exec config.PurchaseExecution, gatePlan, claimPlan *config.PurchasePlan) *Manager {
-	store.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
-	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
-	store.On("GetExecutionByID", ctx, exec.ExecutionID).Return(&exec, nil)
+	// Entry reads are per path: the cron path lists the stale and pending rows,
+	// the SQS path loads the row by ID. A test drives one path, so the other
+	// path's reads stay unused (.Maybe). The claim and save calls each test adds
+	// are the required ones.
+	store.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil).Maybe()
+	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil).Maybe()
+	store.On("GetExecutionByID", ctx, exec.ExecutionID).Return(&exec, nil).Maybe()
 	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(gatePlan, nil).Once()
 	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(claimPlan, nil)
 	store.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
@@ -45,6 +49,7 @@ func TestClaimPin_AttachBetweenGateAndClaimIsRefused(t *testing.T) {
 	for _, path := range []string{"cron", "sqs"} {
 		t.Run(path, func(t *testing.T) {
 			store, factory := new(MockConfigStore), new(MockProviderFactory)
+			assertMocksOnCleanup(t, store, factory)
 			manager := newPinManager(ctx, store, factory, dueRecExec("notified"), autoPlan(f64(1000)), autoPlan(f64(1000)))
 			store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", []string{"approved", "pending", "notified"}, "running", (*string)(nil), true).
 				Return(nil, config.ErrExecutionNotInExpectedStatus)
@@ -70,6 +75,7 @@ func TestClaimPin_AttachBetweenGateAndClaimIsRefused(t *testing.T) {
 func TestClaimPin_RecommendationBearingRowPinsNonEmpty(t *testing.T) {
 	ctx := context.Background()
 	store, factory := new(MockConfigStore), new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	manager := newPinManager(ctx, store, factory, dueRecExec("notified", upfrontRec(10)), autoPlan(f64(1000)), autoPlan(f64(1000)))
 	store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", mock.Anything, "running", (*string)(nil), false).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
@@ -84,6 +90,7 @@ func TestClaimPin_RecommendationBearingRowPinsNonEmpty(t *testing.T) {
 func TestClaimPin_ClaimErrorIsFailure(t *testing.T) {
 	ctx := context.Background()
 	store, factory := new(MockConfigStore), new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	manager := newPinManager(ctx, store, factory, dueRecExec("notified"), autoPlan(f64(1000)), autoPlan(f64(1000)))
 	store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", mock.Anything, "running", (*string)(nil), true).Return(nil, errPinLost)
 	result, err := manager.ProcessScheduledPurchases(ctx)
@@ -102,6 +109,7 @@ func TestClaimPin_PostClaimCapRecheckFailsBeforeSubmission(t *testing.T) {
 			exec := dueRecExec("notified", upfrontRec(10))
 			exec.Recommendations[0].ID = "rec-1"
 			store, factory := new(MockConfigStore), new(MockProviderFactory)
+			assertMocksOnCleanup(t, store, factory)
 			manager := newPinManager(ctx, store, factory, exec, autoPlan(f64(1000)), autoPlan(f64(5)))
 			claimed := exec
 			claimed.Status = "running"
@@ -144,6 +152,7 @@ func TestClaimPin_PostClaimPlanReadErrorFailsClosed(t *testing.T) {
 	store.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { saved = args.Get(2).(*config.PurchaseExecution) }).Return(nil)
 	sender := allowFailedNotification(new(MockEmailSender))
+	assertMocksOnCleanup(t, store, sender)
 	manager := &Manager{config: store, email: sender, providerFactory: new(MockProviderFactory)}
 
 	didClaim, err := manager.claimAndExecute(ctx, &exec)
@@ -163,6 +172,7 @@ func TestClaimPin_ApprovedRowSkipsCapRecheck(t *testing.T) {
 	ctx := context.Background()
 	exec := dueRecExec("approved", upfrontRec(1e9))
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("GetPurchasePlan", mock.Anything, exec.PlanID).Return(autoPlan(nil), nil)
 	store.On("GetPlanAccounts", mock.Anything, exec.PlanID).Return(nil, errors.New("accounts unavailable"))
 	claimed := exec
@@ -184,6 +194,7 @@ func TestNotification_EmailFailureLeavesRowPendingAndSchedulerRefusesIt(t *testi
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, store, sender)
 	plan, existing := pendingExecForNotification(store)
 	notify := "notify@example.com"
 	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &notify, AutoPurchaseEnabled: true}, nil)
@@ -211,6 +222,7 @@ func TestNotification_EmailFailureLeavesRowPendingAndSchedulerRefusesIt(t *testi
 func TestClaimPin_RecLessRowStillFailsInsteadOfBuying(t *testing.T) {
 	ctx := context.Background()
 	store, factory := new(MockConfigStore), new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	exec := dueRecExec("pending")
 	manager := newPinManager(ctx, store, factory, exec, autoPlan(nil), autoPlan(nil))
 	store.On("GetPurchasePlan", mock.Anything, exec.PlanID).Return(autoPlan(nil), nil)

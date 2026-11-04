@@ -163,6 +163,7 @@ func TestRouterDispatch_RefreshRecommendations_ScopeLookupErrorFailsClosed(t *te
 	t.Setenv("SCHEDULER_LAMBDA_ARN", "")
 	lookupErr := errors.New("scope lookup failed")
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, scopedToken).
 		Return(&Session{UserID: scopedUserID}, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", mock.Anything, mock.Anything, mock.Anything, mock.Anything).

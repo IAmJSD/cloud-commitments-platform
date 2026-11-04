@@ -77,6 +77,7 @@ import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser } from '../state';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
+import { flushPromises } from './flush-promises';
 
 const ADMIN_USER = { id: 'admin-uuid', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID] };
 // REG_USER carries the default-user effective permission set (cancel-own
@@ -290,7 +291,7 @@ describe('Approval queue Cancel button (issue #46)', () => {
 
     const btn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(api.cancelPurchase).toHaveBeenCalledWith('exec-1');
     // Reload was triggered → second getHistory call.
@@ -323,7 +324,7 @@ describe('Approval queue Cancel button (issue #46)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     // Success toast lands BEFORE the reload error.
     const successCalls = (showToast as jest.Mock).mock.calls.filter((c) => c[0].kind === 'success');
@@ -345,7 +346,7 @@ describe('Approval queue Cancel button (issue #46)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     expect(btn?.disabled).toBe(false);

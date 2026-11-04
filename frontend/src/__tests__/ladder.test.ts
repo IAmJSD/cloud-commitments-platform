@@ -314,6 +314,43 @@ describe('ladder.ts', () => {
     });
   });
 
+  describe('ramp schedule field error across modal reopen', () => {
+    const ramp = (): HTMLTextAreaElement =>
+      document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement;
+
+    async function openAdd(): Promise<void> {
+      document.getElementById('ladder-add-config-btn')!.click();
+      await waitFor(() => expect(document.getElementById('ladder-cfg-account')).toBeEnabled());
+      (document.getElementById('ladder-cfg-account') as HTMLSelectElement).value = 'acct-1';
+    }
+
+    test('initRampEditor resets the JSON error a cancelled save left in the cloned form, and the field still clears on edit', async () => {
+      await renderSection();
+      await openAdd();
+      ramp().value = '{ not json';
+      await saveLadderConfig();
+      expect(document.querySelector('.field-error:not([hidden])')).not.toBeNull();
+      expect(ramp()).toHaveAttribute('aria-invalid', 'true');
+
+      document.getElementById('ladder-modal-cancel-btn')!.click();
+      await openAdd();
+
+      expect(document.querySelector('.field-error:not([hidden])')).toBeNull();
+      expect(document.getElementById('ladder-cfg-ramp-schedule-error')!.textContent).toBe('');
+      expect(ramp()).not.toHaveAttribute('aria-invalid');
+      expect(ramp().getAttribute('aria-describedby')).toBe('ladder-cfg-ramp-schedule-hint ladder-cfg-ramp-schedule-error');
+
+      // A second failed save on the reopened form must still clear on edit.
+      ramp().value = '{ still not json';
+      await saveLadderConfig();
+      expect(document.querySelector('.field-error:not([hidden])')).not.toBeNull();
+      ramp().value = '{}';
+      ramp().dispatchEvent(new Event('input', { bubbles: true }));
+      expect(document.querySelector('.field-error:not([hidden])')).toBeNull();
+      expect(ramp()).not.toHaveAttribute('aria-invalid');
+    });
+  });
+
   describe('saveLadderConfig required numeric fields (#134)', () => {
     async function primeValidForm(): Promise<void> {
       await renderSection();

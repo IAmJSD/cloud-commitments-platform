@@ -354,8 +354,8 @@ func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purc
 		log.Printf("Failed to fire scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d stale=%d errored=%d",
-		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored)
+	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d stale=%d errored=%d deferred=%d",
+		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored, result.Deferred)
 	return result, nil
 }
 

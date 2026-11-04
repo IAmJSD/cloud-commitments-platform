@@ -78,22 +78,22 @@ type tokenApproveFixture struct {
 	handler  *Handler
 	purchase *MockPurchaseManager
 	req      *events.LambdaFunctionURLRequest
+	wired    bool
 }
 
 // newTokenApprove wires an approver who is the account's contact_email and
 // holds perms (a nil list holds no approve verb).
 func newTokenApprove(t *testing.T, perms []auth.Permission, plan *config.PurchasePlan) *tokenApproveFixture {
 	t.Helper()
-	ctx := context.Background()
 	mockConfig := new(MockConfigStore)
+	t.Cleanup(func() { mockConfig.AssertExpectations(t) })
 	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		return &config.CloudAccount{ID: id, ContactEmail: stepContact}, nil
 	}
 	mockConfig.GetPurchasePlanFn = func(context.Context, string) (*config.PurchasePlan, error) { return plan, nil }
-	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.grantPermissions(perms)
-	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: stepUser, Email: stepContact}, nil)
 	mp := new(MockPurchaseManager)
 	// A reached ApproveExecution proves the approval was not refused up front;
 	// it answers with a conflict so the test needs no email or re-fetch wiring.
@@ -105,8 +105,18 @@ func newTokenApprove(t *testing.T, perms []auth.Permission, plan *config.Purchas
 	}
 }
 
+// approve drives the token approval. Only this path resolves the session and
+// reads the global config, so their expectations are registered here rather
+// than in newTokenApprove, whose callers may test approveConstraintsForSession
+// directly.
 func (f *tokenApproveFixture) approve(exec *config.PurchaseExecution) error {
-	_, err := f.handler.approveViaToken(context.Background(), f.req, exec, "valid-token")
+	ctx := context.Background()
+	if !f.wired {
+		f.wired = true
+		f.handler.config.(*MockConfigStore).On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+		f.handler.auth.(*MockAuthService).On("ValidateSession", ctx, "tok").Return(&Session{UserID: stepUser, Email: stepContact}, nil)
+	}
+	_, err := f.handler.approveViaToken(ctx, f.req, exec, "valid-token")
 	return err
 }
 
@@ -235,4 +245,37 @@ func TestApproveConstraintsForSession_PlanStep_PlanReadErrorFailsClosed(t *testi
 	}
 	err := f.handler.approveConstraintsForSession(context.Background(), nil, exec)
 	require.ErrorIs(t, err, assert.AnError)
+}
+
+func TestApproveViaToken_PlanStep_NonUSDCappedPlan(t *testing.T) {
+	exec, total := planStepExecution(t)
+	capAmount := total + 1
+
+	usd := newTokenApprove(t, nil, autoPlan(&capAmount))
+	requireApproveReached(t, usd.purchase, usd.approve(exec))
+
+	exec.Recommendations[0].CommitmentCurrency = "EUR"
+	eur := newTokenApprove(t, nil, autoPlan(&capAmount))
+	requireApproveRefused(t, eur.purchase, eur.approve(exec), 403)
+	assert.Equal(t, "pending", exec.Status)
+}
+
+// approveViaToken always holds a session (authorizeApprovalAction returns 401
+// without one), so a nil session reaches approveConstraintsForSession only
+// through direct callers such as the post-claim check; drive it directly.
+func TestApproveConstraintsForSession_NilSession_NonUSDCappedPlanStep(t *testing.T) {
+	exec, total := planStepExecution(t)
+	capAmount := total + 1
+	f := newTokenApprove(t, nil, autoPlan(&capAmount))
+	ctx := context.Background()
+
+	require.NoError(t, f.handler.approveConstraintsForSession(ctx, nil, exec))
+
+	exec.Recommendations[0].CommitmentCurrency = "EUR"
+	requireStatus(t, f.handler.approveConstraintsForSession(ctx, nil, exec), 403)
+	assert.Equal(t, "pending", exec.Status)
+	assert.Zero(t, approveCalls(f.purchase))
+
+	_, err := newTokenApprove(t, nil, autoPlan(&capAmount)).handler.approveViaToken(ctx, &events.LambdaFunctionURLRequest{}, exec, "valid-token")
+	requireStatus(t, err, 404) // the 401 is concealed as not-found
 }

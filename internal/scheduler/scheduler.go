@@ -27,6 +27,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -51,6 +52,13 @@ type SchedulerConfig struct { //nolint:revive // exported: doc comment style int
 	OIDCSigner      oidc.Signer
 	AssumeRoleSTS   credentials.STSClient
 	STSClient       STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory credentials.STSClientFactory
+	// AmbientAWSCreds are the host credentials. Only a bastion that is the
+	// host account itself (role_arn with no role ARN) uses them.
+	AmbientAWSCreds aws.CredentialsProvider
 	DashboardURL    string
 	OIDCIssuerURL   string
 	IsLambda        bool
@@ -88,6 +96,8 @@ type Scheduler struct {
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
+	ambientAWSCreds aws.CredentialsProvider
 	config          config.StoreInterface
 	dashboardURL    string
 	oidcIssuerURL   string
@@ -118,6 +128,8 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		oidcSigner:      cfg.OIDCSigner,
 		oidcIssuerURL:   cfg.OIDCIssuerURL,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
+		ambientAWSCreds: cfg.AmbientAWSCreds,
 		stsClient:       cfg.STSClient,
 		isLambda:        cfg.IsLambda,
 		cacheTTL:        cacheTTLFromEnv(),
@@ -421,13 +433,18 @@ func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerT
 // recorded in recommendations_state so the frontend banner renders while
 // the user still sees the valid rows we managed to upsert.
 //
-// UpsertRecommendations also resets last_collection_partial, so a complete
-// collection clears the previous run's partial marker; a non-nil partial
-// re-records it straight after (issue #87). The two writes mirror the
-// existing error-column pattern and are not atomic: if the second write
-// fails, the run is logged and reads as complete until the next collection.
+// The rows and last_collection_partial commit in one transaction: a complete
+// collection clears the previous run's marker, a non-nil partial replaces it
+// (issue #87). A failed marker write rolls the rows back too, so the Azure
+// pricing hold cannot be lost while the held rows stay.
+//
+// After a successful write it prunes the rows of (provider, account) pairs
+// that have not collected for CUDLY_STALE_RECOMMENDATION_RETENTION_DAYS
+// (default 30), best-effort, so a removed provider or a disabled account
+// stops showing instead of staying forever (issue #120). A failed write skips
+// the prune.
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string, partial *config.RecommendationsCollectionPartial) {
-	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
+	if err := s.upsertWithMarker(ctx, recs, successfulCollects, partial); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
 		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
 			logging.Errorf("Failed to record write error: %v", setErr)
@@ -441,11 +458,17 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 		}
 	}
 
-	if partial != nil {
-		if err := s.config.SetRecommendationsCollectionPartial(ctx, partial); err != nil {
-			logging.Errorf("Failed to record partial collection: %v", err)
-		}
+	s.pruneStaleRecommendationsBestEffort(ctx)
+}
+
+// upsertWithMarker writes the rows and the collection's partial marker in one
+// transaction. Both store methods merge the previous Azure pricing hold under
+// the state row lock, so a complete collection (nil partial) keeps it too.
+func (s *Scheduler) upsertWithMarker(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, partial *config.RecommendationsCollectionPartial) error {
+	if partial == nil {
+		return s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects)
 	}
+	return s.config.UpsertRecommendationsWithPartial(ctx, time.Now().UTC(), recs, successfulCollects, partial)
 }
 
 // joinProviderErrors formats a "provider: err; provider: err" string for
@@ -547,7 +570,7 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		// in those cases.
 		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -658,7 +681,7 @@ func fanOutPerAccount(
 			} else {
 				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			}
-			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
+			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount().withHeld(acct.ID))
 			mu.Unlock()
 			return nil
 		})
@@ -847,7 +870,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &acct, s.credStore, s.assumeRoleSTS, s.awsResolveOptions())
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
@@ -857,6 +880,18 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
+}
+
+// awsResolveOptions returns the resolver options for per-account AWS
+// collection: the config-store bastion lookup and bastion STS factory, plus
+// the host credentials for a bastion that is the host account itself.
+func (s *Scheduler) awsResolveOptions() credentials.AWSResolveOptions {
+	return credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(s.config),
+		STSClientFactory: s.bastionSTS,
+		AmbientProvider:  s.ambientAWSCreds,
+		AmbientSTS:       s.stsClient,
+	}
 }
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,
@@ -886,7 +921,7 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -961,7 +996,7 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount().withHeld(acctID), nil
 		}
 		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
@@ -1082,11 +1117,15 @@ func tolerateIncompleteSweep(providerName string, err error) (*sweepGap, error) 
 	if partial == nil {
 		return tolerateSkippedRecommendations(providerName, err)
 	}
+	skipped := 0
+	if sk := partial.Skips(); sk != nil {
+		skipped = sk.SkippedCount()
+	}
 	logging.Warnf(
-		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did, "+
-			"and holding back stale-row eviction so the un-queried subscriptions' previous rows survive)",
+		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s; %d recommendation(s) skipped "+
+			"(keeping the %d that did, and holding back stale-row eviction so the un-queried subscriptions' previous rows survive)",
 		providerName, partial.Succeeded, partial.Attempted,
-		strings.Join(partial.FailedSubscriptionIDs(), ", "), partial.Succeeded)
+		strings.Join(partial.FailedSubscriptionIDs(), ", "), skipped, partial.Succeeded)
 	return gapFromPartialSubscriptions(partial), nil
 }
 

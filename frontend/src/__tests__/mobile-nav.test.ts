@@ -310,3 +310,43 @@ describe('syncHeaderPlacement', () => {
     expect(document.body.classList.contains('sidebar-open')).toBe(true);
   });
 });
+
+/**
+ * WCAG 2.4.3: keyboard order must follow visual order. Neither layout uses
+ * CSS `order` on the account cluster, so the DOM order of #user-info's
+ * children IS the visual order; syncHeaderPlacement owns it per layout.
+ * Built from the shipped index.html so the markup cannot drift from the test.
+ */
+describe('syncHeaderPlacement account cluster order (real index.html)', () => {
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const body = /<body[^>]*>([\s\S]*)<\/body>/.exec(html)![1]!.replace(/<script[\s\S]*?<\/script>/g, '');
+
+  beforeEach(() => {
+    document.body.innerHTML = body;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  const childIds = (): string[] =>
+    Array.from(document.getElementById('user-info')!.children).map(
+      el => el.id || (el.classList.contains('header-link') ? 'docs' : el.className),
+    );
+
+  test('drawer: who is signed in comes first in the DOM', () => {
+    syncHeaderPlacement(true);
+    expect(childIds()).toEqual([
+      'user-email-display', 'user-role-display', 'docs', 'feedback-link', 'user-info-divider', 'logout-btn',
+    ]);
+  });
+
+  test('topbar: help links, divider, then identity and Log out', () => {
+    syncHeaderPlacement(true);
+    syncHeaderPlacement(false);
+    expect(childIds()).toEqual([
+      'docs', 'feedback-link', 'user-info-divider', 'user-email-display', 'user-role-display', 'logout-btn',
+    ]);
+  });
+});
