@@ -686,6 +686,11 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
+	err = h.requirePlanUpdateIfPlanBearing(ctx, req, executionID)
+	if err != nil {
+		return nil, err
+	}
+
 	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
 		return nil, err
@@ -744,6 +749,20 @@ func (h *Handler) requirePlannedCancelPlanScope(ctx context.Context, session *Se
 	if IsNotFoundError(err) {
 		return errPlannedCancelPlanOutOfScope
 	}
+	return err
+}
+
+// requirePlanUpdateIfPlanBearing requires update:plans when the execution has a
+// plan, because canceling it also disables that plan. Call before any write.
+func (h *Handler) requirePlanUpdateIfPlanBearing(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) error {
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if execution.PlanID == "" {
+		return nil
+	}
+	_, err = h.requirePermission(ctx, req, auth.ActionUpdate, auth.ResourcePlans)
 	return err
 }
 
