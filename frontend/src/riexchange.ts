@@ -1867,7 +1867,9 @@ function buildAutoWarningBanner(): HTMLDivElement {
   const strong = document.createElement('strong');
   strong.textContent = 'Warning:';
   banner.appendChild(strong);
-  banner.appendChild(document.createTextNode(' Fully Automated mode will execute RI exchanges without manual approval. Ensure spending caps are configured properly.'));
+  // fourEyesExchangeMode runs every mode as manual while 4-eyes is on.
+  banner.appendChild(document.createTextNode(' Fully Automated mode will execute RI exchanges without manual approval, '
+    + 'unless Require different approver (4-eyes mode) is on. Ensure spending caps are configured properly.'));
   return banner;
 }
 
@@ -1878,6 +1880,34 @@ function buildAutoWarningBanner(): HTMLDivElement {
  */
 function numberAttr(value: number | null | undefined): string {
   return escapeHtmlAttr(String(value ?? ''));
+}
+
+// Help text for each Exchange Automation field (issue #1689). The caps only
+// gate scheduled and approved exchanges; executeExchange (the Exchange
+// dialog) uses the limit entered in the dialog. The per-exchange cap is
+// checked before the mode branch (pkg/exchange auto.go), so it limits what
+// is proposed in both modes; approving refuses while either cap is 0
+// (exchangeCapStrings). 4-eyes runs every mode as manual (fourEyesExchangeMode).
+const DIALOG_NOTE = 'Exchanges started from the Exchange dialog use the limit entered there instead.';
+const AUTOMATION_HINTS: Record<string, string> = {
+  'ri-exchange-enabled': 'Lets CUDly check convertible RI utilization on its schedule and propose or run exchanges for underutilized RIs, depending on the mode below.',
+  'ri-exchange-mode': 'Manual Approval queues each proposed exchange for someone to approve. Fully Automated runs it without approval, within the payment limits below. '
+    + 'While Require different approver (4-eyes mode) is on, every exchange waits for approval in either mode.',
+  'ri-exchange-threshold': 'Convertible RIs whose utilization over the lookback window is below this percentage are candidates for an exchange.',
+  'ri-exchange-max-per-exchange': 'Largest payment due allowed for one scheduled or approved exchange. A recommendation with a higher payment due is not proposed in either mode. '
+    + 'At 0, no exchange with a payment due is proposed, and approving any exchange is refused. ' + DIALOG_NOTE,
+  'ri-exchange-max-daily': 'Total payment due allowed per UTC day across scheduled and approved exchanges. '
+    + 'At 0, Fully Automated exchanges with a payment due do not run, and approving any exchange is refused. ' + DIALOG_NOTE,
+  'ri-exchange-lookback': 'Days of utilization history used to judge whether a convertible RI is underutilized.',
+};
+
+// One settings row; the control must carry aria-describedby="<id>-hint".
+function automationRow(id: string, label: string, controlHTML: string): string {
+  return '<div class="setting-row">'
+    + '<div class="setting-info"><label for="' + id + '">' + escapeHtml(label) + '</label>'
+    + '<p class="setting-hint" id="' + id + '-hint">' + escapeHtml(AUTOMATION_HINTS[id]) + '</p></div>'
+    + '<div class="setting-input">' + controlHTML + '</div>'
+    + '</div>';
 }
 
 function renderAutomationSettings(container: HTMLElement, config: RIExchangeConfig): void {
@@ -1894,33 +1924,21 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     + '<fieldset class="settings-category">'
     + '<legend>Exchange Automation</legend>'
     + '<div id="ri-exchange-warning-slot"></div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-enabled">Enable Automated Exchange</label></div>'
-    +   '<div class="setting-input"><label class="toggle-label">'
-    +     '<input type="checkbox" id="ri-exchange-enabled"' + (config.auto_exchange_enabled ? ' checked' : '') + '>'
-    +     '<span class="slider"></span>'
-    +   '</label></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-mode">Mode</label></div>'
-    +   '<div class="setting-input"><select id="ri-exchange-mode">' + modeOptions + '</select></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-threshold">Utilization Threshold (%)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-max-per-exchange">Max Payment Per Exchange (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-max-daily">Max Payment Daily (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01"></div>'
-    + '</div>'
-    + '<div class="setting-row">'
-    +   '<div class="setting-info"><label for="ri-exchange-lookback">Lookback Days</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + numberAttr(config.lookback_days) + '" min="1" max="365"></div>'
-    + '</div>'
+    + automationRow('ri-exchange-enabled', 'Enable Automated Exchange',
+        '<label class="toggle-label">'
+        + '<input type="checkbox" id="ri-exchange-enabled" aria-describedby="ri-exchange-enabled-hint"' + (config.auto_exchange_enabled ? ' checked' : '') + '>'
+        + '<span class="slider"></span>'
+        + '</label>')
+    + automationRow('ri-exchange-mode', 'Mode',
+        '<select id="ri-exchange-mode" aria-describedby="ri-exchange-mode-hint">' + modeOptions + '</select>')
+    + automationRow('ri-exchange-threshold', 'Utilization Threshold (%)',
+        '<input type="number" id="ri-exchange-threshold" aria-describedby="ri-exchange-threshold-hint" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1">')
+    + automationRow('ri-exchange-max-per-exchange', 'Max Payment Per Exchange (USD)',
+        '<input type="number" id="ri-exchange-max-per-exchange" aria-describedby="ri-exchange-max-per-exchange-hint" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01">')
+    + automationRow('ri-exchange-max-daily', 'Max Payment Daily (USD)',
+        '<input type="number" id="ri-exchange-max-daily" aria-describedby="ri-exchange-max-daily-hint" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01">')
+    + automationRow('ri-exchange-lookback', 'Lookback Days',
+        '<input type="number" id="ri-exchange-lookback" aria-describedby="ri-exchange-lookback-hint" value="' + numberAttr(config.lookback_days) + '" min="1" max="365">')
     + '</fieldset>'
     + '<div id="ri-exchange-settings-message" class="mt-3"></div>'
     + '</form>';
