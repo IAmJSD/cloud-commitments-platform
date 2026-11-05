@@ -46,11 +46,6 @@ const revokeClaimMinRemaining = revokeReturnTimeout + revokePersistTimeout + rev
 const errRevokeTooLittleTime = "not enough time was left in this request to return the reservation safely; " +
 	"nothing was sent to Azure and the purchase is unchanged, so retry the revoke"
 
-// errRevokeReturnUncertain mirrors the RI exchange handler's wording for an
-// ambiguous provider failure (executeAzureExchange).
-const errRevokeReturnUncertain = "Azure reservation return failed and may already have been accepted by Azure; " +
-	"verify the reservation state in the Azure portal before retrying"
-
 // checkRevokeTimeLeft refuses the claim on Lambda when the invocation has less
 // than revokeClaimMinRemaining left. It runs before the claim, so a refusal
 // leaves no flag behind and posts no Return; 503 says the request can simply
@@ -135,13 +130,14 @@ func isAzureDefiniteRefusal(err error, attempts int32) bool {
 
 // azureReturnUncertain handles a Return that failed without a definite answer
 // (issue #1529). The in-flight flag stays set, so no request can post a
-// second Return for this purchase, and the user is told to check the Azure
-// portal. If no Return gets recorded, the finalize_revocations sweep clears
+// second Return for this purchase, and the user gets the shared
+// REVOCATION_PENDING_CONFIRMATION answer (issue #1522): neither "refunded" nor
+// "failed". If no Return gets recorded, the finalize_revocations sweep clears
 // the flag after its 2h stale window and logs the row for an operator.
-func azureReturnUncertain(record *config.PurchaseHistoryRecord, attempts int32, err error) error {
+func azureReturnUncertain(record *config.PurchaseHistoryRecord, attempts int32, err error) *revokePendingConfirmationResult {
 	logging.Errorf("revoke azure: purchase_id=%s account_id=%s Return failed without a definite answer after %d send(s), outcome uncertain: %v. "+
 		"Kept the in-flight flag so no second Return is posted; finalize_revocations releases it after 2h if no Return is recorded. "+
 		"If Azure did accept the Return, reconcile the row by hand",
 		record.PurchaseID, record.AccountID, attempts, err)
-	return NewClientError(http.StatusInternalServerError, errRevokeReturnUncertain)
+	return newRevokePendingConfirmation()
 }

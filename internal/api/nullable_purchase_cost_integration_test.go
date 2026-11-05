@@ -35,6 +35,8 @@ func TestNullablePurchaseCostPostgres(t *testing.T) {
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(up))
 	require.NoError(t, err)
+	// GetPurchaseHistoryByPurchaseID reads return_posted_at (migration 148).
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 148))
 	loaded, err := store.GetPurchaseHistoryByPurchaseID(ctx, legacy.PurchaseID)
 	require.NoError(t, err)
 	require.NotNil(t, loaded.UpfrontCost)

@@ -142,6 +142,29 @@ tr.history-row-highlight:hover {
     text-align: right;
 }
 
+/* A plain length: auto table layout ignores a percentage max-width, so a
+   100-char name would widen the column. Longer names truncate (full name in
+   title). */
+.planned-purchase-row .plan-name-cell {
+    display: inline-block;
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+/* One muted dash for every empty numeric cell (td.num right-aligns it). */
+.planned-purchases-table .cell-placeholder {
+    color: var(--cudly-text-subtle);
+}
+
+/* aria-disabled keeps the button focusable so keyboard users can read why. */
+.planned-purchases-table button.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 .planned-purchases-table tbody tr:hover {
     background: var(--cudly-surface-muted);
 }

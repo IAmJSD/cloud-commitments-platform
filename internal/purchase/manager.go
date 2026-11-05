@@ -327,6 +327,9 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	// entry point funnels through here, so one check covers all of them.
 	execErr := m.preExecutionRefusal(execCtx, exec)
 	if execErr == nil {
+		execErr = m.stampRedshiftDispatch(execCtx, exec)
+	}
+	if execErr == nil {
 		execErr = m.executePurchase(execCtx, exec)
 	}
 	m.finalizeExecution(exec, execErr)

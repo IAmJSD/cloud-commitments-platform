@@ -11,6 +11,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -354,6 +355,7 @@ func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.L
 	if freshness == nil {
 		return nil, nil
 	}
+	freshness = withSanitizedCollectionError(freshness)
 	scope, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
@@ -367,6 +369,20 @@ func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.L
 // accounts the scope allows. The state row is global, so naming an account the
 // caller cannot see would leak that it exists. An unrestricted scope sees all
 // of it; an account-less (ambient) hold has no IDs to show a restricted caller.
+// withSanitizedCollectionError returns f with last_collection_error reduced to
+// known server notes or a category message: rows stored before the collector
+// summarized provider errors hold the provider's raw text. The stored value
+// is not rewritten.
+func withSanitizedCollectionError(f *config.RecommendationsFreshness) *config.RecommendationsFreshness {
+	if f == nil || f.LastCollectionError == nil {
+		return f
+	}
+	out := *f
+	msg := purchase.SanitizeStoredError(*f.LastCollectionError)
+	out.LastCollectionError = &msg
+	return &out
+}
+
 func scopeHeldAccounts(f *config.RecommendationsFreshness, scope auth.AccountScope) *config.RecommendationsFreshness {
 	out := *f
 	if scope.AllowsAll() || f.LastCollectionPartial == nil {

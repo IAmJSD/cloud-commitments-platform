@@ -13,6 +13,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/smithy-go"
@@ -248,7 +249,8 @@ func TestMarketplaceList_CompensationAssumeRoleDeniedReturnsFixedMessage(t *test
 	require.True(t, ok, "expected a client error, got %v", err)
 	assert.Equal(t, 502, ce.code)
 	assert.Contains(t, ce.message, marketplaceRoleAssumptionMessage)
-	assert.NotContains(t, ce.message, marketplaceHostAccount)
+	// The purchase ID in the reference is a test UUID whose last segment equals the fake host account.
+	assert.NotContains(t, strings.ReplaceAll(ce.message, validMarketplacePurchaseID, ""), marketplaceHostAccount)
 	assert.NotContains(t, ce.message, "arn:aws:")
 }
 
@@ -468,7 +470,11 @@ func TestMarketplaceHandlers_NoCloudAccountRow(t *testing.T) {
 	}
 }
 
-func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnMessage(t *testing.T) {
+func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnCategory(t *testing.T) {
+	want := map[string]string{
+		"InvalidReservedInstancesId.NotFound": purchase.ErrCategoryMessage(purchase.ErrCategoryUnavailable),
+		"UnauthorizedOperation":               purchase.ErrCategoryMessage(purchase.ErrCategoryAccessDenied),
+	}
 	for _, code := range []string{"InvalidReservedInstancesId.NotFound", "UnauthorizedOperation"} {
 		t.Run(code, func(t *testing.T) {
 			const msg = "the ec2 service said no"
@@ -482,7 +488,7 @@ func TestMapAWSMarketplaceError_GenuineEC2ErrorsKeepTheirOwnMessage(t *testing.T
 
 			require.True(t, ok)
 			assert.Equal(t, 400, ce.code)
-			assert.Equal(t, msg, ce.message)
+			assert.Equal(t, want[code], ce.message, "a category message, not the provider text")
 			assert.NotEqual(t, marketplaceRoleAssumptionMessage, ce.message)
 		})
 	}
@@ -565,6 +571,6 @@ func TestMapAWSMarketplaceError_OtherClientFaultsHaveNoReason(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
-	assert.Equal(t, "bad price", ce.message)
+	assert.Equal(t, marketplaceRejectedMessage, ce.message)
 	assert.Nil(t, ce.Details())
 }

@@ -31,7 +31,7 @@ func TestSanitizeStoredError_TailedNotesShowOnlyTheirHead(t *testing.T) {
 		{ErrStaleAzurePricing.Error() + ": Azure recommendation \"r-1\" no longer has the approved price", ErrStaleAzurePricing.Error()},
 		{ErrStepCommitmentCap.Error() + ": recommendation \"r-1\" is not priced in USD, so it cannot be compared against the USD cap", ErrStepCommitmentCap.Error()},
 		{ErrClaimedRowRefused.Error() + ": " + fakeConnectError, ErrClaimedRowRefused.Error()},
-		{"x: ramp not advanced: " + fakeConnectError + "; recovered after reap; provider purchase succeeded", "x: ramp not advanced; recovered after reap; provider purchase succeeded"},
+		{"m5.large: ramp not advanced: " + fakeConnectError + "; recovered after reap; provider purchase succeeded", "m5.large: ramp not advanced; recovered after reap; provider purchase succeeded"},
 		{partialRunPrefix + "ramp not advanced: " + fakeConnectError, partialRunPrefix + "ramp not advanced"},
 	}
 	for _, c := range cases {

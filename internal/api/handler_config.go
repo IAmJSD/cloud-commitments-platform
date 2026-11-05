@@ -485,6 +485,9 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	// GET response carries them, so a client that echoes it back must not
 	// get them into the merged row; the store takes both from the database.
 	cfg.CreatedAt, cfg.UpdatedAt = nil, nil
+	// The plan-group fields (#1746) belong only to purchase plan entries; a
+	// global service setting never carries them, even on a first save.
+	cfg.GroupID, cfg.BoundIdentities, cfg.MaxStepCommitment = "", nil, nil
 
 	parts := strings.SplitN(service, "/", 2)
 	if len(parts) == 2 {

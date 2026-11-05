@@ -552,15 +552,7 @@ func logRawExecuteFailure(executionID string, err error) {
 
 func summarizeExecuteFailure(executionID string, err error) (category, message string) {
 	logRawExecuteFailure(executionID, err)
-	category, message = purchase.SummarizeProviderError(err)
-	if category == purchase.ErrCategoryUnknown {
-		// Only known server-authored refusals (for example "re-fetch the
-		// recommendation") stay readable; any other text is the category message.
-		if text, ok := purchase.ServerNoteMessage(err); ok {
-			message = text
-		}
-	}
-	return category, message
+	return purchase.SummarizeFailure(err)
 }
 
 // unclaimedExecuteError answers a failure where the funnel returned no row:
@@ -1500,7 +1492,8 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 			logging.Errorf("purchase[%s]: token approve failed to schedule: %v", execution.ExecutionID, err)
 			return nil, NewClientError(500, "failed to schedule execution")
 		}
-		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution %s: %v", execution.ExecutionID, err))
+		logging.Errorf("purchase[%s]: failed to schedule execution: %v", execution.ExecutionID, err)
+		return nil, NewClientError(500, fmt.Sprintf("failed to schedule execution (reference: execution %s)", execution.ExecutionID))
 	}
 	// Best-effort scheduled notification email.
 	h.sendPurchaseScheduledEmail(ctx, updated, actor)
@@ -2461,7 +2454,7 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// successor that fails the same way.
 	if failedExec.PlanID != "" && len(failedExec.Recommendations) == 0 {
 		return nil, NewClientError(409,
-			"this plan step has no recommendations attached, so retrying it would buy nothing (platform#631: plan steps cannot yet carry recommendations)")
+			"this plan step has no recommendations attached, so retrying it would buy nothing")
 	}
 
 	totalUpfront, totalSavings, err := validateAndTotalRecommendations(failedExec.Recommendations)

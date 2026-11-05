@@ -286,7 +286,7 @@ func resolveService(ctx context.Context, src Source, store Store, svc *config.Se
 // validateInputs rejects sizing inputs outside (0,100] (custom ramps too) and
 // returns the plan payment normalized for the provider.
 func (r *ramp) validateInputs(svc *config.ServiceConfig, percentPerStep float64) (string, error) {
-	if svc.Coverage <= 0 || svc.Coverage > 100 || svc.Term <= 0 || (r.mode == "" && (percentPerStep <= 0 || percentPerStep > 100)) {
+	if svc.Coverage <= 0 || svc.Coverage > 100 || svc.Term <= 0 || (r.mode.SizesByPercent() && (percentPerStep <= 0 || percentPerStep > 100)) {
 		return "", fmt.Errorf("invalid sizing inputs (coverage %v, percent per step %v, term %d)", svc.Coverage, percentPerStep, svc.Term)
 	}
 	payment, ok := config.NormalizePaymentOption(svc.Provider, svc.Payment)

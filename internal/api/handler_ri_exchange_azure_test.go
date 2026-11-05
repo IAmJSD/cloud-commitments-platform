@@ -1602,7 +1602,7 @@ func TestExecuteAzureExchange_CommitFailureClassification(t *testing.T) {
 		wantCode   int
 		wantDetail string
 	}{
-		{"azure client fault", &azcore.ResponseError{StatusCode: 409, ErrorCode: "ReservationAlreadyExchanged"}, 400, "ReservationAlreadyExchanged"},
+		{"azure client fault", &azcore.ResponseError{StatusCode: 409, ErrorCode: "ReservationAlreadyExchanged"}, 400, "the exchange request was rejected as invalid"},
 		{"transient failure", fmt.Errorf("azure: ExecuteExchange: transport timeout"), 500, "exchange execution failed"},
 	}
 	for _, tt := range tests {

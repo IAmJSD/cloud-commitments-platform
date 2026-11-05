@@ -110,3 +110,19 @@ func TestPersistExecution_RecentSubmitsErrorIsSurfaced(t *testing.T) {
 	assert.Nil(t, dup)
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 }
+
+// The empty-plan-step 409 is shown to users, so it must not name an internal
+// issue number (#1708).
+func TestHandler_retryPurchase_EmptyPlanStepMessageHasNoInternalRef(t *testing.T) {
+	failed, handler, _ := retryDedupeFixture(t, false)
+	failed.PlanID = "plan-1"
+	failed.Recommendations = nil
+
+	_, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "%v", err)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.message, "no recommendations attached")
+	assert.NotContains(t, ce.message, "#")
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
@@ -1345,7 +1346,8 @@ func mapAzureExchangeError(opMsg string, err error) error {
 		return refusal
 	}
 	if isAzureClientError(err) {
-		return NewClientError(400, err.Error())
+		logging.Warnf("ri-exchange: %s: provider rejected the request: %v", opMsg, err)
+		return NewClientError(400, exchangeRejectedMessage)
 	}
 	return NewClientError(500, opMsg)
 }
@@ -2107,10 +2109,15 @@ func mapAWSExchangeError(opMsg string, err error) error {
 	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
-		return NewClientError(400, apiErr.ErrorMessage())
+		logging.Warnf("ri-exchange: %s: provider rejected the request: %v", opMsg, err)
+		return NewClientError(400, exchangeRejectedMessage)
 	}
 	return NewClientError(500, opMsg)
 }
+
+// exchangeRejectedMessage is the provider-neutral text for a client-fault
+// rejection; the provider's own text stays in the log.
+const exchangeRejectedMessage = "the exchange request was rejected as invalid: check the offering and count"
 
 // Response types
 
@@ -2342,8 +2349,10 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 
 	// Strip approval tokens — single-use secrets must not be included in
 	// a read-only response that could be cached, logged, or screen-shared.
+	// Stored errors may hold provider text; only known server notes pass.
 	for i := range records {
 		records[i].ApprovalToken = ""
+		records[i].Error = purchase.SanitizeStoredError(records[i].Error)
 	}
 
 	return &RIExchangeHistoryResponse{Records: records}, nil
@@ -2984,7 +2993,9 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, riExchangeTerminalSaveTimeout)
 	defer cancelSave()
 	if execErr != nil {
-		return h.failExchange(saveCtx, id, execErr.Error())
+		logging.Errorf("RI exchange %s execution failed: %v", id, execErr)
+		_, reason := purchase.SummarizeFailure(execErr)
+		return h.failExchange(saveCtx, id, reason)
 	}
 
 	// H3: persist the amount AWS actually accepted, not the reserved ceiling.

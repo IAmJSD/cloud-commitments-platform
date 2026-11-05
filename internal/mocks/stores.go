@@ -283,6 +283,25 @@ func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]con
 	return v, args.Error(1)
 }
 
+// GetDoomedNextRoots mocks the doomed-root report backing plan health.
+// Unregistered by default, like GetStuckRampSteps: no doomed root is the shape
+// of a plan with nothing wrong with it.
+func (m *MockConfigStore) GetDoomedNextRoots(ctx context.Context, now time.Time) (map[string]config.DoomedRoot, error) {
+	m.record("GetDoomedNextRoots", ctx, now)
+	if !isExpected(&m.Mock, "GetDoomedNextRoots") {
+		return map[string]config.DoomedRoot{}, nil
+	}
+	args := m.Called(ctx, now)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(map[string]config.DoomedRoot)
+	if !ok {
+		m.reporter.wrongReturnType("GetDoomedNextRoots", "map[string]config.DoomedRoot", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 // LockPurchasePlanTx mocks the per-plan ramp lock. Falls back to
 // GetPurchasePlan when no expectation is registered, so tests that only care
 // about what the transaction writes keep working: the lock is a concurrency
@@ -537,6 +556,17 @@ func (m *MockConfigStore) RecoverReapedExecutionTx(ctx context.Context, tx pgx.T
 	}
 	args := m.Called(ctx, tx, exec)
 	return args.Error(0)
+}
+
+// StampFirstDispatchTx mocks the first-dispatch stamp (no default: testify panics if unexpected).
+func (m *MockConfigStore) StampFirstDispatchTx(ctx context.Context, tx pgx.Tx, executionID string, horizon time.Duration) (config.StampResult, error) {
+	m.record("StampFirstDispatchTx", ctx, tx, executionID, horizon)
+	args := m.Called(ctx, tx, executionID, horizon)
+	res, ok := args.Get(0).(config.StampResult)
+	if !ok {
+		m.reporter.wrongReturnType("StampFirstDispatchTx", "config.StampResult", args.Get(0))
+	}
+	return res, args.Error(1)
 }
 
 // TransitionExecutionStatus mocks the TransitionExecutionStatus operation.

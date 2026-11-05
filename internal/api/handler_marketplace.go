@@ -26,6 +26,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -309,11 +310,11 @@ func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, 
 	if state == "" {
 		state = config.ListingStatePending
 	}
-	cancelDetail := cancelErr.Error()
+	_, cancelDetail := purchase.SummarizeProviderError(cancelErr)
 	if isRoleAssumptionFailure(cancelErr) {
 		cancelDetail = marketplaceRoleAssumptionMessage
 	}
-	msg := fmt.Sprintf("marketplace listing %s was created but could not be saved, and canceling it failed (%s); the listing may still be active on AWS", listing.ListingID, cancelDetail)
+	msg := fmt.Sprintf("marketplace listing %s was created but could not be saved, and canceling it failed (%s); the listing may still be active on AWS (reference: purchase %s)", listing.ListingID, cancelDetail, purchaseID)
 	if err := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, listing.ListingID, state); err != nil {
 		if isListingEndedConflict(err) {
 			return listingCanceledConcurrently(listing.ListingID)
@@ -472,8 +473,8 @@ func roleAssumptionOperationError(err error) *smithy.OperationError {
 const marketplaceSellerNotRegisteredReason = "seller_not_registered"
 
 // mapAWSMarketplaceError maps an AWS SDK error to an appropriate ClientError.
-// AWS client-fault errors (4xx-category codes) produce a 4xx response with the
-// original AWS message so the caller gets actionable feedback. SellerNotRegistered
+// AWS client-fault errors (4xx-category codes) produce a 400 with a category
+// message, never the AWS text, which carries ARNs and request IDs. SellerNotRegistered
 // is the exception: its 400 carries marketplaceSellerNotRegisteredMessage and
 // reason seller_not_registered instead. All other errors produce a 502
 // (AWS-side failure). STS AssumeRole failures are classified by
@@ -489,11 +490,22 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 				map[string]any{"reason": marketplaceSellerNotRegisteredReason})
 		}
 		if awsMarketplaceClientFaultCodes[apiErr.ErrorCode()] || apiErr.ErrorFault() == smithy.FaultClient {
-			return NewClientError(400, apiErr.ErrorMessage())
+			logging.Warnf("marketplace: %s: provider rejected the request: %v", opMsg, err)
+			category, msg := purchase.SummarizeProviderError(err)
+			if category == purchase.ErrCategoryUnknown {
+				msg = marketplaceRejectedMessage
+			}
+			return NewClientError(400, msg)
 		}
 	}
-	return NewClientError(502, opMsg+": "+err.Error())
+	logging.Warnf("marketplace: %s: %v", opMsg, err)
+	_, msg := purchase.SummarizeProviderError(err)
+	return NewClientError(502, opMsg+": "+msg)
 }
+
+// marketplaceRejectedMessage is the fixed text for a client-fault rejection
+// the error classifier has no category for; the provider's text stays in the log.
+const marketplaceRejectedMessage = "AWS rejected the listing request as invalid: check the listing parameters"
 
 // isKnownNonStandardOfferingClass reports true when offering_class is
 // explicitly set to a non-standard value (e.g. "convertible"). An empty string

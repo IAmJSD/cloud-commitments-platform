@@ -218,6 +218,13 @@ jobs:
           bash scripts/check-terraform-pin.sh
           bash scripts/test-check-terraform-pin.sh
 
+      - name: Assert rollback applies match the deploy applies
+        # Issue #1744: a rollback apply that omits or changes a deploy TF_VAR_
+        # or -var resets it on the live stack. Parses the workflows (PyYAML).
+        run: |
+          python3 scripts/check-rollback-tf-vars.py
+          python3 scripts/test-check-rollback-tf-vars.py
+
       - name: Assert shellcheck is available to actionlint
         # actionlint does not fail when shellcheck is missing from PATH: it
         # silently skips every run: block and still exits 0. That silent skip is
@@ -304,7 +311,13 @@ jobs:
           set -e
           for mod in . tests/e2e; do
             echo "==> go mod download/verify in $mod"
-            (cd "$mod" && go mod download && go mod verify)
+            for i in 1 2 3; do
+              (cd "$mod" && go mod download) && break
+              echo "go mod download failed in $mod (attempt $i/3)" >&2
+              [ "$i" -lt 3 ] || exit 1
+              sleep 5
+            done
+            (cd "$mod" && go mod verify)
           done
 
       - name: Run unit tests (all modules)
@@ -574,7 +587,13 @@ jobs:
         # Only on the leg that saves the module cache, and only on a miss, so
         # the saved set covers every leg, not just this one's packages.
         if: strategy.job-index == 0 && steps.go_mod_cache.outputs.cache-hit != 'true'
-        run: go list -deps -test -tags=integration ./... > /dev/null
+        run: |
+          for i in 1 2 3; do
+            go list -deps -test -tags=integration ./... > /dev/null && break
+            echo "go list failed (attempt $i/3)" >&2
+            [ "$i" -lt 3 ] || exit 1
+            sleep 5
+          done
 
       - name: Install golang-migrate
         run: |

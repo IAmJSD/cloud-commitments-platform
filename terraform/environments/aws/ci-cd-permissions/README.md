@@ -87,7 +87,7 @@ to `terraform init -backend-config=backend.hcl`.
 cp terraform.tfvars.example terraform.tfvars
 cp backend.hcl.example backend.hcl
 
-# 2. Fill in terraform.tfvars (only github_repo is strictly required if using OIDC)
+# 2. Fill in terraform.tfvars (github_repo, github_owner_id and github_repo_id are required if using OIDC)
 # 3. Fill in backend.hcl with your S3 bucket details
 
 # 4. Initialise
@@ -150,14 +150,14 @@ for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`, and injects `
 
 ### Trust policy conditions
 
-The trust policy does **not** allow all workflows from the repo: `repo:LeanerCloud/cloud-commitments-platform:*` would
+The trust policy does **not** allow all workflows from the repo: `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:*` would
 let any branch, including an unprotected feature branch, mint valid deploy credentials. Instead the
 OIDC `sub` claim is checked against an explicit, enumerated allowlist (`role.tf`'s
 `token.actions.githubusercontent.com:sub` condition):
 
-- `repo:LeanerCloud/cloud-commitments-platform:ref:refs/heads/main`, for workflows dispatched on `main` with no
+- `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:ref:refs/heads/main`, for workflows dispatched on `main` with no
   `environment:` binding.
-- `repo:LeanerCloud/cloud-commitments-platform:environment:<name>`, one entry per exact environment name a job that
+- `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:environment:<name>`, one entry per exact environment name a job that
   assumes this role binds to. A job's `environment:` **replaces** the ref-based subject with an
   environment-scoped one (never both), so every such value must be listed explicitly or that job
   cannot authenticate. See the comment above the `sub` list in `role.tf` for the full derivation:
@@ -165,8 +165,23 @@ OIDC `sub` claim is checked against an explicit, enumerated allowlist (`role.tf`
   jobs, and an unreachable `workflow_call` input path), kept in one place so it cannot drift out of
   sync with the policy itself.
 
-If you fork CUDly or use a different repo, set `github_repo` in `terraform.tfvars` to the new
-`owner/repo` value and re-apply; the prefix changes, the enumerated suffixes do not. If you add a
+### Immutable subject
+
+Trust is keyed on GitHub's immutable OIDC subject, `repo:<owner>@<owner_id>/<repo>@<repo_id>:...`, built from
+`github_repo` plus `github_owner_id` and `github_repo_id` (required; read them with
+`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`). A renamed or delete-and-recreated repo gets a
+new id, so a name squatter cannot match. No name-only subject exists in this module.
+
+GitHub prerequisite: the repository must emit that subject (Settings, Actions, OIDC, immutable subject).
+`gh api repos/<owner>/<repo>/actions/oidc/customization/sub` must show `use_immutable_subject: true`
+and `sub_claim_prefix` equal to the prefix above; otherwise no token matches.
+
+This module is bootstrap-only: a privileged human applies it, staging first. Agents never apply.
+
+If your existing `terraform.tfvars` has `github_repo = "owner@id/repo@id"` (the 2026-09 hand-applied form), set it back to `owner/name` and add the two id vars; the subjects stay identical.
+
+If you fork CUDly or use a different repo, set `github_repo`, `github_owner_id` and `github_repo_id` in `terraform.tfvars` to the new
+repo's values and re-apply; the prefix changes, the enumerated suffixes do not. If you add a
 new workflow job that assumes this role and binds to a not-yet-listed `environment:`, add its exact
 subject to `role.tf` and re-apply *before* that job runs, or `configure-aws-credentials` fails with
 `AssumeRoleWithWebIdentity`/`Not authorized`.

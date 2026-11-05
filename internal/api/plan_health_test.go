@@ -53,7 +53,7 @@ func TestComputePlanHealth_HealthyPlanScoresPerfect(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	assert.Equal(t, 100, score)
 	assert.Empty(t, factors)
@@ -74,7 +74,7 @@ func TestComputePlanHealth_CompletedPlanShortCircuitsRegardlessOfOtherIssues(t *
 	}
 	execCounts := counts(map[string]int{"failed": 2, config.StatusCanceled: 1})
 
-	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{}, config.DoomedRoot{})
 
 	assert.Equal(t, 100, score)
 	assert.Empty(t, factors)
@@ -94,7 +94,7 @@ func TestComputePlanHealth_Overdue(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorOverdue, factors[0].Code)
@@ -116,7 +116,7 @@ func TestComputePlanHealth_OverdueRequiresEnabled(t *testing.T) {
 		},
 	}
 
-	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	assert.NotContains(t, factorCodes(factors), HealthFactorOverdue)
 }
@@ -136,7 +136,7 @@ func TestComputePlanHealth_FailedExecutionsPenaltyCapsAtFour(t *testing.T) {
 	// must still report the true count of 6.
 	execCounts := counts(map[string]int{"failed": 6})
 
-	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorFailedExecutions, factors[0].Code)
@@ -167,7 +167,7 @@ func TestComputePlanHealth_CanceledExecutionsPenaltyCapsAtFourAndCountsBothSpell
 		config.LegacyStatusCanceled: 2,
 	})
 
-	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorCanceledExecutions, factors[0].Code)
@@ -189,7 +189,7 @@ func TestComputePlanHealth_Stalled(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorStalled, factors[0].Code)
@@ -209,7 +209,7 @@ func TestComputePlanHealth_BehindSchedule(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorBehindSchedule, factors[0].Code)
@@ -243,7 +243,7 @@ func TestComputePlanHealth_BehindScheduleNoteClampsExpectedStepToTotalSteps(t *t
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	f := factorByCode(t, factors, HealthFactorBehindSchedule)
 	assert.Equal(t, "on step 2, expected step 4 by now", f.Note)
@@ -263,7 +263,7 @@ func TestComputePlanHealth_StalledAndBehindScheduleAreMutuallyExclusive(t *testi
 		},
 	}
 
-	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	codes := factorCodes(factors)
 	assert.Contains(t, codes, HealthFactorStalled)
@@ -283,7 +283,7 @@ func TestComputePlanHealth_ImmediatePlanSkipsScheduleFactors(t *testing.T) {
 		},
 	}
 
-	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	codes := factorCodes(factors)
 	assert.NotContains(t, codes, HealthFactorStalled)
@@ -310,7 +310,7 @@ func TestComputePlanHealth_ZeroStartDateSkipsScheduleFactors(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	codes := factorCodes(factors)
 	assert.NotContains(t, codes, HealthFactorBehindSchedule)
@@ -333,7 +333,7 @@ func TestComputePlanHealth_ZeroStartDateStillCountsExecutionFactors(t *testing.T
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, counts(map[string]int{"failed": 2}), config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, counts(map[string]int{"failed": 2}), config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorFailedExecutions, factors[0].Code)
@@ -352,7 +352,7 @@ func TestComputePlanHealth_DisabledMidway(t *testing.T) {
 		},
 	}
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	require.Len(t, factors, 1)
 	assert.Equal(t, HealthFactorDisabledMidway, factors[0].Code)
@@ -372,7 +372,7 @@ func TestComputePlanHealth_DisabledButNeverStartedIsBehindScheduleNotDisabledMid
 		},
 	}
 
-	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 
 	codes := factorCodes(factors)
 	assert.Contains(t, codes, HealthFactorBehindSchedule)
@@ -395,7 +395,7 @@ func TestComputePlanHealth_ScoreClampsAtZeroWhenPenaltiesStack(t *testing.T) {
 	}
 	execCounts := counts(map[string]int{"failed": 6, config.StatusCanceled: 6})
 
-	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{}, config.DoomedRoot{})
 
 	assert.Equal(t, 0, score)
 	// disabled_midway note: overdue only requires Enabled, which is false
@@ -429,7 +429,7 @@ func TestComputePlanHealth_UnrelatedExecutionStatusesAreNotCounted(t *testing.T)
 	// into any penalty.
 	execCounts := counts(map[string]int{"pending": 3, "notified": 1, "completed": 9, "approved": 2})
 
-	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{})
+	score, factors := computePlanHealth(plan, now, execCounts, config.RampStepBlock{}, config.DoomedRoot{})
 
 	assert.Equal(t, 100, score)
 	assert.Empty(t, factors)
@@ -457,11 +457,11 @@ func TestComputePlanHealth_RampBlockedReplacesBehindSchedule(t *testing.T) {
 	plan := blockedRampPlan(now)
 
 	// Same plan, no stuck accounts: the wall-clock factor is what fires.
-	_, lateFactors := computePlanHealth(plan, now, nil, config.RampStepBlock{})
+	_, lateFactors := computePlanHealth(plan, now, nil, config.RampStepBlock{}, config.DoomedRoot{})
 	require.Contains(t, factorCodes(lateFactors), HealthFactorBehindSchedule,
 		"the fixture must be behind schedule, or this test proves nothing")
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3, StuckExecutions: 2})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3, StuckExecutions: 2}, config.DoomedRoot{})
 
 	codes := factorCodes(factors)
 	assert.Contains(t, codes, HealthFactorRampBlocked)
@@ -481,7 +481,7 @@ func TestComputePlanHealth_RampBlockedNeedsANonZeroCount(t *testing.T) {
 	// A step number with a zero count is what a plan absent from
 	// GetStuckRampSteps looks like after a map lookup miss, and must not be
 	// read as "step 0 is blocked".
-	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3})
+	_, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3}, config.DoomedRoot{})
 
 	assert.NotContains(t, factorCodes(factors), HealthFactorRampBlocked)
 	assert.Contains(t, factorCodes(factors), HealthFactorBehindSchedule)
@@ -493,7 +493,7 @@ func TestComputePlanHealth_RampBlockedFiresBeforeTheFirstInterval(t *testing.T) 
 	// Nothing about the wall clock is wrong yet, so scheduleFactor declines.
 	plan.RampSchedule.StartDate = now.AddDate(0, 0, -1)
 
-	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3, StuckExecutions: 1})
+	score, factors := computePlanHealth(plan, now, nil, config.RampStepBlock{StepNumber: 3, StuckExecutions: 1}, config.DoomedRoot{})
 
 	assert.Equal(t, []PlanHealthFactorCode{HealthFactorRampBlocked}, factorCodes(factors))
 	assert.Equal(t, 100-penaltyRampBlocked, score,
@@ -507,7 +507,7 @@ func TestComputePlanHealth_RampBlockedStacksWithExecutionFactors(t *testing.T) {
 	plan.NextExecutionDate = &past
 
 	score, factors := computePlanHealth(plan, now, counts(map[string]int{"failed": 2}),
-		config.RampStepBlock{StepNumber: 3, StuckExecutions: 1})
+		config.RampStepBlock{StepNumber: 3, StuckExecutions: 1}, config.DoomedRoot{})
 
 	// The accounts that failed the blocked step are also failed executions,
 	// and the plan really is overdue: these describe different observations

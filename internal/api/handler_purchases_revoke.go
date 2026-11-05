@@ -35,6 +35,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -108,8 +109,8 @@ type revokePurchaseResult struct {
 	RevokedVia string `json:"revoked_via"`
 }
 
-// revokeReconcilePendingResult is the JSON body returned with HTTP 207
-// Multi-Status when the Azure refund succeeded but the subsequent DB write
+// revokeReconcilePendingResult is the JSON body returned (HTTP 200, like every
+// handler result) when the Azure refund succeeded but the subsequent DB write
 // failed after all retries. The frontend reads the "code" field and shows a
 // non-retryable toast ("Refund issued. We will reconcile your audit shortly.")
 // with no retry button (issue #290 Finding #6).
@@ -117,6 +118,41 @@ type revokeReconcilePendingResult struct {
 	Code          string `json:"code"`
 	Message       string `json:"message"`
 	AzureReturned bool   `json:"azure_returned"`
+}
+
+// Statuses and copy for a revoke whose Azure Return is not proven accepted
+// (issues #1522, #1529).
+const (
+	revokeCodeReconcilePending       = "RECONCILE_PENDING"
+	revokeCodePendingConfirmation    = "REVOCATION_PENDING_CONFIRMATION"
+	revokePendingConfirmationMessage = "A refund for this purchase is being processed. Check back in a few minutes; don't start another revoke."
+
+	// revokeRetryAfterSeconds is how long a client should wait before asking
+	// again: the detached Return (revokeReturnTimeout, 3m) plus the writes
+	// that record it (revokePersistTimeout, 30s) is 3m30s, so by 5m the
+	// request that holds the claim has either recorded the Return or given
+	// up; the finalize_revocations sweep (2h stale window) is the backstop.
+	revokeRetryAfterSeconds = 300
+)
+
+// revokePendingConfirmationResult is the JSON body for a revoke whose Azure
+// Return is not proven accepted: another request is still posting it, or an
+// earlier one failed without a definite answer. It has no azure_returned
+// field on purpose, so it cannot claim a refund it cannot prove. Like
+// revokeReconcilePendingResult it is a result body, so the HTTP status is the
+// handler's normal 200 (the "207" in comments is descriptive; nothing sets it).
+type revokePendingConfirmationResult struct {
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RetryAfterSeconds int    `json:"retry_after_seconds"`
+}
+
+func newRevokePendingConfirmation() *revokePendingConfirmationResult {
+	return &revokePendingConfirmationResult{
+		Code:              revokeCodePendingConfirmation,
+		Message:           revokePendingConfirmationMessage,
+		RetryAfterSeconds: revokeRetryAfterSeconds,
+	}
 }
 
 // revokeMarkRetryBackoffs are the sleep durations between consecutive
@@ -135,8 +171,8 @@ var revokeMarkRetryBackoffs = []time.Duration{
 // four attempts of revokePersistAttemptTimeout plus 13s of backoff across
 // revokeMarkRetryBackoffs (29s), while still capping how long a hung database
 // can hold the handler after its caller has gone. The waits between attempts
-// honor it too (issue #1527). If it runs out, the result is the same 207 as
-// exhausted retries.
+// honor it too (issue #1527). If it runs out, the result is the same
+// RECONCILE_PENDING as exhausted retries.
 const revokePersistTimeout = 30 * time.Second
 
 // revokePersistAttemptTimeout bounds one persist attempt (stamp the Return,
@@ -243,11 +279,13 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 	// already issued the refund but our DB write failed, or another request
 	// holds the claim and is posting the Return now (issue #1518), or an
 	// earlier Return failed without a definite answer and may have been
-	// accepted (issue #1529). Return 207 so the frontend does not retry the
-	// Azure call (which would fail with "already returned").
+	// accepted (issue #1529). The answer tells the frontend not to retry the
+	// Azure call (which would fail with "already returned"): RECONCILE_PENDING
+	// when the return_posted_at stamp proves the Return, else
+	// REVOCATION_PENDING_CONFIRMATION (issue #1522).
 	// The finalize_revocations sweep will reconcile the row.
 	if record.RevocationInFlight {
-		return revocationInFlightResult(), nil
+		return revocationInFlightResult(record), nil
 	}
 
 	// Parse the confirmed quote from the request body. Azure revocations
@@ -597,7 +635,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return nil, NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return nil, azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return nil, fmt.Errorf("revoke/calculate: CalculateRefund failed: %w", err)
 	}
@@ -824,7 +862,7 @@ func (h *Handler) callAzureReturn(
 
 	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
 	quantity := int32(record.Count) // #nosec G115 -- Azure reservation count validated at purchase; bounded by API limits (<<math.MaxInt32) //nolint:gosec
-	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
+	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, record.PurchaseID, orderID, reservationID, quantity)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +879,7 @@ func (h *Handler) callAzureReturn(
 
 	// Step 2: Return (post the actual refund request).
 	if attempts, err := postAzureReturn(ctx, returnClient, orderID, reservationID, sessionID, quantity); err != nil {
-		return nil, h.handleAzureReturnError(ctx, record, attempts, err)
+		return h.handleAzureReturnError(ctx, record, attempts, err)
 	}
 
 	return h.persistAzureRevocation(ctx, record, calcRefundAmount, calcRefundCurrency)
@@ -876,15 +914,21 @@ func postAzureReturn(reqCtx context.Context, returnClient azureReturnClient, ord
 	return sends.Load(), err
 }
 
-// revocationInFlightResult is the answer for a row whose revocation another
-// request has in flight: the RECONCILE_PENDING response, which tells the
-// frontend not to retry.
-func revocationInFlightResult() *revokeReconcilePendingResult {
-	return &revokeReconcilePendingResult{
-		Code:          "RECONCILE_PENDING",
-		AzureReturned: true,
-		Message:       "Refund already issued. We will reconcile your audit record shortly. Do not retry.",
+// revocationInFlightResult is the answer for a row whose revocation is in
+// flight. RECONCILE_PENDING with azure_returned:true only when the row
+// carries the return_posted_at stamp, which proves Azure accepted the Return.
+// Without it the request holding the claim may still be posting the Return,
+// and it may yet fail, so the answer is REVOCATION_PENDING_CONFIRMATION with
+// no azure_returned (issue #1522). A nil record is "no stamp".
+func revocationInFlightResult(record *config.PurchaseHistoryRecord) any {
+	if record != nil && record.ReturnPostedAt != nil {
+		return &revokeReconcilePendingResult{
+			Code:          revokeCodeReconcilePending,
+			AzureReturned: true,
+			Message:       "Refund already issued. We will reconcile your audit record shortly. Do not retry.",
+		}
 	}
+	return newRevokePendingConfirmation()
 }
 
 // claimRevocationInFlight sets the in-flight flag BEFORE the Azure Return
@@ -898,8 +942,9 @@ func revocationInFlightResult() *revokeReconcilePendingResult {
 //   - the row was revoked by a concurrent request after this one loaded it
 //     (issue #316): already_revoked, as the up-front idempotency check would
 //     have answered;
-//   - another request holds the claim: RECONCILE_PENDING, as the up-front
-//     in-flight check would have answered;
+//   - another request holds the claim: the row is re-read (lostClaimResult);
+//     already_revoked if it is now revoked, RECONCILE_PENDING if the
+//     return_posted_at stamp is set, else REVOCATION_PENDING_CONFIRMATION;
 //   - the flip failed: an error (500). No Return has been posted, so a retry
 //     is safe, whereas posting one without the claim could race the holder's
 //     and, if this request's MarkPurchaseRevoked then failed too, leave a
@@ -921,13 +966,34 @@ func (h *Handler) claimRevocationInFlight(ctx context.Context, record *config.Pu
 		return nil, nil
 	case errors.Is(flipErr, config.ErrRevocationInFlight):
 		logging.Infof("revoke azure: purchase_id=%s is already being revoked by a concurrent request; not posting a second Return", record.PurchaseID)
-		return revocationInFlightResult(), nil
+		return h.lostClaimResult(ctx, record.PurchaseID), nil
 	case errors.Is(flipErr, config.ErrPurchaseAlreadyRevoked):
 		logging.Infof("revoke azure: purchase_id=%s was revoked by a concurrent request; not posting a second Return", record.PurchaseID)
 		return h.alreadyRevokedResult(ctx, record.PurchaseID), nil
 	default:
 		return nil, fmt.Errorf("revoke azure: claim revocation of %s (no Return posted): %w", record.PurchaseID, flipErr)
 	}
+}
+
+// lostClaimResult answers a request that lost the claim. The row is re-read
+// because the claim holder may have recorded the Return since this request
+// loaded it. A row now revoked answers already_revoked; a failed or empty
+// re-read proves nothing, so it answers REVOCATION_PENDING_CONFIRMATION
+// (issue #1522).
+func (h *Handler) lostClaimResult(ctx context.Context, purchaseID string) any {
+	current, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
+	if err != nil {
+		logging.Warnf("revoke azure: purchase_id=%s re-read after a lost claim failed, answering pending confirmation: %v", purchaseID, err)
+		return newRevokePendingConfirmation()
+	}
+	if current != nil && current.RevokedAt != nil {
+		return &revokePurchaseResult{
+			Status:     "already_revoked",
+			RevokedAt:  current.RevokedAt.Format(time.RFC3339),
+			RevokedVia: current.RevokedVia,
+		}
+	}
+	return revocationInFlightResult(current)
 }
 
 // alreadyRevokedResult answers already_revoked for a row a concurrent request
@@ -970,7 +1036,7 @@ func checkConfirmedRefund(confirmed revokeConfirmBody, calcRefundAmount *float64
 // azureCalculateRefund runs the CalculateRefund step and parses out the session
 // ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
 // check). Errors are classified into 400 (client) vs 500 (transient).
-func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, purchaseID, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -982,7 +1048,7 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return "", nil, "", NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return "", nil, "", azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return "", nil, "", fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
 	}
@@ -1008,9 +1074,9 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 // The Return ran detached, so by the time it fails the request may be gone;
 // the clear runs on its own detached revokePersistTimeout budget so it can
 // still land (issue #1527).
-func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.PurchaseHistoryRecord, attempts int32, err error) error {
+func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.PurchaseHistoryRecord, attempts int32, err error) (any, error) {
 	if !isAzureDefiniteRefusal(err, attempts) {
-		return azureReturnUncertain(record, attempts, err)
+		return azureReturnUncertain(record, attempts, err), nil
 	}
 	ctx, cancel := ctxutil.DetachedWithTimeout(reqCtx, revokePersistTimeout)
 	defer cancel()
@@ -1027,17 +1093,17 @@ func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.
 	// call). Surface a clean 422 so the frontend can show a user-friendly
 	// "window just closed" message (issue #290 Finding #3).
 	if isAzureWindowEdgeError(err) {
-		return NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
+		return nil, NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
 	}
 	if isAzureClientError(err) {
-		return NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
+		return nil, azureRefundRejected("Azure refund rejected", record.PurchaseID, err)
 	}
-	return fmt.Errorf("revoke azure: Return failed: %w", err)
+	return nil, fmt.Errorf("revoke azure: Return failed: %w", err)
 }
 
 // persistAzureRevocation records the successful revocation with exponential-
 // backoff retries. If every attempt fails, Azure has already refunded but the
-// DB write could not land, so it returns a 207 RECONCILE_PENDING result (no
+// DB write could not land, so it returns a RECONCILE_PENDING result (no
 // retry) for the finalize_revocations sweep to reconcile, rather than a 500.
 //
 // Each attempt first records that Azure accepted the Return
@@ -1071,14 +1137,14 @@ func (h *Handler) persistAzureRevocation(reqCtx context.Context, record *config.
 	}
 	if markErr != nil {
 		// All retries failed. Azure has already refunded but we cannot persist
-		// the revocation state. Return 207 Multi-Status so the frontend knows
+		// the revocation state. Return RECONCILE_PENDING so the frontend knows
 		// the refund issued but not to retry — the finalize_revocations sweep
 		// will reconcile the DB write on its next tick, provided the Return
 		// was recorded.
 		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after %d attempts (Azure already returned, return recorded=%t): %v",
 			record.PurchaseID, attempts, returnRecorded, markErr)
 		return &revokeReconcilePendingResult{
-			Code:          "RECONCILE_PENDING",
+			Code:          revokeCodeReconcilePending,
 			AzureReturned: true,
 			Message:       "Refund issued. We will reconcile your audit record shortly. Do not retry.",
 		}, nil
@@ -1189,6 +1255,15 @@ func isAzureClientError(err error) bool {
 		}
 	}
 	return false
+}
+
+// azureRefundRejected is the 400 for an Azure refund step the provider
+// refused: a category message and the purchase ID, never Azure's own text,
+// which carries subscription URLs and request IDs. The raw error is logged.
+func azureRefundRejected(step, purchaseID string, err error) error {
+	logging.Warnf("revoke azure: %s for purchase %s: %v", step, purchaseID, err)
+	_, msg := purchase.SummarizeProviderError(err)
+	return NewClientError(400, fmt.Sprintf("%s: %s (reference: purchase %s)", step, msg, purchaseID))
 }
 
 // isAzureWindowEdgeError reports whether err is an Azure RefundPolicyViolated

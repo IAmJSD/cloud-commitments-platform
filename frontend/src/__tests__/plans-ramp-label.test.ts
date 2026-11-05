@@ -180,3 +180,19 @@ describe('custom ramp inputs when Edit is the first plan modal (#1536)', () => {
     expect(intervalInput().disabled).toBe(true);
   });
 });
+
+describe('ramp step wording says percent of target (#1680)', () => {
+  beforeEach(() => { document.body.innerHTML = loadRealIndexBody(); });
+
+  test('custom step field label names the target', () => {
+    const label = document.getElementById('ramp-step-percent')?.closest('label')?.textContent ?? '';
+    expect(label).toContain('% of target');
+  });
+
+  test('preset descriptions say each step is a share of the target', () => {
+    const desc = (value: string): string =>
+      document.querySelector(`input[value="${value}"]`)?.closest('label')?.querySelector('.ramp-desc')?.textContent ?? '';
+    expect(desc('weekly-25pct')).toContain('25% of target each week');
+    expect(desc('monthly-10pct')).toContain('10% of target each month');
+  });
+});
