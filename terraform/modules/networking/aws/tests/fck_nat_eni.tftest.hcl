@@ -117,6 +117,26 @@ run "persistent_eni_is_attachable_by_every_instance" {
     error_message = "The fck-nat launch template must set instance_initiated_shutdown_behavior = \"terminate\" so the bounded-restart poweroff gets the instance replaced instead of left stopped."
   }
 
+  # Network exposure of the NAT: the ENI carries only the fck-nat SG, and that
+  # SG admits nothing but the VPC's own CIDR.
+  assert {
+    condition     = toset(aws_network_interface.fck_nat[0].security_groups) == toset([aws_security_group.fck_nat[0].id])
+    error_message = "The persistent ENI must carry exactly the fck-nat security group; with none, the VPC default group applies."
+  }
+
+  assert {
+    condition = length(aws_security_group.fck_nat[0].ingress) > 0 && alltrue([
+      for r in aws_security_group.fck_nat[0].ingress :
+      toset(r.cidr_blocks) == toset([var.vpc_cidr]) && length(coalesce(r.ipv6_cidr_blocks, [])) == 0 && length(coalesce(r.security_groups, [])) == 0 && length(coalesce(r.prefix_list_ids, [])) == 0
+    ])
+    error_message = "Every fck-nat security group ingress rule must admit only the VPC CIDR: no 0.0.0.0/0, no ::/0, no other source."
+  }
+
+  assert {
+    condition     = aws_launch_template.fck_nat[0].metadata_options[0].http_tokens == "required"
+    error_message = "The fck-nat launch template must require IMDSv2 (http_tokens = required)."
+  }
+
   assert {
     condition = anytrue([
       for s in jsondecode(aws_iam_role_policy.fck_nat_ec2[0].policy).Statement :
