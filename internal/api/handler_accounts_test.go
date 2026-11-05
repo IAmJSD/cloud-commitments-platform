@@ -1080,12 +1080,8 @@ func TestSaveAccountServiceOverride_InvalidCombo_Returns400(t *testing.T) {
 		auth:   mockAuth,
 		config: store,
 		commitmentOpts: &stubCommitmentOpts{
-			validateFn: func(_ context.Context, provider, service string, term int, payment string) (bool, error) {
-				assert.Equal(t, "aws", provider)
-				assert.Equal(t, "rds", service)
-				assert.Equal(t, 3, term)
-				assert.Equal(t, "no-upfront", payment)
-				return false, nil
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				return commitmentopts.Options{"aws": {"rds": {{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"}}}}, nil
 			},
 		},
 	}
@@ -1115,8 +1111,8 @@ func TestSaveAccountServiceOverride_ValidCombo_Saves(t *testing.T) {
 		auth:   mockAuth,
 		config: store,
 		commitmentOpts: &stubCommitmentOpts{
-			validateFn: func(context.Context, string, string, int, string) (bool, error) {
-				return true, nil
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				return commitmentopts.Options{"aws": {"rds": {{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"}}}}, nil
 			},
 		},
 	}
@@ -1163,8 +1159,8 @@ func TestSaveAccountServiceOverride_NoProbeData_Permissive(t *testing.T) {
 			auth:   mockAuth,
 			config: store,
 			commitmentOpts: &stubCommitmentOpts{
-				validateFn: func(context.Context, string, string, int, string) (bool, error) {
-					return false, commitmentopts.ErrNoData
+				getFn: func(context.Context) (commitmentopts.Options, error) {
+					return nil, commitmentopts.ErrNoData
 				},
 			},
 		}

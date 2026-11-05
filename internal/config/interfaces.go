@@ -679,6 +679,12 @@ type StoreInterface interface {
 	// write them in a consistent key order. A write that changes no setting
 	// records nothing. override is updated to the stored row.
 	SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, override *AccountServiceOverride, audit AuditContext) error
+	// UpdateAccountServiceOverrideAtomic serializes a read-merge-write of one
+	// override under the same lock as SaveAccountServiceOverrideAuditedTx and
+	// audits the write. merge receives the stored row (nil when none) and
+	// returns the full row to write; its error aborts the write and is
+	// propagated unchanged. Returns the saved row.
+	UpdateAccountServiceOverrideAtomic(ctx context.Context, accountID, provider, service string, audit AuditContext, merge func(existing *AccountServiceOverride) (*AccountServiceOverride, error)) (*AccountServiceOverride, error)
 	// DeleteAccountServiceOverrideAuditedTx deletes the override inside the
 	// caller's transaction and records the deleted row in config_audit_events.
 	// Deleting a missing override records nothing.

@@ -79,6 +79,16 @@ type AccountServiceOverrideRequest struct {
 	ExcludeTypes   []string `json:"exclude_types,omitempty"`
 }
 
+// serviceOverrideOverlayKeys are the JSON keys of AccountServiceOverrideRequest.
+// A key present in the PUT body replaces the stored value (null clears it); an
+// absent key keeps it.
+var serviceOverrideOverlayKeys = []string{
+	"enabled", "term", "payment", "coverage", "ramp_schedule",
+	"include_engines", "exclude_engines",
+	"include_regions", "exclude_regions",
+	"include_types", "exclude_types",
+}
+
 // validCredentialTypes is the set of accepted credential type names.
 var validCredentialTypes = map[string]bool{
 	"aws_access_keys":              true,
@@ -1171,10 +1181,13 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	_, err = h.requireAccountAccess(ctx, session, accountID)
+	account, err := h.requireAccountAccess(ctx, session, accountID)
 	if err != nil {
 		return nil, err
 	}
+	// The store's lock key is built from the id, so every spelling of one
+	// account must reach it as the stored (canonical) one.
+	accountID = account.ID
 
 	var req AccountServiceOverrideRequest
 	err = json.Unmarshal([]byte(httpReq.Body), &req)
@@ -1182,19 +1195,39 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	now := time.Now()
-	existing, err := h.config.GetAccountServiceOverride(ctx, accountID, provider, service)
+	present, err := presentKeys(httpReq.Body, serviceOverrideOverlayKeys)
 	if err != nil {
-		return nil, fmt.Errorf("accounts: get existing override: %w", err)
+		return nil, err
 	}
 
-	override := buildServiceOverride(accountID, provider, service, req, existing, now)
+	// Fetch the commitment options before the transaction opens: the merge
+	// callback runs while it holds a pooled connection, so it must not take
+	// another (see commitmentOptsSnapshot).
+	combos := h.prefetchCommitmentOptions(ctx, provider)
 
-	// Defense-in-depth: reject invalid (term, payment) combos before persisting.
-	// checkCommitmentOptionCombo is permissive when commitmentOpts is nil or
-	// probe data is absent (ErrNoData) — the frontend's hardcoded rules are the
-	// primary gate in those cases.
-	if err := h.checkCommitmentOptionCombo(ctx, config.ServiceConfig{
+	// The read, merge and write run in one locked transaction (issue #1775),
+	// so two single-field PUTs cannot merge onto the same stale row and lose
+	// one change. The audit event commits with the write (issue #1493).
+	audit := config.AuditContext{Actor: configAuditActor(session)}
+	override, err := h.config.UpdateAccountServiceOverrideAtomic(ctx, accountID, provider, service, audit,
+		func(existing *config.AccountServiceOverride) (*config.AccountServiceOverride, error) {
+			return mergeAndValidateServiceOverride(accountID, provider, service, req, existing, present, combos)
+		})
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+
+	return override, nil
+}
+
+// mergeAndValidateServiceOverride is the read-merge step of an override PUT,
+// run inside the store's locked transaction: it merges the request onto the
+// stored row, then rejects an invalid (term, payment) combo on the merged
+// result. The check is permissive when no probe data exists, as for the
+// service-config PUT. It does no I/O.
+func mergeAndValidateServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, present map[string]bool, combos commitmentOptsSnapshot) (*config.AccountServiceOverride, error) {
+	override := buildServiceOverride(accountID, provider, service, req, existing, present, time.Now())
+	if err := combos.check(config.ServiceConfig{
 		Provider: override.Provider,
 		Service:  override.Service,
 		Term:     derefInt(override.Term),
@@ -1202,81 +1235,65 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 	}); err != nil {
 		return nil, err
 	}
-
-	// The write and its config_audit_events row commit together (issue #1493).
-	audit := config.AuditContext{Actor: configAuditActor(session)}
-	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		return h.config.SaveAccountServiceOverrideAuditedTx(ctx, tx, override, audit)
-	}); err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-
 	return override, nil
 }
 
-// buildServiceOverride constructs an AccountServiceOverride from request and existing data.
-func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, now time.Time) *config.AccountServiceOverride {
-	override := &config.AccountServiceOverride{
-		AccountID: accountID,
-		Provider:  provider,
-		Service:   service,
-		UpdatedAt: now,
-	}
-
+// buildServiceOverride constructs an AccountServiceOverride by overlaying the
+// request onto the stored row (or an empty one). present names the request
+// keys the body carried: only those replace the stored value, so a one-field
+// PUT keeps the rest (#1775). A present key with a null value clears it.
+func buildServiceOverride(accountID, provider, service string, req AccountServiceOverrideRequest, existing *config.AccountServiceOverride, present map[string]bool, now time.Time) *config.AccountServiceOverride {
+	override := &config.AccountServiceOverride{}
 	if existing != nil {
-		override.ID = existing.ID
-		override.CreatedAt = existing.CreatedAt
+		*override = *existing
 	} else {
 		override.ID = uuid.New().String()
 		override.CreatedAt = now
 	}
+	override.AccountID, override.Provider, override.Service = accountID, provider, service
+	override.UpdatedAt = now
 
-	applyServiceOverrideFields(override, req)
+	overlayOverrideScalars(override, req, present)
+	overlayOverrideSlices(override, req, present)
 
 	return override
 }
 
-// applyServiceOverrideFields copies sparse request fields onto an override.
-func applyServiceOverrideFields(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
-	applyOverrideScalars(o, req)
-	applyOverrideSlices(o, req)
-}
-
-func applyOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
-	if req.Enabled != nil {
+func overlayOverrideScalars(o *config.AccountServiceOverride, req AccountServiceOverrideRequest, present map[string]bool) {
+	if present["enabled"] {
 		o.Enabled = req.Enabled
 	}
-	if req.Term != nil {
+	if present["term"] {
 		o.Term = req.Term
 	}
-	if req.Payment != nil {
+	if present["payment"] {
 		o.Payment = req.Payment
 	}
-	if req.Coverage != nil {
+	if present["coverage"] {
 		o.Coverage = req.Coverage
 	}
-	if req.RampSchedule != nil {
+	if present["ramp_schedule"] {
 		o.RampSchedule = req.RampSchedule
 	}
 }
 
-func applyOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest) {
-	if req.IncludeEngines != nil {
+func overlayOverrideSlices(o *config.AccountServiceOverride, req AccountServiceOverrideRequest, present map[string]bool) {
+	if present["include_engines"] {
 		o.IncludeEngines = req.IncludeEngines
 	}
-	if req.ExcludeEngines != nil {
+	if present["exclude_engines"] {
 		o.ExcludeEngines = req.ExcludeEngines
 	}
-	if req.IncludeRegions != nil {
+	if present["include_regions"] {
 		o.IncludeRegions = req.IncludeRegions
 	}
-	if req.ExcludeRegions != nil {
+	if present["exclude_regions"] {
 		o.ExcludeRegions = req.ExcludeRegions
 	}
-	if req.IncludeTypes != nil {
+	if present["include_types"] {
 		o.IncludeTypes = req.IncludeTypes
 	}
-	if req.ExcludeTypes != nil {
+	if present["exclude_types"] {
 		o.ExcludeTypes = req.ExcludeTypes
 	}
 }

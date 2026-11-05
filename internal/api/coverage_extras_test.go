@@ -221,10 +221,10 @@ func TestHandler_forgotPassword_RateLimitExceeded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// applyOverrideSlices — exercise all branches
+// overlayOverrideSlices — exercise all branches
 // ---------------------------------------------------------------------------
 
-func TestApplyOverrideSlices(t *testing.T) {
+func TestOverlayOverrideSlices(t *testing.T) {
 	override := &config.AccountServiceOverride{}
 	req := AccountServiceOverrideRequest{
 		IncludeEngines: []string{"mysql"},
@@ -235,7 +235,10 @@ func TestApplyOverrideSlices(t *testing.T) {
 		ExcludeTypes:   []string{"db.r5.large"},
 	}
 
-	applyOverrideSlices(override, req)
+	overlayOverrideSlices(override, req, map[string]bool{
+		"include_engines": true, "exclude_engines": true, "include_regions": true,
+		"exclude_regions": true, "include_types": true, "exclude_types": true,
+	})
 
 	assert.Equal(t, []string{"mysql"}, override.IncludeEngines)
 	assert.Equal(t, []string{"postgres"}, override.ExcludeEngines)
@@ -245,12 +248,12 @@ func TestApplyOverrideSlices(t *testing.T) {
 	assert.Equal(t, []string{"db.r5.large"}, override.ExcludeTypes)
 }
 
-func TestApplyOverrideSlices_NilFields(t *testing.T) {
+func TestOverlayOverrideSlices_AbsentKeysKept(t *testing.T) {
 	override := &config.AccountServiceOverride{
 		IncludeEngines: []string{"existing"},
 	}
-	// Nil fields should not overwrite existing values
-	applyOverrideSlices(override, AccountServiceOverrideRequest{})
+	// Keys absent from the body must not overwrite existing values
+	overlayOverrideSlices(override, AccountServiceOverrideRequest{}, map[string]bool{})
 	assert.Equal(t, []string{"existing"}, override.IncludeEngines)
 }
 
