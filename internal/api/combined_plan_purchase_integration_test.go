@@ -158,12 +158,15 @@ func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, 
 	if automatic {
 		creatorAuth.AssertCalled(t, "HasPermissionAPI", mock.Anything, f.creator, auth.ActionExecute, auth.ResourcePurchases)
 	}
-	f.first = time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 4)
-	require.GreaterOrEqual(t, time.Until(f.first), 72*time.Hour)
-	require.Less(t, time.Until(f.first), 96*time.Hour)
-	response = combinedRoute(t, f.handler, "POST", "/api/plans/"+f.planID+"/purchases", CreatePlannedPurchasesRequest{Count: 2, StartDate: f.first.Format("2006-01-02")})
+	// D5 refuses a start date before now+(N+1)d (N=3 here), so the fixture adds
+	// its purchases at today+5 and then simulates a day passing.
+	start := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 5)
+	response = combinedRoute(t, f.handler, "POST", "/api/plans/"+f.planID+"/purchases", CreatePlannedPurchasesRequest{Count: 2, StartDate: start.Format("2006-01-02")})
 	require.Equal(t, 200, response.StatusCode, response.Body)
 	assert.JSONEq(t, `{"created":2}`, response.Body)
+	f.first = f.shiftPlanBackOneDay(t, start)
+	require.GreaterOrEqual(t, time.Until(f.first), 72*time.Hour)
+	require.Less(t, time.Until(f.first), 96*time.Hour)
 	monthly := 1000.0
 	require.NoError(t, f.store.UpsertRecommendations(ctx, time.Now().UTC(), []config.RecommendationRecord{{
 		ID: "combined-azure-rec", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3",
@@ -188,6 +191,34 @@ func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, 
 	f.root = &rows[0]
 	f.service.rootID = f.root.ExecutionID
 	return f
+}
+
+// shiftPlanBackOneDay moves every date Add Purchases wrote 24h earlier, as if a
+// day had passed since the request: the root dates, the plan's next date and the
+// ramp's start_date (from which later dates derive). It returns the shifted
+// start after reading all three back to confirm they agree.
+func (f *combinedPlanFixture) shiftPlanBackOneDay(t *testing.T, start time.Time) time.Time {
+	t.Helper()
+	ctx := context.Background()
+	shifted := start.Add(-24 * time.Hour)
+	tag, err := f.pool.Exec(ctx, `UPDATE purchase_executions SET scheduled_date = scheduled_date - interval '24 hours' WHERE plan_id = $1`, f.planID)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, tag.RowsAffected())
+	_, err = f.pool.Exec(ctx, `UPDATE purchase_plans SET next_execution_date = next_execution_date - interval '24 hours',
+		ramp_schedule = jsonb_set(ramp_schedule, '{start_date}', to_jsonb(to_char($2::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))) WHERE id = $1`, f.planID, shifted)
+	require.NoError(t, err)
+	plan, err := f.store.GetPurchasePlan(ctx, f.planID)
+	require.NoError(t, err)
+	require.NotNil(t, plan.NextExecutionDate)
+	assert.True(t, plan.NextExecutionDate.Equal(shifted), "plan next date after the shift")
+	assert.True(t, plan.RampSchedule.StartDate.Equal(shifted), "ramp start_date after the shift")
+	first := f.rows(t, 1)
+	require.Len(t, first, 1)
+	assert.True(t, first[0].ScheduledDate.Equal(shifted), "step 1 root date after the shift")
+	second := f.rows(t, 2)
+	require.Len(t, second, 1)
+	assert.True(t, second[0].ScheduledDate.Equal(shifted.AddDate(0, 0, 7)), "step 2 root date after the shift")
+	return shifted
 }
 
 func (f *combinedPlanFixture) rows(t *testing.T, step int) []config.PurchaseExecution {
@@ -408,4 +439,15 @@ func TestCombinedPlanPurchase_PlannedProjectionReportsUnits(t *testing.T) {
 		return
 	}
 	t.Fatal("attached root absent from real planned-purchases API")
+}
+
+// D5 (#631) refuses the date this fixture used before the margin existed: with a
+// 3-day notice window, today+4 UTC midnight is under now+4d, so a tick could
+// not both see and attach its root.
+func TestCombinedPlanPurchase_OldFixtureDateGetsTheNoticeMargin409(t *testing.T) {
+	f := newCombinedPlanFixture(t, false, nil)
+	old := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 4)
+	response := combinedRoute(t, f.handler, "POST", "/api/plans/"+f.planID+"/purchases", CreatePlannedPurchasesRequest{Count: 1, StartDate: old.Format("2006-01-02")})
+	assert.Equal(t, 409, response.StatusCode, response.Body)
+	assert.Contains(t, response.Body, `"code":"start_date_inside_notice_margin"`)
 }

@@ -28,7 +28,7 @@ func TestB3C1VetoHelpers(t *testing.T) {
 			before := plan
 			beforeDate := *plan.NextExecutionDate
 			before.NextExecutionDate = &beforeDate
-			require.True(t, end.Equal(vetoWindowEnd(&plan, now)))
+			require.True(t, end.Equal(plan.VetoWindowEnd(now)))
 			want := date
 			if tc.clamp {
 				want = end

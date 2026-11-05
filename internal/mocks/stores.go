@@ -283,6 +283,25 @@ func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]con
 	return v, args.Error(1)
 }
 
+// GetDoomedNextRoots mocks the doomed-root report backing plan health.
+// Unregistered by default, like GetStuckRampSteps: no doomed root is the shape
+// of a plan with nothing wrong with it.
+func (m *MockConfigStore) GetDoomedNextRoots(ctx context.Context, now time.Time) (map[string]config.DoomedRoot, error) {
+	m.record("GetDoomedNextRoots", ctx, now)
+	if !isExpected(&m.Mock, "GetDoomedNextRoots") {
+		return map[string]config.DoomedRoot{}, nil
+	}
+	args := m.Called(ctx, now)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(map[string]config.DoomedRoot)
+	if !ok {
+		m.reporter.wrongReturnType("GetDoomedNextRoots", "map[string]config.DoomedRoot", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 // LockPurchasePlanTx mocks the per-plan ramp lock. Falls back to
 // GetPurchasePlan when no expectation is registered, so tests that only care
 // about what the transaction writes keep working: the lock is a concurrency

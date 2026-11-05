@@ -81,6 +81,12 @@ type StoreInterface interface {
 	// nothing stuck are absent from the map. Feeds the plan-health
 	// ramp_blocked factor (issue #1861).
 	GetStuckRampSteps(ctx context.Context) (map[string]RampStepBlock, error)
+	// GetDoomedNextRoots returns, keyed by plan ID, the plans whose next
+	// empty root row is dated where the notification tick can never attach
+	// recommendations (inside the notice window, or any future date when the
+	// plan has no window), evaluated at now. Plans with nothing doomed are
+	// absent. Feeds the plan-health step_will_not_attach factor.
+	GetDoomedNextRoots(ctx context.Context, now time.Time) (map[string]DoomedRoot, error)
 	// LockPurchasePlanTx reads a plan under a row lock held for the rest of tx.
 	// It is the per-plan ramp lock CompletePlanStep takes, exposed so a caller
 	// that reads a plan's ramp position and then writes against it does so

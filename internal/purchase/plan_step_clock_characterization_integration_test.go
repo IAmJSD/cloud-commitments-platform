@@ -217,7 +217,7 @@ func TestB3C1CompletionNotification(t *testing.T) {
 						want = 1
 						require.Len(t, state.rows[2], 1)
 						for _, clock := range []time.Time{before, after} {
-							require.False(t, state.rows[2][0].ScheduledDate.Before(vetoWindowEnd(state.plan, clock)), "inconclusive veto bracket")
+							require.False(t, state.rows[2][0].ScheduledDate.Before(state.plan.VetoWindowEnd(clock)), "inconclusive veto bracket")
 						}
 						require.Equal(t, "notified", state.rows[2][0].Status)
 						require.Equal(t, 20, totalCount(&state.rows[2][0]))

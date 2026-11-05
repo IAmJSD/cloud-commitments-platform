@@ -46,7 +46,7 @@ func (h *Handler) listPlans(ctx context.Context, req *events.LambdaFunctionURLRe
 	}
 
 	// Ensure all enabled plans have NextExecutionDate calculated
-	now := time.Now()
+	now := h.clock()
 	for i := range plans {
 		if plans[i].Enabled && plans[i].NextExecutionDate == nil {
 			plans[i].NextExecutionDate = calculateNextExecutionDate(&plans[i], now)
@@ -114,8 +114,16 @@ func (h *Handler) attachPlanHealth(ctx context.Context, plans []config.PurchaseP
 		return result
 	}
 
+	// Same reasoning: a doomed root is worth 25 points and only subtracts, so
+	// an unreadable report withholds every score instead of erring healthy.
+	doomedByPlan, err := h.config.GetDoomedNextRoots(ctx, now)
+	if err != nil {
+		logging.Warnf("listPlans: GetDoomedNextRoots failed, plan health reported as unknown: %v", err)
+		return result
+	}
+
 	for i := range plans {
-		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID], stuckByPlan[plans[i].ID])
+		score, factors := computePlanHealth(plans[i], now, countsByPlan[plans[i].ID], stuckByPlan[plans[i].ID], doomedByPlan[plans[i].ID])
 		result[i].HealthScore = &score
 		result[i].HealthFactors = factors
 	}
@@ -674,10 +682,34 @@ func (h *Handler) validatePurchaseScheduling(ctx context.Context, plan *config.P
 	// day: tomorrow (UTC) is the first accepted date. The check runs here,
 	// under the plan lock, because a request can wait on that lock past
 	// UTC midnight (#873, #50).
-	if !startDate.After(h.clock()) {
+	now := h.clock()
+	if !startDate.After(now) {
 		return NewClientError(400, "start_date must be in the future")
 	}
-	return nil
+	return requireStartDateOutsideNoticeMargin(plan, startDate, now)
+}
+
+// codeStartDateInsideNoticeMargin is the body code of the 409 for a start date
+// too close to now for the plan's notice window.
+const codeStartDateInsideNoticeMargin = "start_date_inside_notice_margin"
+
+// requireStartDateOutsideNoticeMargin refuses a start date D < now + (N+1) x 24h
+// (D5 of #631). The notification tick sees a plan only when D-now < (N+1) days
+// and attaches recommendations only when D >= now + N days, so a root attaches
+// from a tick in the 24h slice (D-(N+1)d, D-Nd]. D >= now+(N+1)d keeps that
+// whole slice in the future, where a daily sweep reaches it. The message names
+// the first UTC midnight at or after the threshold, derived from the plan's own N.
+func requireStartDateOutsideNoticeMargin(plan *config.PurchasePlan, startDate, now time.Time) error {
+	threshold := plan.VetoWindowEnd(now).Add(24 * time.Hour)
+	if !startDate.Before(threshold) {
+		return nil
+	}
+	earliest := time.Date(threshold.Year(), threshold.Month(), threshold.Day(), 0, 0, 0, 0, time.UTC)
+	if earliest.Before(threshold) {
+		earliest = earliest.AddDate(0, 0, 1)
+	}
+	return planEditorRefusal(http.StatusConflict, codeStartDateInsideNoticeMargin,
+		"start_date leaves too little notice before the first purchase; choose a start date on or after "+earliest.Format("2006-01-02"))
 }
 
 // clock returns the handler's current time: the injected now func when a
