@@ -48,7 +48,7 @@ func versionBeforeCanceledContract(t *testing.T, dir string) uint {
 }
 
 // TestCancelOrRecoverExecution_LegacyCanceledRowBeforeContractMigration runs
-// the cancel-race recovery on the schema before 000155 against a row an older
+// the cancel-race recovery on the schema before 000157 against a row an older
 // build canceled (legacy status spelling, actor only in the legacy column). The
 // build and the migration roll out in either order, so the retry must see the
 // race as already won, return the canonical status and keep the actor.

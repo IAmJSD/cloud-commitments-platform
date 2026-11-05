@@ -58,7 +58,7 @@ func versionBelowCanceledContract(t *testing.T, dir string) uint {
 }
 
 // TestPostgresStore_NewCodeAgainstPreContractSchema runs the new store code on
-// the schema before 000155 with rows an older build wrote: the legacy status
+// the schema before 000157 with rows an older build wrote: the legacy status
 // spelling and an actor only in the legacy column. Every reader must treat them as
 // canceled with their actor, and the new writers must not lose them.
 func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {
