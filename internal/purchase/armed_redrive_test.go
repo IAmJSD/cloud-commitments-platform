@@ -108,6 +108,9 @@ func armedHarness(t *testing.T, serviceType common.ServiceType) (*Manager, *Mock
 	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil).Maybe()
 	store.On("CompletePlanStep", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
+	stampedAt := time.Now().UTC()
+	store.On("StampFirstDispatchTx", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(config.StampResult{At: &stampedAt, WithinHorizon: true}, nil).Maybe()
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil).Maybe()
 
 	factory.On("CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything).Return(prov, nil).Maybe()

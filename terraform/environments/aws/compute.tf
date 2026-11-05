@@ -2,6 +2,9 @@
 # Compute Platform: Lambda (default)
 # ==============================================
 
+# The Function URL is public by design (AuthType NONE): the API authenticates
+# every route, and no CloudFront/OAC cut-over is planned (#16, not planned).
+#
 # Lambda Function URL auth type is fully derived from enable_cdn. There is no
 # operator-facing variable for it: the two valid combinations are
 #
@@ -14,11 +17,11 @@
 #     CloudFront fronts the URL with an OAC that SigV4-signs every request
 #     (see frontend module's aws_cloudfront_origin_access_control.lambda).
 #     The Function URL rejects anything not signed by CloudFront's OAC,
-#     closing the public-internet exposure described in #424.
+#     Not the supported path: the Function URL is public by design (#16).
 #
 # Tying the two flags together prevents two specific mis-configurations:
 #   (a) enable_cdn = true with auth_type = "NONE" -> public Lambda URL behind
-#       a pointless CloudFront (security goal of #424 defeated).
+#       a pointless CloudFront.
 #   (b) enable_cdn = false with auth_type = "AWS_IAM" -> direct browser hits
 #       to Function URL return 403 (no way to sign), site is unreachable.
 locals {

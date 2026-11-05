@@ -1936,8 +1936,9 @@ func TestMapAWSExchangeError_ClientFault4xx(t *testing.T) {
 			ce, ok := IsClientError(mapped)
 			require.True(t, ok, "must be ClientError")
 			assert.Equal(t, 400, ce.code, "client-fault codes must map to 400")
-			assert.Contains(t, mapped.Error(), "AWS says: bad input",
-				"AWS error message must be preserved")
+			assert.Contains(t, mapped.Error(), "the exchange request was rejected as invalid",
+				"a fixed provider-neutral message replaces the provider text")
+			assert.NotContains(t, mapped.Error(), "AWS says: bad input")
 		})
 	}
 }

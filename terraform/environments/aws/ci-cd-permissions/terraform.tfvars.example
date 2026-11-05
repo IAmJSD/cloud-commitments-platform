@@ -22,6 +22,19 @@ aws_region = "us-east-1"
 #
 github_repo = "LeanerCloud/cloud-commitments-platform"
 
+# ─── github_owner_id / github_repo_id ───────────────────────────────────────────
+# Immutable numeric ids. Trust subjects are built as
+# repo:<owner>@<owner_id>/<name>@<repo_id>:..., so a renamed or re-created
+# repository (same name, new id) cannot match. Required; look them up with:
+#   gh api repos/LeanerCloud/cloud-commitments-platform --jq '.owner.id, .id'
+# The repo must have the immutable OIDC subject enabled (Settings > Actions >
+# OIDC); this must show use_immutable_subject true:
+#   gh api repos/LeanerCloud/cloud-commitments-platform/actions/oidc/customization/sub
+# Bootstrap module: applied by a privileged human, staging first; agents never apply.
+#
+github_owner_id = "86753534"
+github_repo_id  = "1391259743"
+
 # ─── trust_principal ───────────────────────────────────────────────────────────
 # (Optional) IAM principal in the same account allowed to assume the deploy
 # role via sts:AssumeRole — useful for local developer deployments.

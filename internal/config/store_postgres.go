@@ -1178,8 +1178,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
-			idempotency_key, scheduled_execution_at, no_submission, created_by_system
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+			idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -1216,7 +1216,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		planIDArg = execution.PlanID
 	}
 
-	// created_by_user_id, created_by_system and retry_attempt_n are INSERT-only: the original
+	// created_by_user_id, created_by_system, first_dispatch_at and retry_attempt_n are INSERT-only: the original
 	// creator and the retry-chain position must not be rewritten by an
 	// ON CONFLICT update (e.g. the scheduler upserting status transitions).
 	// They are omitted from the DO UPDATE SET clause above.
@@ -1259,6 +1259,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.ScheduledExecutionAt,
 		execution.NoSubmission,
 		execution.CreatedBySystem,
+		execution.FirstDispatchAt,
 	)
 
 	if err != nil {
@@ -1426,7 +1427,7 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, q executi
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
-		          idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		          idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 	`
 
 	records, err := queryExecutionsOn(ctx, q, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
@@ -1690,7 +1691,7 @@ func (s *PostgresStore) GetExecutionsByStatusesFiltered(ctx context.Context, q E
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE ` + strings.Join(conds, "\n\t\t  AND ") + `
 		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
@@ -1802,7 +1803,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date ASC NULLS LAST, id ASC
@@ -1827,7 +1828,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
@@ -1869,7 +1870,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND updated_at < NOW() - $2::interval
@@ -1890,7 +1891,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1972,7 +1973,7 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE source = $3
 		  AND status IN (` + submitDedupeStatuses + `)
@@ -2007,7 +2008,7 @@ func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID str
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -2053,7 +2054,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -2257,6 +2258,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&scheduledExecutionAt,
 			&exec.NoSubmission,
 			&exec.CreatedBySystem,
+			&exec.FirstDispatchAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -2298,7 +2300,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions
 		WHERE status = 'scheduled'
 		  AND scheduled_execution_at IS NOT NULL
@@ -2948,13 +2950,16 @@ func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
 // offering_class and look up the cloud account (issue #292). Rows saved before
 // migration 000108 can share a purchase_id; the earliest one (created_at, then
 // id) is returned, the same row ClaimMarketplaceListingSlot claims (#267).
+// return_posted_at (migration 000148) is read last so the revoke handler can
+// tell an accepted Azure Return from one still in progress (issue #1522).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
 		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
-		       revocation_in_flight, offering_class, listing_id, listing_state
+		       revocation_in_flight, offering_class, listing_id, listing_state,
+		       return_posted_at
 		FROM purchase_history
 		WHERE purchase_id = $1
 		ORDER BY created_at, id
@@ -3002,6 +3007,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		&n.offeringClass,
 		&n.listingID,
 		&n.listingState,
+		&r.ReturnPostedAt,
 	); err != nil {
 		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
 	}

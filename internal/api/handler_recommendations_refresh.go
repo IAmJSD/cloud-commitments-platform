@@ -157,7 +157,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context, token string) (*confi
 		if err != nil {
 			return nil, fmt.Errorf("failed to read freshness after async invoke: %w", err)
 		}
-		return freshness, nil
+		return withSanitizedCollectionError(freshness), nil
 	}
 	// Non-Lambda (HTTP) mode: collect synchronously. ClearCollectionStarted
 	// is called by the scheduler's deferred clearCollectionStartedBestEffort,
@@ -169,7 +169,7 @@ func (h *Handler) runMarkedCollection(ctx context.Context, token string) (*confi
 	if err != nil {
 		return nil, fmt.Errorf("failed to read freshness after collect: %w", err)
 	}
-	return freshness, nil
+	return withSanitizedCollectionError(freshness), nil
 }
 
 // rollbackMarkedCollection releases this caller's own in-flight marker after

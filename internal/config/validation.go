@@ -700,7 +700,7 @@ func (r *RampSchedule) Validate() error {
 
 func (r *RampSchedule) ValidateAllocationMode() error {
 	switch r.AllocationMode {
-	case "":
+	case "", RampAllocationBoundGroups:
 		return nil
 	case RampAllocationEqualCount:
 		if r.TotalSteps < 1 || r.TotalSteps > MaxTotalSteps || (r.Type == "immediate" && r.TotalSteps != 1) {

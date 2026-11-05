@@ -43,6 +43,10 @@ const (
 	// an attacker repeatedly requests resets to perpetually invalidate the victim's
 	// legitimate link.
 	PasswordResetRateLimit = 1 * time.Minute
+
+	// resetClockSkewMargin is the allowance for instances whose clocks differ when
+	// telling an invite token from a reset token by remaining lifetime.
+	resetClockSkewMargin = 5 * time.Minute
 )
 
 // commonPasswords is a list of commonly used weak passwords to reject
@@ -306,7 +310,8 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 //
 // The stored token is either a reset token (PasswordResetExpiry) or an invite
 // token (PasswordSetupExpiry), and only its expiry is stored. A reset token
-// never has more than PasswordResetExpiry left, so a longer remaining window
+// never has more than PasswordResetExpiry left (plus resetClockSkewMargin for
+// clock differences between instances), so a longer remaining window
 // identifies an invite; deriving an invite's age from the reset lifetime made
 // it negative for the whole week, silently dropping every "re-send my setup
 // link" request (audit finding A03-009). A remaining window beyond even the
@@ -317,7 +322,7 @@ func resetRecentlyIssued(user *User, email string) bool {
 	}
 	remaining := time.Until(*user.PasswordResetExpiry)
 	lifetime := PasswordResetExpiry
-	if remaining > PasswordResetExpiry {
+	if remaining > PasswordResetExpiry+resetClockSkewMargin {
 		lifetime = PasswordSetupExpiry
 	}
 	tokenAge := lifetime - remaining

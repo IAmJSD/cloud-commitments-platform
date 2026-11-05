@@ -126,21 +126,20 @@ variable "vpc_config" {
 }
 
 
+# NONE is by design: the API authenticates every route and the URL is meant to be public (#16).
 variable "function_url_auth_type" {
   description = <<-EOT
-    Function URL authorization type. Use "AWS_IAM" (default, recommended) when a
-    CloudFront distribution with an OAC is deployed in front of the Function URL —
-    AWS then enforces SigV4 signing on every request so the Function URL is
-    unreachable without a valid AWS identity.
-    Use "NONE" only in environments where direct access without CloudFront is
-    acceptable (e.g. local dev, or environments not yet provisioned with CloudFront).
+    Function URL authorization type. "NONE" (default) is by design: the Function
+    URL is public and the API authenticates every route (session, CSRF, API
+    keys); browsers cannot SigV4-sign, so "AWS_IAM" is only for callers that
+    front the URL with a signing proxy such as CloudFront with an OAC.
     This module only creates the public lambda:InvokeFunctionUrl permission for "NONE".
     With "AWS_IAM" the caller must grant invocation itself, e.g. an
     aws_lambda_permission for principal cloudfront.amazonaws.com scoped to the
     distribution ARN (see environments/aws/compute.tf).
   EOT
   type        = string
-  default     = "AWS_IAM"
+  default     = "NONE"
 
   validation {
     condition     = contains(["NONE", "AWS_IAM"], var.function_url_auth_type)

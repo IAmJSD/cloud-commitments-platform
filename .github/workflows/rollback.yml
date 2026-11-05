@@ -296,6 +296,9 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
+          TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
+          TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
@@ -442,6 +445,7 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AWS }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
@@ -519,6 +523,7 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_GCP }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
@@ -619,9 +624,10 @@ jobs:
       - name: Rollback with Terraform
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          TF_VAR_key_vault_name: ${{ vars.KEY_VAULT_NAME }}
           TF_BACKEND: ${{ secrets.TF_BACKEND_AZURE }}
+          AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
           ENVIRONMENT: ${{ inputs.environment }}
           IMAGE_URI: ${{ needs.validate.outputs.image_uri }}
         run: |
@@ -632,7 +638,8 @@ jobs:
 
           terraform apply -auto-approve \
             -var-file="github-${ENVIRONMENT}.tfvars" \
-            -var="image_uri=${IMAGE_URI}"
+            -var="image_uri=${IMAGE_URI}" \
+            -var="location=${AZURE_LOCATION}"
 
   # Summary
   summary:

@@ -515,7 +515,8 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	assert.Contains(t, result.FailedProviders, "azure ")
 	mockStore.AssertCalled(t, "SetRecommendationsCollectionError", mock.Anything, mock.AnythingOfType("string"))
 	assert.Contains(t, recordedErr, `unknown provider "AWS"`)
-	assert.Contains(t, recordedErr, `unknown provider "azure "`)
+	assert.NotContains(t, recordedErr, `"azure "`, "a name outside the token alphabet shows only the fixed head")
+	assert.Contains(t, recordedErr, "azure : unknown provider")
 }
 
 func TestScheduler_CollectAWSRecommendations(t *testing.T) {

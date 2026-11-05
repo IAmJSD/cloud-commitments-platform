@@ -303,11 +303,10 @@ variable "lambda_timeout" {
 
 
 # Lambda Function URL auth type is derived from var.enable_cdn (see
-# local.lambda_function_url_auth_type in compute.tf). When enable_cdn = true
-# the Function URL is fronted by CloudFront with OAC + SigV4, so auth is
-# AWS_IAM; when enable_cdn = false the browser hits the Function URL directly
-# and the SPA cannot SigV4-sign, so auth is NONE and the application layer
-# (login session, CSRF, API keys) is the gate.
+# local.lambda_function_url_auth_type in compute.tf). The Function URL is
+# public by design (NONE, #16): the SPA hits it directly, cannot SigV4-sign,
+# and the application layer (login session, CSRF, API keys) is the gate.
+# enable_cdn = true switches it to AWS_IAM behind CloudFront with OAC.
 
 variable "lambda_allowed_origins" {
   description = "CORS allowed origins"

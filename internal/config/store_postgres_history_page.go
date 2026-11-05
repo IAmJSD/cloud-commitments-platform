@@ -223,7 +223,7 @@ func (s *PostgresStore) ListHistoryExecutionsPage(ctx context.Context, q History
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system, first_dispatch_at
 		FROM purchase_executions%s
 		ORDER BY scheduled_date DESC, execution_id DESC
 		LIMIT $%d

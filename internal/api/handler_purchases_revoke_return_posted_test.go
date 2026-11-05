@@ -72,8 +72,9 @@ func TestCallAzureReturn_ReturnErrorRecordsNothing(t *testing.T) {
 	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-fail"}
 	returnClient := &stubReturnClient{err: errors.New("dial tcp: connection refused")}
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
-	require.Error(t, err)
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+	require.NoError(t, err)
+	assertPendingConfirmation(t, result)
 	mockStore.AssertNotCalled(t, "MarkRevocationReturnPosted")
 	mockStore.AssertNotCalled(t, "MarkPurchaseRevoked")
 }

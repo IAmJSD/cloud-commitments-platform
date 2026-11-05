@@ -163,6 +163,10 @@ type ApplicationConfig struct {
 	// (EventBridge rate()/cron() or five-field cron), empty when scheduled
 	// collection is off. Only read to report the next run (issue #756).
 	RecommendationSchedule string
+	// FireSweepOff is FIRE_SWEEP_SCHEDULED=false: Terraform scheduled no
+	// fire_scheduled_purchases sweep, so delayed purchases cannot execute
+	// (issue #1588). Unset means unknown and leaves saves unrestricted.
+	FireSweepOff bool
 	// authBcryptCost is passed to auth.ServiceConfig.BcryptCost. Only tests
 	// in this package set it; zero keeps the production bcrypt cost.
 	authBcryptCost int
@@ -356,6 +360,7 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 		IsLambda:                runtime.IsLambda(),
 		Analytics:               analyticsConfig,
 		RecommendationSchedule:  os.Getenv("RECOMMENDATION_SCHEDULE"),
+		FireSweepOff:            os.Getenv("FIRE_SWEEP_SCHEDULED") == "false",
 	}, nil
 }
 
@@ -617,6 +622,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		IsLambda:          cfg.IsLambda,
 
 		RecommendationSchedule: cfg.RecommendationSchedule,
+		FireSweepOff:           cfg.FireSweepOff,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -1012,6 +1018,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		IsLambda:            app.appConfig.IsLambda,
 
 		RecommendationSchedule: app.appConfig.RecommendationSchedule,
+		FireSweepOff:           app.appConfig.FireSweepOff,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")

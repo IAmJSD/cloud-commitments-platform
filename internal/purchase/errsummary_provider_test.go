@@ -142,36 +142,79 @@ func TestSanitizeStoredError_WholeRemainderReplaced(t *testing.T) {
 }
 
 func TestIsDefiniteAWSRefusal(t *testing.T) {
-	aws := func(status, code string) string {
-		return "operation error EC2: X, https response error StatusCode: " + status + ", RequestID: r, api error " + code + ": msg"
+	sdk := func(svc, status, code string) string {
+		return "operation error " + svc + ": X, https response error StatusCode: " + status + ", RequestID: r, api error " + code + ": msg"
 	}
+	retried := func(svc, status, code string) string {
+		return "operation error " + svc + ": X, exceeded maximum number of attempts, 3, https response error StatusCode: " + status + ", RequestID: r, api error " + code + ": msg"
+	}
+	ec2 := func(status, code string) string { return "failed to purchase EC2 RI: " + sdk("EC2", status, code) }
+	storedEC2 := "m5.large: purchase failed: failed to purchase EC2 RI: operation error EC2: PurchaseReservedInstancesOffering, https response error StatusCode: 403, RequestID: 11111111-2222-3333-4444-555555555555, api error UnauthorizedOperation: You are not authorized to perform this operation (account 123456789012)"
+	storedRedshift := "ra3.xlplus: purchase failed: failed to purchase Redshift Reserved Node: " + sdk("Redshift", "400", "InvalidParameterValue")
 	azure429 := "PUT https://management.azure.com/x\nRESPONSE 429: 429 Too Many\nERROR CODE: TooManyRequests"
 	gcp := "commitment creation failed: googleapi: Error 403: Rate Limit Exceeded, rateLimitExceeded"
-	cases := []struct {
+	type tc struct {
 		name string
 		recs []string
 		err  string
 		want bool
-	}{
-		{"aws 403 denied", []string{"aws"}, aws("403", "UnauthorizedOperation"), true},
-		{"legacy empty provider", []string{""}, aws("403", "AccessDenied"), true},
-		{"aws throttle 400", []string{"aws"}, aws("400", "Throttling"), true},
-		{"aws invalid offering", []string{"aws"}, aws("400", "InvalidParameterValue"), true},
-		{"per-rec segments", []string{"aws", "aws"}, "a: " + aws("403", "AccessDenied") + "; b: " + aws("400", "Throttling"), true},
-		{"partial prefix", []string{"aws"}, partialRunPrefix + "a: " + aws("403", "AccessDenied"), true},
-		{"5xx", []string{"aws"}, aws("503", "AccessDenied"), false},
-		{"no code", []string{"aws"}, "operation error EC2: X, https response error StatusCode: 403", false},
-		{"unlisted code", []string{"aws"}, aws("400", "SomethingOdd"), false},
+	}
+	retrying := []struct{ head, svc string }{
+		{"failed to purchase RDS RI: ", "RDS"},
+		{"failed to purchase Reserved Cache Node: ", "ElastiCache"},
+		{"failed to purchase OpenSearch RI: ", "OpenSearch"},
+		{"failed to purchase MemoryDB Reserved Nodes: ", "MemoryDB"},
+		{"failed to purchase Savings Plan: ", "savingsplans"},
+	}
+	base := []tc{
+		{"ec2 403 denied", []string{"aws"}, ec2("403", "UnauthorizedOperation"), true},
+		{"empty provider is not aws", []string{""}, ec2("403", "AccessDenied"), false},
+		{"empty provider beside aws", []string{"aws", ""}, ec2("403", "AccessDenied"), false},
+		{"ec2 stored shape", []string{"aws"}, storedEC2, true},
+		{"redshift stored shape", []string{"aws"}, storedRedshift, true},
+		{"stored shape without resource type", []string{"aws"}, "purchase failed: " + ec2("403", "AccessDenied"), true},
+		{"stored shape without purchase failed", []string{"aws"}, "m5.large: " + ec2("403", "AccessDenied"), true},
+		{"stored shape, two recs", []string{"aws", "aws"}, storedEC2 + "; " + storedRedshift, true},
+		{"stored shape, partial prefix", []string{"aws"}, partialRunPrefix + storedEC2, true},
+		{"bare sdk error, no library head", []string{"aws"}, sdk("EC2", "403", "AccessDenied"), false},
+		{"resource token, no library head", []string{"aws"}, "m5.large: " + sdk("EC2", "403", "AccessDenied"), false},
+		{"unknown head before operation error", []string{"aws"}, "m5.large: purchase failed: something else: " + sdk("EC2", "403", "AccessDenied"), false},
+		{"unknown library head", []string{"aws"}, "m5.large: purchase failed: failed to purchase GPU RI: " + sdk("EC2", "403", "AccessDenied"), false},
+		{"head in another case", []string{"aws"}, "Failed to purchase EC2 RI: " + sdk("EC2", "403", "AccessDenied"), false},
+		{"head after another head", []string{"aws"}, "purchase failed: purchase failed: " + ec2("403", "AccessDenied"), false},
+		{"stored shape 5xx", []string{"aws"}, strings.Replace(storedEC2, "StatusCode: 403", "StatusCode: 503", 1), false},
+		{"stored shape outcome unknown", []string{"aws"}, "m5.large: purchase failed: purchase outcome unknown: " + ec2("403", "AccessDenied"), false},
+		{"status outside the response error", []string{"aws"}, "failed to purchase EC2 RI: operation error EC2: X, https request send failed: StatusCode: 403, api error AccessDenied: msg", false},
+		{"ec2 throttle 400", []string{"aws"}, ec2("400", "Throttling"), true},
+		{"ec2 invalid offering", []string{"aws"}, ec2("400", "InvalidParameterValue"), true},
+		{"per-rec segments", []string{"aws", "aws"}, "a: " + ec2("403", "AccessDenied") + "; b: " + ec2("400", "Throttling"), true},
+		{"ec2 retry exhausted", []string{"aws"}, "failed to purchase EC2 RI: " + retried("EC2", "400", "Throttling"), false},
+		{"redshift retry exhausted", []string{"aws"}, "failed to purchase Redshift Reserved Node: " + retried("Redshift", "400", "Throttling"), false},
+		{"retry quota exceeded", []string{"aws"}, "failed to purchase EC2 RI: operation error EC2: X, failed to get rate limit token, retry quota exceeded, https response error StatusCode: 400, api error Throttling: msg", false},
+		{"5xx", []string{"aws"}, ec2("503", "AccessDenied"), false},
+		{"no code", []string{"aws"}, "failed to purchase EC2 RI: operation error EC2: X, https response error StatusCode: 403", false},
+		{"unlisted code", []string{"aws"}, ec2("400", "SomethingOdd"), false},
 		{"azure rec", []string{"azure"}, azure429, false},
 		{"azure text on aws rec", []string{"aws"}, azure429, false},
 		{"gcp rec", []string{"gcp"}, gcp, false},
-		{"mixed recs", []string{"aws", "gcp"}, aws("403", "AccessDenied"), false},
+		{"mixed recs", []string{"aws", "gcp"}, ec2("403", "AccessDenied"), false},
 		{"server note", []string{"aws"}, "history_write_failed: commitment c purchased but its history record failed to save", false},
-		{"unknown outcome wrapper", []string{"aws"}, "purchase outcome unknown: the request may have been sent; reconcile before retrying: " + aws("400", "Throttling"), false},
-		{"one unknown segment", []string{"aws", "aws"}, "a: " + aws("403", "AccessDenied") + "; b: purchase outcome unknown", false},
-		{"semicolon in message", []string{"aws"}, aws("400", "InvalidParameterValue") + "; reserved elsewhere", false},
-		{"no recs", nil, aws("403", "AccessDenied"), false},
+		{"unknown outcome wrapper", []string{"aws"}, "purchase outcome unknown: the request may have been sent; reconcile before retrying: " + ec2("400", "Throttling"), false},
+		{"partial prefix", []string{"aws"}, partialRunPrefix + "a: " + ec2("403", "AccessDenied"), true},
+		{"one unknown segment", []string{"aws", "aws"}, "a: " + ec2("403", "AccessDenied") + "; b: purchase outcome unknown", false},
+		{"semicolon in message", []string{"aws"}, ec2("400", "InvalidParameterValue") + "; reserved elsewhere", false},
+		{"no recs", nil, ec2("403", "AccessDenied"), false},
 		{"empty", []string{"aws"}, "", false},
+	}
+	cases := make([]tc, 0, len(base)+2*len(retrying))
+	cases = append(cases, base...)
+	// Token-carrying services keep the SDK retries, so neither a single-attempt
+	// looking 4xx nor a retry-exhausted one proves nothing was bought.
+	for _, r := range retrying {
+		cases = append(cases,
+			tc{r.svc + " 4xx keeps the hint", []string{"aws"}, "x.large: purchase failed: " + r.head + sdk(r.svc, "403", "AccessDenied"), false},
+			tc{r.svc + " retried 4xx keeps the hint", []string{"aws"}, "x.large: purchase failed: " + r.head + retried(r.svc, "400", "ThrottlingException"), false},
+		)
 	}
 	for _, c := range cases {
 		var recs []config.RecommendationRecord

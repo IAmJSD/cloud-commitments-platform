@@ -190,7 +190,7 @@ func TestAttachScheduledDate_NeverInsideTheVetoWindow(t *testing.T) {
 		next := now.Add(d)
 		return &config.PurchasePlan{NotificationDaysBefore: 30, NextExecutionDate: &next}
 	}
-	windowEnd := now.AddDate(0, 0, 30)
+	windowEnd := now.Add(30 * 24 * time.Hour)
 	assert.WithinDuration(t, windowEnd, attachScheduledDate(plan(-48*time.Hour), now), time.Second, "date past")
 	assert.WithinDuration(t, windowEnd, attachScheduledDate(plan(10*time.Minute), now), time.Second, "date in the future but inside the window")
 	beyond := plan(45 * 24 * time.Hour)
