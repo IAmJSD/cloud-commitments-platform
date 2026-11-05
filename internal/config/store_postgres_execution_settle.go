@@ -58,9 +58,9 @@ type settleTarget struct {
 
 // SettleFailedExecution records an operator's audited settlement of a failed
 // plan execution, so it stops blocking the delete of its editor-managed plan
-// (requireManagedDeleteTx). It never changes
-// the status and never makes the row count as unbought: the ramp ledger and
-// the retention trigger keep treating it as possibly bought. A settled row can
+// (requireManagedDeleteTx). It never changes the status or no_submission, so
+// the ramp ledger and the retention trigger count the row exactly as before
+// (possibly bought, unless it was never submitted). A settled row can
 // no longer be retried (LinkRetryExecutionAtomic), because a retry of a row
 // whose plan was deleted would buy with no plan.
 //
@@ -233,7 +233,8 @@ func walkSettleChain(ctx context.Context, tx pgx.Tx, executionID string, next *s
 
 // settlementRecord is the exact string stored in outcome_settlement. Fields are
 // fixed and quoted, so a repeat of the same request compares equal and a
-// different one cannot.
+// different one cannot. The "settled_unknown_outcome" tag also covers a
+// never-submitted row; it stays fixed so replays keep comparing equal.
 func settlementRecord(req ExecutionSettleRequest, tail settleChainTail) string {
 	return fmt.Sprintf("operator:settled_unknown_outcome: ack=true chain_tail=%s tail_status=%s reason=%q",
 		tail.id, tail.status, req.Reason)
