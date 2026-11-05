@@ -654,6 +654,12 @@ resource "aws_ecs_task_definition" "main" {
           {
             name  = "RECOMMENDATION_SCHEDULE"
             value = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
+          },
+          # Whether the fire_scheduled_purchases sweep is scheduled; the API
+          # refuses purchase_delay_hours > 0 on "false" (#1588).
+          {
+            name  = "FIRE_SWEEP_SCHEDULED"
+            value = var.enable_fire_scheduled_purchases_schedule ? "true" : "false"
           }
         ],
         [
@@ -663,10 +669,11 @@ resource "aws_ecs_task_definition" "main" {
           }
         ],
         [
+          # The derived FIRE_SWEEP_SCHEDULED stays authoritative (#1588).
           for k, v in var.additional_env_vars : {
             name  = k
             value = v
-          }
+          } if k != "FIRE_SWEEP_SCHEDULED"
         ]
       )
 

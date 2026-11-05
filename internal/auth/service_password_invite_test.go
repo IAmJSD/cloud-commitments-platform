@@ -93,7 +93,12 @@ func TestResetRecentlyIssued(t *testing.T) {
 		{"invite token a day old", PasswordSetupExpiry, 24 * time.Hour, false},
 		// Just over PasswordResetExpiry left is still an invite (aged ~7d), not a
 		// reset token issued in the future, so it is not limited.
-		{"invite token about to expire", PasswordSetupExpiry, PasswordSetupExpiry - PasswordResetExpiry - 30*time.Second, false},
+		{"invite token about to expire", PasswordSetupExpiry, PasswordSetupExpiry - PasswordResetExpiry - resetClockSkewMargin - 30*time.Second, false},
+		// A reader whose clock is behind the writer's sees a fresh reset token
+		// with more than PasswordResetExpiry left; it must still be limited.
+		{"reset token issued in the future by skew", PasswordResetExpiry, -3 * time.Minute, true},
+		{"reset token at the skew margin", PasswordResetExpiry, -resetClockSkewMargin + time.Second, true},
+		{"invite token well beyond the margin", PasswordSetupExpiry, 2 * time.Hour, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

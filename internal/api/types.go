@@ -65,6 +65,11 @@ type HandlerConfig struct {
 	// scheduled collection is off or the deployment predates the variable.
 	// It feeds next_collection_at on GET /api/recommendations/freshness.
 	RecommendationSchedule string
+	// FireSweepOff is true when Terraform says no fire_scheduled_purchases
+	// sweep runs (FIRE_SWEEP_SCHEDULED=false). A delayed approval would then
+	// sit in "scheduled" forever, so PUT /api/config refuses a delay (#1588).
+	// False when the variable is unset, so older deployments keep saving.
+	FireSweepOff bool
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
