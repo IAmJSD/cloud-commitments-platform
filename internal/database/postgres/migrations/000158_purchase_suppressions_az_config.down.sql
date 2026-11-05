@@ -1,4 +1,4 @@
--- Rollback of 000156: restore the 000134 suppression key without az_config.
+-- Rollback of 000158: restore the 000134 suppression key without az_config.
 --
 -- Rows of one execution that differ only by az_config are merged into one row
 -- per execution, 6-tuple and variant before the narrower UNIQUE constraint is

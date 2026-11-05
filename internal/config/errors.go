@@ -10,8 +10,8 @@ var ErrAzurePricingNotReady = errors.New("azure pricing migration not ready")
 // The az_config expand migrations (issue #408). A later renumber is an edit of
 // these two constants (plus the migration files).
 const (
-	AZConfigRecommendationsMigration = 155
-	AZConfigSuppressionsMigration    = 156
+	AZConfigRecommendationsMigration = 157
+	AZConfigSuppressionsMigration    = 158
 )
 
 // ErrAZConfigMigrationNotReady means the recommendations and

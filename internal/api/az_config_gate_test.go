@@ -43,5 +43,5 @@ func TestGetRecommendations_MapsMissingAZConfigMigrationTo503(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "got %v", err)
 	assert.Equal(t, 503, ce.code)
-	assert.Contains(t, ce.message, "000155 and 000156")
+	assert.Contains(t, ce.message, "000157 and 000158")
 }

@@ -1,4 +1,4 @@
--- Migration 000155: az_config generated column and a 12-column unique index on
+-- Migration 000157: az_config generated column and a 12-column unique index on
 -- recommendations (#408, expand step of the RDS AZ-config identity work).
 --
 -- Cost Explorer reports Single-AZ and Multi-AZ RDS reservations of the same
@@ -25,13 +25,13 @@
 -- - recommendations_natural_key_source_azc_idx: the source-account key of
 --   migration 000120 (#799) plus az_config. Every unique index without
 --   az_config rejects a Single-AZ/Multi-AZ pair, so the source-aware key has
---   to gain the column too; 000157 retires the 000120 index it replaces.
+--   to gain the column too; 000159 retires the 000120 index it replaces.
 --
 -- The existing 11-column recommendations_natural_key_az_tp_idx and the
 -- 000120 recommendations_natural_key_source_idx are KEPT, so the current
 -- ON CONFLICT on the 11 columns keeps working for old and new code. Two rows
 -- that differ only by az_config are still rejected by those indexes until
--- migration 000157 drops them (applied only once the store upserts on the
+-- migration 000159 drops them (applied only once the store upserts on the
 -- 12-column index).
 --
 -- Lock impact: ADD COLUMN ... GENERATED ... STORED rewrites the table and the

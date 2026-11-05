@@ -40,14 +40,14 @@ func TestAZConfigGate_RefusesBeforeExpandMigrations(t *testing.T) {
 	h := &Handler{config: store}
 	exec := &config.PurchaseExecution{ExecutionID: uuid.NewString()}
 
-	for _, version := range []uint{154, 155} { // before both expands, then after only the first
+	for _, version := range []uint{156, 157} { // before both expands, then after only the first
 		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, version))
 
 		_, err := h.persistExecutionAndSuppressions(ctx, exec, nil, "creator", "key")
 		ce, ok := IsClientError(err)
 		require.True(t, ok, "version %d: %v", version, err)
 		assert.Equal(t, 503, ce.code)
-		assert.Contains(t, ce.message, "000155 and 000156")
+		assert.Contains(t, ce.message, "000157 and 000158")
 		assert.Zero(t, store.txs, "no transaction may open before the gate")
 
 		rec := expandOrderRDSRec("single-az", 100)
@@ -66,7 +66,7 @@ func TestAZConfigGate_RefusesBeforeExpandMigrations(t *testing.T) {
 		store.txs = 0 // the direct WithTx above is not the purchase path
 	}
 
-	for _, version := range []uint{156, 157} {
+	for _, version := range []uint{158, 159} {
 		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, version))
 		require.NoError(t, h.requireAZConfigSchema(ctx), "version %d", version)
 		_, err := store.ListActiveSuppressions(ctx)
