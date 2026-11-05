@@ -217,3 +217,33 @@ func TestPGXMock_Suppression_AZConfigRoundTrip(t *testing.T) {
 	assert.Equal(t, "multi-az", sups[1].Variant.AZConfig)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// poolQueryForbidden fails the test if the pool itself is queried: the
+// suppression-write schema check must run on the caller's transaction, not take
+// a second pool connection while the tx is open.
+type poolQueryForbidden struct {
+	pgxmock.PgxPoolIface
+	t *testing.T
+}
+
+func (p poolQueryForbidden) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	p.t.Errorf("pool QueryRow used inside an open transaction: %s", sql)
+	return p.PgxPoolIface.QueryRow(ctx, sql, args...)
+}
+
+func TestPGXMock_CreateSuppressionTx_SchemaCheckRunsOnTx(t *testing.T) {
+	mock := newMock(t)
+	store := &PostgresStore{db: poolQueryForbidden{PgxPoolIface: mock, t: t}}
+	mock.ExpectBegin()
+	expectAZConfigReady(mock)
+	mock.ExpectExec(`INSERT INTO purchase_suppressions`).WithArgs(anyArgsCfg(14)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	err := store.CreateSuppression(context.Background(), &PurchaseSuppression{
+		ExecutionID: "exec-1", Provider: "aws", Service: "ec2", SuppressedCount: 1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

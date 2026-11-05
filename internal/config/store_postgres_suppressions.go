@@ -96,7 +96,7 @@ func validateSuppression(sup *PurchaseSuppression) error {
 // transaction. sup.ID is populated from the Postgres-generated UUID if
 // the caller left it blank.
 func (s *PostgresStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup *PurchaseSuppression) error {
-	if err := s.CheckAZConfigMigration(ctx); err != nil {
+	if err := checkAZConfigMigrationTx(ctx, tx); err != nil {
 		return fmt.Errorf("suppression write refused: %w", err)
 	}
 	if err := validateSuppression(sup); err != nil {
