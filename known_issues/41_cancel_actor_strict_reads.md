@@ -1,6 +1,6 @@
 # Known Issues: execution reads that skip the legacy cancel actor (#47)
 
-> **Audit status (2026-11-04):** `1 needs triage`
+> **Audit status (2026-11-04):** `1 needs triage · 0 resolved`
 
 ## LOW: two ramp reads select canceled_by without the legacy cancelled_by fallback
 
