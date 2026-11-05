@@ -152,6 +152,39 @@ func TestSettleFailedExecutionReplayAndRetry(t *testing.T) {
 	}))
 }
 
+// Once the plan is deleted the settled row is detached, yet an identical
+// repeat request still replays the stored result; a different one conflicts.
+func TestSettleReplayAfterPlanDelete(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	first, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+
+	again, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.True(t, again.Replayed)
+	require.True(t, first.SettledAt.Equal(again.SettledAt))
+	_, err = f.settle(ctx, failed.ExecutionID, "a different reason entirely")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+}
+
+// A failed tail with a no_submission proof can still be retried, so it keeps
+// its predecessor's settlement refused.
+func TestSettleRefusesChainWhoseTailIsFailedNoSubmission(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	head := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	tail := f.retryInOneTx(ctx, t, head, uuid.NewString(), StatusFailed)
+	_, err := f.store.db.Exec(ctx, `UPDATE purchase_executions SET no_submission = true WHERE execution_id = $1`, tail.ExecutionID)
+	require.NoError(t, err)
+
+	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+	require.False(t, f.settled(ctx, t, head.ExecutionID))
+}
+
 // A retry that links the row first wins: the settle waits on the row lock,
 // then sees the live successor and refuses.
 func TestSettleWaitsForRetryAndRefusesItsLiveSuccessor(t *testing.T) {

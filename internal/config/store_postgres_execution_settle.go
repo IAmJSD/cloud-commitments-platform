@@ -135,7 +135,7 @@ func lockSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*sett
 		return nil, fmt.Errorf("read execution %s: %w", executionID, err)
 	}
 	if planID == nil {
-		return nil, fmt.Errorf("%w: only an execution of a purchase plan can be settled", ErrExecutionSettleConflict)
+		return readDetachedSettleTarget(ctx, tx, executionID)
 	}
 	if _, lockErr := tx.Exec(ctx, `SELECT 1 FROM purchase_plans WHERE id = $1 FOR SHARE`, *planID); lockErr != nil {
 		return nil, fmt.Errorf("lock plan %s: %w", *planID, lockErr)
@@ -150,6 +150,25 @@ func lockSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*sett
 	}
 	if t.planID == nil || *t.planID != *planID {
 		return nil, fmt.Errorf("%w: the execution's plan changed while settling", ErrExecutionSettleConflict)
+	}
+	return &t, nil
+}
+
+// readDetachedSettleTarget serves a row with no plan. Only an already settled
+// one is returned, so an identical repeat request still replays after the plan
+// was deleted; anything else cannot be settled. The settlement never changes
+// once written, so no lock is needed.
+func readDetachedSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*settleTarget, error) {
+	var t settleTarget
+	err := tx.QueryRow(ctx, `SELECT status, no_submission, retry_execution_id::text,
+		outcome_settled_at, outcome_settled_by, outcome_settlement
+		FROM purchase_executions WHERE execution_id = $1`, executionID).Scan(
+		&t.status, &t.noSubmission, &t.retryID, &t.settledAt, &t.settledBy, &t.settlement)
+	if err != nil {
+		return nil, fmt.Errorf("read execution %s: %w", executionID, err)
+	}
+	if t.settledAt == nil {
+		return nil, fmt.Errorf("%w: only an execution of a purchase plan can be settled", ErrExecutionSettleConflict)
 	}
 	return &t, nil
 }
@@ -174,25 +193,25 @@ type settleChainTail struct {
 
 // lockSettleChainTail follows retry_execution_id from the target to the tail
 // and locks the tail. It refuses while the chain may still buy: a tail outside
-// the terminal allowlist, a failed tail that can still be retried (no
-// no_submission proof and not settled itself), or a chain cut short by the
-// depth cap or changed between the walk and the lock.
+// the terminal allowlist, a failed tail that is not itself settled (retry
+// accepts even a no_submission tail), or a chain cut short by the depth cap or
+// changed between the walk and the lock.
 func lockSettleChainTail(ctx context.Context, tx pgx.Tx, executionID string, next *string) (settleChainTail, error) {
 	tail, err := walkSettleChain(ctx, tx, executionID, next)
 	if err != nil || tail.id == executionID {
 		return tail, err
 	}
 	var retryID *string
-	var noSubmission, settled bool
-	err = tx.QueryRow(ctx, `SELECT status, no_submission, retry_execution_id::text, outcome_settled_at IS NOT NULL
-		FROM purchase_executions WHERE execution_id = $1 FOR UPDATE`, tail.id).Scan(&tail.status, &noSubmission, &retryID, &settled)
+	var settled bool
+	err = tx.QueryRow(ctx, `SELECT status, retry_execution_id::text, outcome_settled_at IS NOT NULL
+		FROM purchase_executions WHERE execution_id = $1 FOR UPDATE`, tail.id).Scan(&tail.status, &retryID, &settled)
 	if err != nil {
 		return tail, fmt.Errorf("lock execution %s: %w", tail.id, err)
 	}
 	if retryID != nil {
 		return tail, fmt.Errorf("%w: the retry chain changed while settling", ErrExecutionSettleConflict)
 	}
-	retryable := tail.status == StatusFailed && !noSubmission && !settled
+	retryable := tail.status == StatusFailed && !settled
 	if !ladderResolvableNodeStatus(tail.status) || retryable {
 		return tail, fmt.Errorf("%w: retry %s is %s and may still buy or be retried; let it finish or settle it first", ErrExecutionSettleConflict, tail.id, tail.status)
 	}
