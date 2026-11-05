@@ -587,7 +587,13 @@ jobs:
         # Only on the leg that saves the module cache, and only on a miss, so
         # the saved set covers every leg, not just this one's packages.
         if: strategy.job-index == 0 && steps.go_mod_cache.outputs.cache-hit != 'true'
-        run: go list -deps -test -tags=integration ./... > /dev/null
+        run: |
+          for i in 1 2 3; do
+            go list -deps -test -tags=integration ./... > /dev/null && break
+            echo "go list failed (attempt $i/3)" >&2
+            [ "$i" -lt 3 ] || exit 1
+            sleep 5
+          done
 
       - name: Install golang-migrate
         run: |
