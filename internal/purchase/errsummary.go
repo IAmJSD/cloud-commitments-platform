@@ -148,13 +148,14 @@ func classifyCode(code string) string {
 // Explicit code fields in the providers' own error formats. Words elsewhere
 // (URLs, resource names, bodies) never count.
 var (
-	awsCodeRE     = regexp.MustCompile(`api error ([A-Za-z0-9_.]+):`)
-	awsStatusRE   = regexp.MustCompile(`StatusCode: (\d{3})`)
-	azCodeRE      = regexp.MustCompile(`ERROR CODE: ([A-Za-z0-9_.-]+)`)
-	azStatusRE    = regexp.MustCompile(`RESPONSE (\d{3}):`)
-	gcpReasonRE   = regexp.MustCompile(`Reason: ([A-Za-z]+), Message:`)
-	gcpErrorRE    = regexp.MustCompile(`googleapi: Error (\d{3}): [^\n]*?(?:, ([A-Za-z]+))?(?:\n|$)`)
-	definiteAWSRE = regexp.MustCompile(`^(?:[A-Za-z0-9][A-Za-z0-9._-]*: )?operation error [^\n]*StatusCode: (4\d{2}),[^\n]*api error ([A-Za-z0-9_.]+): [^\n]*$`)
+	awsCodeRE      = regexp.MustCompile(`api error ([A-Za-z0-9_.]+):`)
+	awsStatusRE    = regexp.MustCompile(`StatusCode: (\d{3})`)
+	azCodeRE       = regexp.MustCompile(`ERROR CODE: ([A-Za-z0-9_.-]+)`)
+	azStatusRE     = regexp.MustCompile(`RESPONSE (\d{3}):`)
+	gcpReasonRE    = regexp.MustCompile(`Reason: ([A-Za-z]+), Message:`)
+	gcpErrorRE     = regexp.MustCompile(`googleapi: Error (\d{3}): [^\n]*?(?:, ([A-Za-z]+))?(?:\n|$)`)
+	resourceHeadRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*: `)
+	definiteAWSRE  = regexp.MustCompile(`^operation error [^\n]*, https response error StatusCode: (4\d{2}),[^\n]*api error ([A-Za-z0-9_.]+): [^\n]*$`)
 )
 
 func statusOf(re *regexp.Regexp, s string) int {
@@ -214,24 +215,66 @@ var definiteAWSCodes = map[string]bool{
 	"ReservedDBInstancesOfferingNotFound": true, "ReservedCacheNodesOfferingNotFound": true,
 }
 
+// executorPurchaseFailedHead is the wrapper the executor adds around a provider
+// error (internal/purchase/execution.go, "purchase failed: %w").
+const executorPurchaseFailedHead = "purchase failed: "
+
+// singleAttemptAWSHeads are the exact AWS provider library heads of the
+// purchase calls that always make one attempt (RetryMaxAttempts = 1), so a
+// stored 4xx proves the only request was refused. Each mirrors a fmt.Errorf in
+// cloud-commitments-go providers/aws/services at the pinned version. RDS,
+// ElastiCache, OpenSearch, MemoryDB and Savings Plans calls carry an
+// idempotency token and keep the SDK retries (purchasecfg.SingleAttemptIf), so
+// a later 4xx can follow a lost first response that did buy: never listed.
+var singleAttemptAWSHeads = []string{
+	"failed to purchase EC2 RI: ",                 // ec2/client.go:185
+	"failed to purchase Redshift Reserved Node: ", // redshift/client.go:165
+}
+
+// retryExhaustedMarkers are the SDK texts of a call that made several attempts.
+var retryExhaustedMarkers = []string{"exceeded maximum number of attempts", "retry quota exceeded"}
+
+// singleAttemptSDKError removes the executor's optional per-rec resource token
+// and "purchase failed: " wrapper, then returns the SDK error after a required
+// single-attempt library head. ok is false for any other head or none.
+func singleAttemptSDKError(seg string) (string, bool) {
+	seg = resourceHeadRE.ReplaceAllString(seg, "")
+	seg = strings.TrimPrefix(seg, executorPurchaseFailedHead)
+	for _, h := range singleAttemptAWSHeads {
+		if strings.HasPrefix(seg, h) {
+			return seg[len(h):], true
+		}
+	}
+	return "", false
+}
+
 func definiteAWSSegment(seg string) bool {
 	if strings.Contains(seg, "outcome unknown") {
 		return false
 	}
-	m := definiteAWSRE.FindStringSubmatch(seg)
+	for _, m := range retryExhaustedMarkers {
+		if strings.Contains(seg, m) {
+			return false
+		}
+	}
+	sdkErr, ok := singleAttemptSDKError(seg)
+	if !ok {
+		return false
+	}
+	m := definiteAWSRE.FindStringSubmatch(sdkErr)
 	return len(m) == 3 && definiteAWSCodes[m[2]]
 }
 
 // IsDefiniteAWSRefusal reports whether a stored error proves nothing was
 // bought: every rec is AWS and every "; "-separated segment is an AWS 4xx
-// with a listed pre-send code. Azure, GCP, 5xx, a missing code or a server
+// with a listed pre-send code from a single-attempt purchase call. Azure, GCP, 5xx, a missing code or a server
 // note anywhere means the outcome is not proven, so the answer is false.
 func IsDefiniteAWSRefusal(recs []config.RecommendationRecord, stored string) bool {
 	if len(recs) == 0 {
 		return false
 	}
 	for i := range recs {
-		if recs[i].Provider != "" && recs[i].Provider != "aws" {
+		if recs[i].Provider != "aws" {
 			return false
 		}
 	}
