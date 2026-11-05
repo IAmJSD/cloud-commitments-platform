@@ -23,9 +23,11 @@
 
 resource "aws_cloudwatch_log_metric_filter" "migration_failed" {
   # Gated off by default. Creating a metric filter needs logs:PutMetricFilter,
-  # which the CI deploy SA does not hold until the ci-cd-permissions bootstrap
-  # grants it (root CLAUDE.md "CI/CD IAM" bootstrap-vs-runtime split). Leaving
-  # this ungated 403s every terraform apply and blocks all deploys. Set
+  # which policy_monitoring.tf (LogMetricFilters) grants on the Lambda log
+  # groups and monitoring_apply_test.go pins. The deploy role only
+  # holds it once the ci-cd-permissions bootstrap has been re-applied (root
+  # CLAUDE.md "CI/CD IAM" bootstrap-vs-runtime split). Leaving this ungated
+  # 403s every terraform apply and blocks all deploys. Set
   # enable_migration_alarm=true only after re-applying the bootstrap.
   count = var.enable_migration_alarm ? 1 : 0
 

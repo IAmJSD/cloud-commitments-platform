@@ -163,6 +163,7 @@ resource "aws_iam_policy" "networking" {
           "acm:DescribeCertificate",
           "acm:GetCertificate",
           "acm:ListTagsForCertificate",
+          "acm:RemoveTagsFromCertificate",
           "acm:RequestCertificate",
         ]
         Resource = "*"
@@ -172,6 +173,7 @@ resource "aws_iam_policy" "networking" {
         Effect = "Allow"
         Action = [
           "route53:ChangeResourceRecordSets",
+          "route53:CreateHostedZone",
           "route53:GetChange",
           "route53:GetHostedZone",
           "route53:ListHostedZones",
@@ -179,6 +181,19 @@ resource "aws_iam_policy" "networking" {
           "route53:ListTagsForResource",
         ]
         Resource = "*"
+      },
+      {
+        # create_subdomain_zone (environments/aws/route53.tf). The hostedzone
+        # id is opaque and the SAR defines no condition keys for it, so it can
+        # be scoped by neither name nor tag. The role already changes records
+        # on "*" above, a stronger capability than deleting an (empty) zone.
+        Sid    = "Route53HostedZoneLifecycle"
+        Effect = "Allow"
+        Action = [
+          "route53:ChangeTagsForResource",
+          "route53:DeleteHostedZone",
+        ]
+        Resource = "arn:aws:route53:::hostedzone/*"
       },
     ]
   })

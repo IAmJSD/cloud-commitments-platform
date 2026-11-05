@@ -35,6 +35,7 @@ resource "aws_iam_policy" "compute" {
         Action = [
           "logs:CreateLogGroup",
           "logs:DeleteLogGroup",
+          "logs:DeleteRetentionPolicy",
           "logs:ListTagsForResource",
           "logs:PutRetentionPolicy",
           "logs:TagResource",
