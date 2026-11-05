@@ -78,9 +78,9 @@ func accountExists(ctx context.Context, t *testing.T, store *PostgresStore, id s
 }
 
 // storableTerminalExecutionStatuses is TerminalExecutionStatuses minus the
-// legacy canceled spelling, which migration 000159 forbids in the status CHECK
+// legacy canceled spelling, which migration 000155 forbids in the status CHECK
 // on a fully migrated schema. Legacy rows are covered against the schema before
-// 000159 in TestPostgresStore_NewCodeAgainstPreContractSchema.
+// 000155 in TestPostgresStore_NewCodeAgainstPreContractSchema.
 func storableTerminalExecutionStatuses() []string {
 	return slices.DeleteFunc(slices.Clone(TerminalExecutionStatuses), func(s string) bool {
 		return s == LegacyStatusCanceled
