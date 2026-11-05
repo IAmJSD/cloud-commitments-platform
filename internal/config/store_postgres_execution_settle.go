@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -224,13 +225,17 @@ func settlementRecord(req ExecutionSettleRequest, tail settleChainTail) string {
 }
 
 // replaySettlement answers a request for a row that is already settled: the
-// stored settlement when this actor sent the same reason, else a conflict.
+// stored settlement when this actor sent the same reason, else a conflict. The
+// conflict goes back to the caller, who may not be the earlier settler, so it
+// names only the time; the earlier settler is logged server-side.
 func replaySettlement(req ExecutionSettleRequest, t *settleTarget) (*ExecutionSettlement, error) {
 	if t.settledBy == nil || t.settlement == nil {
 		return nil, fmt.Errorf("execution %s has an incomplete settlement", req.ExecutionID)
 	}
 	if *t.settledBy != req.Actor || !settlementHasReason(*t.settlement, req.Reason) {
-		return nil, fmt.Errorf("%w: already settled by %s at %s", ErrExecutionSettleConflict, *t.settledBy, t.settledAt.UTC().Format(time.RFC3339))
+		at := t.settledAt.UTC().Format(time.RFC3339)
+		logging.Infof("execution settle refused: execution %s was already settled by %s at %s", req.ExecutionID, *t.settledBy, at)
+		return nil, fmt.Errorf("%w: already settled at %s", ErrExecutionSettleConflict, at)
 	}
 	return &ExecutionSettlement{ExecutionID: req.ExecutionID, Status: t.status, SettledAt: *t.settledAt, SettledBy: *t.settledBy, Settlement: *t.settlement, Replayed: true}, nil
 }

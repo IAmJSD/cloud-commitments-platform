@@ -1,7 +1,9 @@
 package config
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,4 +39,22 @@ func TestSettlementRecordReplayMatchesOnlyTheSameReason(t *testing.T) {
 	require.True(t, settlementHasReason(record, req.Reason))
 	require.False(t, settlementHasReason(record, "account"))
 	require.False(t, settlementHasReason(record, `checked "eu" account2`))
+}
+
+// The conflict text is the 409 body, and the caller may not be the earlier
+// settler, so it must not carry that settler's principal ID.
+func TestReplaySettlementConflictOmitsTheEarlierSettler(t *testing.T) {
+	at := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	by := "settler-principal-7f3a"
+	record := settlementRecord(ExecutionSettleRequest{Reason: "checked the account"}, settleChainTail{id: "e1", status: "completed"})
+	target := &settleTarget{status: "failed", settledAt: &at, settledBy: &by, settlement: &record}
+	for name, req := range map[string]ExecutionSettleRequest{
+		"another actor":  {ExecutionID: "e1", Actor: "someone-else", Reason: "checked the account"},
+		"another reason": {ExecutionID: "e1", Actor: by, Reason: "a different reason"},
+	} {
+		_, err := replaySettlement(req, target)
+		require.ErrorIs(t, err, ErrExecutionSettleConflict, name)
+		require.False(t, strings.Contains(err.Error(), by), "%s: %q names the earlier settler", name, err.Error())
+		require.Contains(t, err.Error(), "2026-11-04T12:00:00Z", name)
+	}
 }
