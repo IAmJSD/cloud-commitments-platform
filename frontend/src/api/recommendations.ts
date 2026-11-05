@@ -16,6 +16,23 @@ function isPositiveFinite(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+/** Page size for the list read; the server's MaxRecommendationsPageSize. */
+const RECOMMENDATIONS_PAGE_SIZE = 1000;
+/**
+ * A runaway-walk guard, not a row cap: the server also cuts a page at its
+ * 4 MiB byte budget, so a page can hold fewer than 1000 rows. 200 pages of
+ * up to 4 MiB is far past any real list; reaching it means a paging bug.
+ */
+const RECOMMENDATIONS_MAX_PAGES = 200;
+
+/** One page of GET /api/recommendations, as the server sends it. */
+interface RecommendationsPage {
+  recommendations?: Recommendation[];
+  summary?: unknown;
+  regions?: string[];
+  next_cursor?: string;
+}
+
 /**
  * Get recommendations
  */
@@ -29,9 +46,33 @@ export async function getRecommendations(filters: RecommendationFilters = {}): P
   // min_savings_pct: percentage floor (mirrors the CLI --min-savings-pct semantics)
   if (isPositiveFinite(filters.minSavingsPct)) params.set('min_savings_pct', String(filters.minSavingsPct));
   if (filters.account_ids && filters.account_ids.length > 0) params.set('account_ids', filters.account_ids.join(','));
+  params.set('limit', String(RECOMMENDATIONS_PAGE_SIZE));
 
-  const queryString = params.toString();
-  return apiRequest<Recommendation[]>(`/recommendations${queryString ? '?' + queryString : ''}`);
+  // Issue #723: read the list in bounded pages, following next_cursor, so no
+  // single response can pass the 6 MB Lambda cap. The server computes summary
+  // and regions over the whole filtered set on every page; the first page's
+  // are kept. A server that ignores limit returns everything in one page.
+  const first = await apiRequest<RecommendationsPage | null>(`/recommendations?${params.toString()}`);
+  if (!first) return first as unknown as Recommendation[];
+  const { next_cursor: firstCursor, ...merged } = first;
+  const rows = [...(first.recommendations ?? [])];
+  const seen = new Set<string>();
+  let cursor = firstCursor;
+  for (let pages = 1; cursor; pages++) {
+    if (seen.has(cursor)) throw new Error('Recommendations paging returned a repeated cursor');
+    if (pages >= RECOMMENDATIONS_MAX_PAGES) {
+      throw new Error(`Recommendations paging stopped after ${RECOMMENDATIONS_MAX_PAGES} pages`);
+    }
+    seen.add(cursor);
+    params.set('cursor', cursor);
+    const next = await apiRequest<RecommendationsPage | null>(`/recommendations?${params.toString()}`);
+    // An empty body is valid only as the first page; mid-walk it would
+    // silently drop every later row.
+    if (!next) throw new Error('Recommendations paging returned an empty page after a cursor');
+    rows.push(...(next.recommendations ?? []));
+    cursor = next.next_cursor;
+  }
+  return { ...merged, recommendations: rows } as unknown as Recommendation[];
 }
 
 /**

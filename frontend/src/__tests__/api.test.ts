@@ -828,7 +828,60 @@ describe('Recommendations API', () => {
   describe('getRecommendations', () => {
     test('fetches with no filters', async () => {
       await getRecommendations();
-      expect(fetchMock).toHaveBeenCalledWith('/api/recommendations', expect.anything());
+      expect(fetchMock).toHaveBeenCalledWith('/api/recommendations?limit=1000', expect.anything());
+    });
+
+    // Issue #723: the list is read in bounded pages so no single response
+    // can pass the 6 MB Lambda cap.
+    describe('cursor paging (issue #723)', () => {
+      const page = (body: unknown) => ({ ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(body) });
+      const urls = (): string[] => fetchMock.mock.calls.map((c) => c[0] as string);
+
+      test('follows next_cursor, sends the filters on every page and merges the rows', async () => {
+        fetchMock
+          .mockResolvedValueOnce(page({ recommendations: [{ id: 'a' }, { id: 'b' }], summary: { total_count: 3 }, regions: ['us-east-1'], next_cursor: 'c1' }))
+          .mockResolvedValueOnce(page({ recommendations: [{ id: 'c' }], summary: { total_count: 3 }, regions: ['us-east-1'] }));
+        const result = await getRecommendations({ provider: 'aws', account_ids: ['acct-1'] }) as unknown as Record<string, unknown>;
+        expect(urls()).toEqual([
+          '/api/recommendations?provider=aws&account_ids=acct-1&limit=1000',
+          '/api/recommendations?provider=aws&account_ids=acct-1&limit=1000&cursor=c1',
+        ]);
+        expect(result).toEqual({ recommendations: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], summary: { total_count: 3 }, regions: ['us-east-1'] });
+      });
+
+      test('a single page (or a server that ignores limit) is one request', async () => {
+        fetchMock.mockResolvedValueOnce(page({ recommendations: [{ id: 'a' }], summary: {}, regions: [] }));
+        const result = await getRecommendations() as unknown as Record<string, unknown>;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(result).toEqual({ recommendations: [{ id: 'a' }], summary: {}, regions: [] });
+      });
+
+      test('a repeated cursor fails instead of looping', async () => {
+        fetchMock
+          .mockResolvedValueOnce(page({ recommendations: [{ id: 'a' }], next_cursor: 'same' }))
+          .mockResolvedValueOnce(page({ recommendations: [{ id: 'b' }], next_cursor: 'same' }));
+        await expect(getRecommendations()).rejects.toThrow(/cursor/i);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      });
+
+      test('stops with an error after the page cap', async () => {
+        let n = 0;
+        fetchMock.mockImplementation(() => Promise.resolve(page({ recommendations: [{ id: `r${n}` }], next_cursor: `c${++n}` })));
+        await expect(getRecommendations()).rejects.toThrow(/pages/i);
+        expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(200);
+      });
+
+      test('an empty (204) page after a cursor fails instead of returning a partial list', async () => {
+        fetchMock
+          .mockResolvedValueOnce(page({ recommendations: [{ id: 'a' }], next_cursor: 'c1' }))
+          .mockResolvedValueOnce({ ok: true, status: 204, headers: { get: () => null }, json: () => Promise.reject(new Error('no body')) });
+        await expect(getRecommendations()).rejects.toThrow(/empty page/i);
+      });
+
+      test('an empty (204) first page still resolves null', async () => {
+        fetchMock.mockResolvedValueOnce({ ok: true, status: 204, headers: { get: () => null }, json: () => Promise.reject(new Error('no body')) });
+        await expect(getRecommendations()).resolves.toBeNull();
+      });
     });
 
     // Regression test for issue #1089: minSavingsUsd (dollar) and minSavingsPct
@@ -896,7 +949,7 @@ describe('Recommendations API', () => {
       await getRecommendations({ provider: 'aws', minSavingsUsd: value, minSavingsPct: value });
 
       const url = fetchMock.mock.calls[0][0] as string;
-      expect(url).toBe('/api/recommendations?provider=aws');
+      expect(url).toBe('/api/recommendations?provider=aws&limit=1000');
       expect(url).not.toContain('min_savings_usd');
       expect(url).not.toContain('min_savings_pct');
     });
@@ -905,7 +958,7 @@ describe('Recommendations API', () => {
       await getRecommendations({ minSavingsUsd: Infinity, minSavingsPct: 12.5 });
 
       const url = fetchMock.mock.calls[0][0] as string;
-      expect(url).toBe('/api/recommendations?min_savings_pct=12.5');
+      expect(url).toBe('/api/recommendations?min_savings_pct=12.5&limit=1000');
     });
 
     test('applies other filters to query string', async () => {

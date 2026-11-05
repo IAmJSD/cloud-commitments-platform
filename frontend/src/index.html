@@ -1075,12 +1075,12 @@
                             <label class="ramp-option">
                                 <input type="radio" name="ramp-schedule" value="weekly-25pct">
                                 <span class="ramp-label">Weekly 25%</span>
-                                <span class="ramp-desc">4 weeks to full coverage</span>
+                                <span class="ramp-desc">25% of target each week, 4 weeks to full coverage</span>
                             </label>
                             <label class="ramp-option">
                                 <input type="radio" name="ramp-schedule" value="monthly-10pct">
                                 <span class="ramp-label">Monthly 10%</span>
-                                <span class="ramp-desc">10 months to full coverage</span>
+                                <span class="ramp-desc">10% of target each month, 10 months to full coverage</span>
                             </label>
                             <label class="ramp-option">
                                 <input type="radio" name="ramp-schedule" value="custom">
@@ -1090,7 +1090,7 @@
                         </div>
                         <div id="custom-ramp-config" class="hidden">
                             <div class="form-row">
-                                <label>Coverage Per Step (%): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="decimal" autocomplete="off"></label>
+                                <label>Coverage per step (% of target): <input type="number" id="ramp-step-percent" value="20" min="1" max="100" inputmode="decimal" autocomplete="off"></label>
                                 <label>Interval (Days): <input type="number" id="ramp-interval-days" value="7" min="1" max="365" inputmode="numeric" pattern="[0-9]*" autocomplete="off"></label>
                             </div>
                         </div>

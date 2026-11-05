@@ -472,6 +472,11 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 	plan.LastExecutionDate = existingPlan.LastExecutionDate
 	plan.LastNotificationSent = existingPlan.LastNotificationSent
+	// A bound plan keeps its marker across any ramp edit: without it the plan
+	// would buy by filter instead of its selected recommendations (#1746).
+	if existingPlan.RampSchedule.AllocationMode == config.RampAllocationBoundGroups {
+		plan.RampSchedule.AllocationMode = config.RampAllocationBoundGroups
+	}
 
 	if rampScheduleShapeUnchanged(existingPlan.RampSchedule, plan.RampSchedule) {
 		plan.RampSchedule.Type = existingPlan.RampSchedule.Type

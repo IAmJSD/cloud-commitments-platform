@@ -180,8 +180,8 @@ function renderPlannedPurchasesInternal(): void {
     <table class="planned-purchases-table table-compact table-sticky-end">
       <thead>
         <tr>
-          <th>Plan</th>
-          <th>Scheduled Date</th>
+          <th><span>Plan</span>${filterBtn('plan_name', 'Plan')}</th>
+          <th><span>Scheduled Date</span>${filterBtn('scheduled_date', 'Scheduled Date')}</th>
           <th><span>Provider</span>${filterBtn('provider', 'Provider')}</th>
           <th><span>Service</span>${filterBtn('service', 'Service')}</th>
           <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
@@ -249,6 +249,9 @@ function applyPlansColumnFilters(
 
 function categoricalCellValueForPlan(p: PlannedPurchase, col: state.PlansColumnId): string {
   switch (col) {
+    case 'plan_name':      return p.plan_name ?? '';
+    // Keyed by local YYYY-MM-DD: same-day steps share one option and keys sort chronologically.
+    case 'scheduled_date': return localDayKey(p.scheduled_date);
     case 'provider':       return p.provider ?? '';
     case 'service':        return p.service ?? '';
     case 'resource_type':  return p.resource_type ?? '';
@@ -263,11 +266,22 @@ function categoricalCellValueForPlan(p: PlannedPurchase, col: state.PlansColumnI
   }
 }
 
+function localDayKey(date: string | null | undefined): string {
+  if (!date) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function numericCellValueForPlan(p: PlannedPurchase, col: state.PlansColumnId): number {
   switch (col) {
     case 'count':              return p.count ?? 0;
     case 'upfront_cost':       return p.upfront_cost ?? 0;
     case 'estimated_savings':  return p.estimated_savings ?? 0;
+    case 'plan_name':
+    case 'scheduled_date':
     case 'provider':
     case 'service':
     case 'resource_type':
@@ -289,6 +303,8 @@ function displayPrecisionForPlan(col: state.PlansColumnId): number {
     case 'upfront_cost':
     case 'estimated_savings':
       return CURRENCY_DEFAULT_DIGITS;
+    case 'plan_name':
+    case 'scheduled_date':
     case 'provider':
     case 'service':
     case 'resource_type':
@@ -319,6 +335,8 @@ const PLANS_NUMERIC_COLUMNS: ReadonlySet<state.PlansColumnId> = new Set<state.Pl
 
 function plansColumnLabel(column: state.PlansColumnId): string {
   switch (column) {
+    case 'plan_name':          return 'Plan';
+    case 'scheduled_date':     return 'Scheduled Date';
     case 'provider':           return 'Provider';
     case 'service':            return 'Service';
     case 'resource_type':      return 'Resource Type';
@@ -333,6 +351,7 @@ function plansColumnLabel(column: state.PlansColumnId): string {
 
 function plansCategoricalDisplayLabel(column: state.PlansColumnId, value: string): string {
   if (value === '') return '(empty)';
+  if (column === 'scheduled_date') return formatDate(value);
   if (column === 'term') {
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? formatTermShort(n) : value;
@@ -421,9 +440,10 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
     : `${escapeHtml(purchase.resource_type)} <span class="cell-sub">(${escapeHtml(purchase.region)})</span>`;
-  const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
-  const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
-  const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
+  const placeholder = `<span class="cell-placeholder">${NO_VALUE}</span>`;
+  const countCell = hasNoRecommendations ? placeholder : escapeHtml(String(purchase.count ?? ''));
+  const upfrontShown = hasNoRecommendations || upfrontCell === NO_VALUE ? placeholder : upfrontCell;
+  const savingsCell = hasNoRecommendations ? placeholder : `${formatCurrency(purchase.estimated_savings)}/mo`;
 
   // Issue #365: gate row actions by the same plan-management permissions
   // a click on each button would require. Readonly users see no buttons
@@ -466,7 +486,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
-        <span class="plan-name cell-truncate cell-truncate--sm" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
+        <span class="plan-name plan-name-cell" title="${escapeHtmlAttr(purchase.plan_name)}">${escapeHtml(purchase.plan_name)}</span>
         <span class="step-info">Step ${purchase.step_number}/${purchase.total_steps}</span>
       </td>
       <td>${formatDate(purchase.scheduled_date)}</td>
@@ -480,7 +500,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions"><span class="row-actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run"${hasNoRecommendations ? ' disabled' : ''} title="${runLabel}" aria-label="${runLabel}">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label row-action-run${hasNoRecommendations ? ' is-disabled' : ''}"${hasNoRecommendations ? ' aria-disabled="true"' : ''} title="${runLabel}" aria-label="${runLabel}">${iconSvg('play')}<span>Run now</span></button>` : ''}
         ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
         ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small icon-btn" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
         ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small icon-btn" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
@@ -526,14 +546,15 @@ function runNowBody(target: PlannedPurchase | undefined): string | HTMLElement {
   return withIntro(`This immediately buys the commitment below for plan "${target.plan_name}", scheduled for ${formatDate(target.scheduled_date)}. It cannot be undone.`, summary);
 }
 
-async function runPlannedPurchaseNow(purchaseId: string): Promise<void> {
-  if (runNowInFlight.has(purchaseId)) return;
+/** Resolves false when nothing ran and the list needs no reload. */
+async function runPlannedPurchaseNow(purchaseId: string): Promise<boolean> {
+  if (runNowInFlight.has(purchaseId)) return true;
   runNowInFlight.add(purchaseId);
   try {
     const target = lastLoadedPurchases.find(p => p.id === purchaseId);
     if (target?.has_recommendations === false) {
       showToast({ message: 'This step has no recommendations attached, so there is nothing to run.', kind: 'info', timeout: 5_000 });
-      return;
+      return false;
     }
     const ok = await confirmDialog({
       title: target ? `Run step ${target.step_number}/${target.total_steps} of "${target.plan_name}" now?` : 'Run purchase now?',
@@ -541,9 +562,10 @@ async function runPlannedPurchaseNow(purchaseId: string): Promise<void> {
       confirmLabel: 'Run now',
       destructive: true,
     });
-    if (!ok) return;
+    if (!ok) return true;
     await api.runPlannedPurchase(purchaseId);
     showToast({ message: 'Purchase executed successfully', kind: 'success', timeout: 5_000 });
+    return true;
   } finally {
     runNowInFlight.delete(purchaseId);
   }
@@ -556,7 +578,8 @@ async function handlePlannedPurchaseAction(action: string, purchaseId: string, p
   try {
     switch (action) {
       case 'run':
-        await runPlannedPurchaseNow(purchaseId);
+        // An empty step only toasts; a reload would drop keyboard focus.
+        if (!(await runPlannedPurchaseNow(purchaseId))) return;
         break;
       case 'pause':
         // Pause is reversible and scoped to a single execution: the plan stays

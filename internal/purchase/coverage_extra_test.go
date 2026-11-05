@@ -1378,9 +1378,12 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 			require.NotNil(t, detailsBlob, "test seed must produce a non-empty Details blob")
 
 			plan := &config.PurchasePlan{ID: "plan-" + tc.name, Name: "Plan"}
+			stampedAt := time.Now().UTC()
 			exec := &config.PurchaseExecution{
 				ExecutionID: "exec-" + tc.name,
 				PlanID:      "plan-" + tc.name,
+				// Redshift dispatch requires the lineage stamp executeAndFinalize mints.
+				FirstDispatchAt: &stampedAt,
 				Recommendations: []config.RecommendationRecord{
 					{
 						Provider:     "aws",

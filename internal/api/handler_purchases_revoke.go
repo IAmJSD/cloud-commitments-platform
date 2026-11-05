@@ -35,6 +35,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -597,7 +598,7 @@ func (h *Handler) calculateAzureRevoke(ctx context.Context, req *events.LambdaFu
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return nil, NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return nil, azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return nil, fmt.Errorf("revoke/calculate: CalculateRefund failed: %w", err)
 	}
@@ -824,7 +825,7 @@ func (h *Handler) callAzureReturn(
 
 	// Step 1: CalculateRefund -> sessionID + quoted amount (TOCTOU check).
 	quantity := int32(record.Count) // #nosec G115 -- Azure reservation count validated at purchase; bounded by API limits (<<math.MaxInt32) //nolint:gosec
-	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, orderID, reservationID, quantity)
+	sessionID, calcRefundAmount, calcRefundCurrency, err := h.azureCalculateRefund(ctx, calcClient, record.PurchaseID, orderID, reservationID, quantity)
 	if err != nil {
 		return nil, err
 	}
@@ -970,7 +971,7 @@ func checkConfirmedRefund(confirmed revokeConfirmBody, calcRefundAmount *float64
 // azureCalculateRefund runs the CalculateRefund step and parses out the session
 // ID (required by Return) and the quoted refund amount/currency (for the TOCTOU
 // check). Errors are classified into 400 (client) vs 500 (transient).
-func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalculateRefundClient, purchaseID, orderID, reservationID string, quantity int32) (string, *float64, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
 	calcResp, err := calcClient.Post(ctx, orderID, armreservations.CalculateRefundRequest{
 		Properties: &armreservations.CalculateRefundRequestProperties{
 			ReservationToReturn: &armreservations.ReservationToReturn{
@@ -982,7 +983,7 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 	}, nil)
 	if err != nil {
 		if isAzureClientError(err) {
-			return "", nil, "", NewClientError(400, fmt.Sprintf("Azure refund calculation rejected: %v", err))
+			return "", nil, "", azureRefundRejected("Azure refund calculation rejected", purchaseID, err)
 		}
 		return "", nil, "", fmt.Errorf("revoke azure: CalculateRefund failed: %w", err)
 	}
@@ -1030,7 +1031,7 @@ func (h *Handler) handleAzureReturnError(reqCtx context.Context, record *config.
 		return NewClientError(422, "Azure reservation return window has closed; the 7-day refund period has expired")
 	}
 	if isAzureClientError(err) {
-		return NewClientError(400, fmt.Sprintf("Azure refund rejected: %v", err))
+		return azureRefundRejected("Azure refund rejected", record.PurchaseID, err)
 	}
 	return fmt.Errorf("revoke azure: Return failed: %w", err)
 }
@@ -1189,6 +1190,15 @@ func isAzureClientError(err error) bool {
 		}
 	}
 	return false
+}
+
+// azureRefundRejected is the 400 for an Azure refund step the provider
+// refused: a category message and the purchase ID, never Azure's own text,
+// which carries subscription URLs and request IDs. The raw error is logged.
+func azureRefundRejected(step, purchaseID string, err error) error {
+	logging.Warnf("revoke azure: %s for purchase %s: %v", step, purchaseID, err)
+	_, msg := purchase.SummarizeProviderError(err)
+	return NewClientError(400, fmt.Sprintf("%s: %s (reference: purchase %s)", step, msg, purchaseID))
 }
 
 // isAzureWindowEdgeError reports whether err is an Azure RefundPolicyViolated

@@ -372,7 +372,7 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		}
 		if out.err != nil {
 			logging.Errorf("Failed to collect %s recommendations: %v", providerName, out.err)
-			failedProviders[providerName] = out.err.Error()
+			_, failedProviders[providerName] = purchase.SummarizeFailure(out.err)
 			continue
 		}
 		successfulProviders = append(successfulProviders, providerName)
@@ -448,7 +448,7 @@ func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerT
 func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string, partial *config.RecommendationsCollectionPartial) {
 	if err := s.upsertWithMarker(ctx, recs, successfulCollects, partial); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
-		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
+		if setErr := s.config.SetRecommendationsCollectionError(ctx, collectionStoppedSaving); setErr != nil {
 			logging.Errorf("Failed to record write error: %v", setErr)
 		}
 		return
@@ -469,6 +469,7 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 const (
 	collectionStoppedLoadingSettings = "recommendations collection stopped before saving: could not load settings"
 	collectionStoppedIncomplete      = "recommendations collection stopped before saving: it was canceled or ran out of time"
+	collectionStoppedSaving          = "recommendations collection stopped before saving: could not save the collected recommendations"
 )
 
 // recordCollectionStoppedBestEffort records why a collection ended without

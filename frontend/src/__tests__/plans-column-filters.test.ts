@@ -141,8 +141,52 @@ describe('Planned Purchases column filters (issue #166 follow-up)', () => {
     );
     const cols = Array.from(buttons).map((b) => b.dataset['column']);
     expect(cols.sort()).toEqual(
-      ['count', 'estimated_savings', 'payment', 'provider', 'resource_type', 'service', 'status', 'term', 'upfront_cost'].sort(),
+      ['count', 'estimated_savings', 'payment', 'plan_name', 'provider', 'resource_type', 'scheduled_date', 'service', 'status', 'term', 'upfront_cost'].sort(),
     );
+  });
+
+  test('plan name and scheduled date filter narrow rows (#1680)', async () => {
+    await loadPlans();
+    const uncheck = (column: string, value: string): void => {
+      document.querySelector<HTMLButtonElement>(
+        `#planned-purchases-list th .column-filter-btn[data-column="${column}"]`,
+      )?.click();
+      const cb = Array.from(document.querySelectorAll<HTMLInputElement>('.column-filter-popover input[type="checkbox"]'))
+        .find((i) => i.dataset['value'] === value);
+      expect(cb).toBeDefined();
+      cb!.checked = false;
+      cb!.dispatchEvent(new Event('change'));
+    };
+    uncheck('plan_name', 'Plan B');
+    expect(countRows()).toBe(2);
+    uncheck('scheduled_date', '2026-06-02');
+    expect(countRows()).toBe(1);
+  });
+
+  test('scheduled date options are one per displayed day', async () => {
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [
+      { ...seedPurchases[0], id: 'd1', scheduled_date: '2026-06-01T10:00:00' },
+      { ...seedPurchases[1], id: 'd2', scheduled_date: '2026-06-01T15:00:00' },
+    ] });
+    await loadPlans();
+    document.querySelector<HTMLButtonElement>(
+      '#planned-purchases-list th .column-filter-btn[data-column="scheduled_date"]',
+    )?.click();
+    expect(document.querySelectorAll('.column-filter-popover .column-filter-item')).toHaveLength(1);
+  });
+
+  test('scheduled date options are in chronological order, labelled by date', async () => {
+    const dates = ['2026-12-01', '2026-01-10', '2026-01-02', '2026-06-02'];
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: dates.map((d, i) => (
+      { ...seedPurchases[0], id: `o${i}`, scheduled_date: d }
+    )) });
+    await loadPlans();
+    document.querySelector<HTMLButtonElement>(
+      '#planned-purchases-list th .column-filter-btn[data-column="scheduled_date"]',
+    )?.click();
+    const labels = Array.from(document.querySelectorAll('.column-filter-popover .column-filter-item'))
+      .map((l) => l.textContent?.trim());
+    expect(labels).toEqual(['Jan 2, 2026', 'Jan 10, 2026', 'Jun 2, 2026', 'Dec 1, 2026']);
   });
 
   test('clicking a trigger opens a popover detached to document.body', async () => {

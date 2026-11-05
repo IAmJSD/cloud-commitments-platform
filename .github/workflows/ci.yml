@@ -304,7 +304,13 @@ jobs:
           set -e
           for mod in . tests/e2e; do
             echo "==> go mod download/verify in $mod"
-            (cd "$mod" && go mod download && go mod verify)
+            for i in 1 2 3; do
+              (cd "$mod" && go mod download) && break
+              echo "go mod download failed in $mod (attempt $i/3)" >&2
+              [ "$i" -lt 3 ] || exit 1
+              sleep 5
+            done
+            (cd "$mod" && go mod verify)
           done
 
       - name: Run unit tests (all modules)

@@ -9,6 +9,7 @@ import (
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	smithy "github.com/aws/smithy-go"
@@ -274,7 +275,7 @@ func TestMarketplaceList_AWSClientFaultMapsTo400(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 400, ce.code)
-	assert.Contains(t, err.Error(), "bad RI")
+	assert.Contains(t, err.Error(), marketplaceRejectedMessage)
 }
 
 func TestMarketplaceList_AWSServerFaultMapsTo502(t *testing.T) {
@@ -399,7 +400,7 @@ func TestMarketplaceList_DBFailureAndCancelFailureKeepsListing(t *testing.T) {
 			assert.Equal(t, 502, ce.code)
 			assert.NotContains(t, ce.message, "rolled back")
 			assert.Contains(t, ce.message, "ril-default")
-			assert.Contains(t, ce.message, "throttled")
+			assert.Contains(t, ce.message, purchase.ErrCategoryMessage(purchase.ErrCategoryUnknown))
 			assert.Contains(t, ce.message, tc.wantMsg)
 			assert.Equal(t, 1, ec2.cancelCallCount)
 			cfgStore.AssertNotCalled(t, "ReleaseMarketplaceListingClaim", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything, mock.Anything)
