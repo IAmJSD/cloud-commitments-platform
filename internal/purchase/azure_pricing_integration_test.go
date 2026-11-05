@@ -98,10 +98,10 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 	t.Run("106 invalidated old prices", func(t *testing.T) { approve(t, ErrStaleAzurePricing, 0) })
 	rec.UpfrontCost = 700
 	// The store's upsert needs the availability_zone, platform, tenancy and az_config columns
-	// and the 12-column index from migration 000154 (issue #408), and is gated until the
-	// 000155 expand (CheckAZConfigMigration). It also resets
+	// and the 12-column index from migration 000155 (issue #408), and is gated until the
+	// 000156 expand (CheckAZConfigMigration). It also resets
 	// recommendations_state.last_collection_partial, added by migration 000129 (issue #87).
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 155))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 156))
 	require.NoError(t, pricing.UpsertRecommendations(ctx, time.Now().Add(time.Minute), []config.RecommendationRecord{rec}, collects))
 	t.Run("recollected prices purchase once", func(t *testing.T) { approve(t, nil, 1) })
 }

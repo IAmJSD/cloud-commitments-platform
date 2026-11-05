@@ -21,14 +21,14 @@ const insertRecForMigration152 = `
 	VALUES (NOW(), 'aws', 'rds', 'us-east-1', $1, 'mysql', $2::jsonb, 0, 0, 1, 'all-upfront')
 `
 
-const insertRecForMigration154Scoped = `
+const insertRecForMigration155Scoped = `
 	INSERT INTO recommendations
 	    (collected_at, provider, service, region, resource_type, engine, payload,
 	     upfront_cost, monthly_savings, term, payment_option)
 	VALUES (NOW(), $3, $4, 'us-east-1', $1, 'mysql', $2::jsonb, 0, 0, 1, 'all-upfront')
 `
 
-// TestMigration_RecommendationsAZConfig locks down migration 000154 (issue
+// TestMigration_RecommendationsAZConfig locks down migration 000155 (issue
 // #408, expand step): the generated az_config column is read verbatim from
 // payload->'details', the 11-column index is kept so the previous upsert still
 // works, the 12-column index is added, and rollback removes only the new
@@ -43,7 +43,7 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 154)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 155)))
 
 	// provider and service default to aws/rds; the column is scoped to AWS RDS
 	// like IdentityAZConfig, so other providers and services read "".
@@ -70,11 +70,11 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 		if v.provider == "" {
 			v.provider, v.service = "aws", "rds"
 		}
-		_, err = pool.Exec(ctx, insertRecForMigration154Scoped, name, v.payload, v.provider, v.service)
+		_, err = pool.Exec(ctx, insertRecForMigration155Scoped, name, v.payload, v.provider, v.service)
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 154))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 155))
 
 	for name, v := range vectors {
 		var got string
@@ -89,7 +89,7 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 		var exists bool
 		require.NoError(t, pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'recommendations' AND indexname = $1)`, idx).Scan(&exists))
-		assert.True(t, exists, "index %s must exist after 000154", idx)
+		assert.True(t, exists, "index %s must exist after 000155", idx)
 	}
 	var indexDef string
 	require.NoError(t, pool.QueryRow(ctx,
@@ -102,7 +102,7 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	assert.Contains(t, indexDef, "(account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy, az_config, source_account_key)")
 
 	// The previous code's upsert (11-column ON CONFLICT) still works and
-	// updates the existing row in place, so 000154 can be applied before the
+	// updates the existing row in place, so 000155 can be applied before the
 	// store switch is released.
 	singleAZ := `{"details":{"az_config":"single-az"}}`
 	_, err = pool.Exec(ctx, insertRecForMigration152+`
@@ -112,12 +112,12 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	_, err = pool.Exec(ctx, insertRecForMigration152+`
 		ON CONFLICT (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy)
 		DO UPDATE SET upfront_cost = 5`, "pair", singleAZ)
-	require.NoError(t, err, "the existing 11-column upsert must keep working after 000154")
+	require.NoError(t, err, "the existing 11-column upsert must keep working after 000155")
 	var n int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM recommendations WHERE resource_type = 'pair'`).Scan(&n))
 	assert.Equal(t, 1, n)
 
-	// Known limitation, resolved by 000156: a row differing only by az_config
+	// Known limitation, resolved by 000157: a row differing only by az_config
 	// is still rejected by the kept indexes without az_config.
 	_, err = pool.Exec(ctx, insertRecForMigration152, "pair", `{"details":{"az_config":"multi-az"}}`)
 	var pgErr *pgconn.PgError
@@ -126,7 +126,7 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	assert.Contains(t, []string{"recommendations_natural_key_az_tp_idx", "recommendations_natural_key_source_idx"}, pgErr.ConstraintName)
 
 	// Rollback removes the new column and index only.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 154)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 155)))
 	var colExists bool
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'recommendations' AND column_name = 'az_config')`).Scan(&colExists))
@@ -144,5 +144,5 @@ func TestMigration_RecommendationsAZConfig(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM recommendations`).Scan(&n))
 	assert.Equal(t, len(vectors)+1, n, "rollback must not delete rows")
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 154))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 155))
 }

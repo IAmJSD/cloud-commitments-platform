@@ -1,13 +1,24 @@
 package config
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var ErrAzurePricingNotReady = errors.New("azure pricing migration not ready")
 
-// ErrAZConfigMigrationNotReady means migrations 000154 (recommendations
-// az_config) and 000155 (purchase_suppressions az_config) are not both applied.
-// Apply them before running a release that reads or writes az_config.
-var ErrAZConfigMigrationNotReady = errors.New("az_config migrations 000154 and 000155 are not applied")
+// The az_config expand migrations (issue #408). A later renumber is an edit of
+// these two constants (plus the migration files).
+const (
+	AZConfigRecommendationsMigration = 155
+	AZConfigSuppressionsMigration    = 156
+)
+
+// ErrAZConfigMigrationNotReady means the recommendations and
+// purchase_suppressions az_config migrations are not both applied. Apply them
+// before running a release that reads or writes az_config.
+var ErrAZConfigMigrationNotReady = fmt.Errorf("az_config migrations %06d and %06d are not applied",
+	AZConfigRecommendationsMigration, AZConfigSuppressionsMigration)
 
 // ErrNotFound is returned when a requested config-store row does not exist.
 var ErrNotFound = errors.New("not found")

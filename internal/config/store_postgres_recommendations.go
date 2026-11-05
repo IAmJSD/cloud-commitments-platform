@@ -24,8 +24,8 @@ const recommendationsBatchSize = 500
 const azurePricingMigrationVersion = 106
 
 // azConfigExpandMigrationVersion is the last az_config expand migration
-// (000155); the contract step 000156 is not required.
-const azConfigExpandMigrationVersion = 155
+// (AZConfigSuppressionsMigration); the contract step after it is not required.
+const azConfigExpandMigrationVersion = AZConfigSuppressionsMigration
 
 // UpsertRecommendations is the incremental write path: it upserts each row
 // by natural key (cloud_account_id, provider, service, region,
@@ -40,7 +40,7 @@ const azConfigExpandMigrationVersion = 155
 // so per-rec ON CONFLICT no longer collides on SQLSTATE 21000. Migration
 // 000109 added availability_zone, a GENERATED column derived from payload that
 // is never written here. Migration 000111 added the platform and tenancy
-// generated columns the same way, and migration 000154 the az_config one; the
+// generated columns the same way, and migration 000155 the az_config one; the
 // upsert arbiter is the 12-column recommendations_natural_key_az_tp_azc_idx
 // (issues #792, #806, #408).
 //
@@ -420,8 +420,8 @@ func (s *PostgresStore) checkAzurePricingMigration(ctx context.Context, required
 }
 
 // CheckAZConfigMigration returns ErrAZConfigMigrationNotReady (wrapped, with
-// the schema version found) until both az_config expand migrations (000154
-// recommendations, 000155 purchase_suppressions) are applied.
+// the schema version found) until both az_config expand migrations (000155
+// recommendations, 000156 purchase_suppressions) are applied.
 func (s *PostgresStore) CheckAZConfigMigration(ctx context.Context) error {
 	return checkSchemaVersion(ctx, s.db, azConfigExpandMigrationVersion, ErrAZConfigMigrationNotReady, "az_config")
 }

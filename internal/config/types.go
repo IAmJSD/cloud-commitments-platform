@@ -800,7 +800,7 @@ type PurchaseSuppression struct {
 // #806, #408). Empty AvailabilityZone, Platform and Tenancy are known values
 // (a regional rec, a non-EC2 rec), not wildcards. AZConfig is the exception:
 // "" means "not applicable or unknown" and matches any az_config (see
-// AppliesTo), because suppressions written before migration 000155 have none
+// AppliesTo), because suppressions written before migration 000156 have none
 // and must keep suppressing both the Single-AZ and the Multi-AZ rec.
 type SuppressionVariant struct {
 	AvailabilityZone string `json:"availability_zone"`
