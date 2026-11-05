@@ -157,6 +157,16 @@ func TestPostgresStore_NewCodeAgainstPreContractSchema(t *testing.T) {
 		canceledBy, _ = rawActors(legacy)
 		require.NotNil(t, canceledBy)
 		assert.Equal(t, "concurrent@example.com", *canceledBy, "a stale save must not erase the actor")
+
+		// A stale copy that carries a DIFFERENT actor must not replace the
+		// stored one either: the stored actor wins over the saved $17.
+		other := *got
+		otherActor := "stale-copy@example.com"
+		other.CancelledBy = &otherActor
+		require.NoError(t, store.SavePurchaseExecution(ctx, &other))
+		canceledBy, _ = rawActors(legacy)
+		require.NotNil(t, canceledBy)
+		assert.Equal(t, "concurrent@example.com", *canceledBy, "a stale save with another actor must not replace the stored actor")
 	})
 
 	t.Run("cleanup removes a legacy row after retention", func(t *testing.T) {
