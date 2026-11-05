@@ -61,11 +61,11 @@ func TestDeployPolicyAllowsFckNatNetworkInterface(t *testing.T) {
 	}
 }
 
-// moduleBlock returns the body of `kind "type" "name" {...}` from comment-
-// stripped HCL, or `kind "type" {...}` when name is empty.
-func moduleBlock(t *testing.T, src, kind, typ, name string) string {
+// resourceBlock returns the body of `resource "type" "name" {...}` from
+// comment-stripped HCL, or `resource "type" {...}` when name is empty.
+func resourceBlock(t *testing.T, src, typ, name string) string {
 	t.Helper()
-	head := kind + ` "` + typ + `"`
+	head := `resource "` + typ + `"`
 	if name != "" {
 		head += ` "` + name + `"`
 	}
@@ -112,10 +112,10 @@ func TestFckNatApplyOrderAndWiring(t *testing.T) {
 	}
 	src := stripCommentLines(string(raw))
 
-	route := moduleBlock(t, src, "resource", "aws_route", "private_internet_ipv4")
-	asg := moduleBlock(t, src, "resource", "aws_autoscaling_group", "fck_nat")
-	eni := moduleBlock(t, src, "resource", "aws_network_interface", "fck_nat")
-	policy := moduleBlock(t, src, "resource", "aws_iam_role_policy", "fck_nat_ec2")
+	route := resourceBlock(t, src, "aws_route", "private_internet_ipv4")
+	asg := resourceBlock(t, src, "aws_autoscaling_group", "fck_nat")
+	eni := resourceBlock(t, src, "aws_network_interface", "fck_nat")
+	policy := resourceBlock(t, src, "aws_iam_role_policy", "fck_nat_ec2")
 
 	dependsOn := func(block, target string) bool {
 		for _, dep := range strings.Split(bracketValue(t, block, "depends_on"), ",") {
