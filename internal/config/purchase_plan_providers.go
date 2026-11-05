@@ -70,3 +70,12 @@ func DerivePlanServices(plan *PurchasePlan) []string {
 	sort.Strings(services)
 	return services
 }
+
+// BoundKeySeparator joins a bound entry's "provider/service" key to its group
+// id: "aws/ec2#<group_id>" (issue #1746).
+const BoundKeySeparator = "#"
+
+// IsBoundServiceKey reports whether a services key names a bound group entry.
+func IsBoundServiceKey(key string) bool {
+	return strings.Contains(key, BoundKeySeparator)
+}

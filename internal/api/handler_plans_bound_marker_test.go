@@ -15,16 +15,18 @@ import (
 func TestUpdatePlan_KeepsBoundGroupsMarker(t *testing.T) {
 	const planID = "12345678-1234-1234-1234-123456789abc"
 	weekly := config.PresetRampSchedules[config.RampWeekly25Pct]
+	monthly := config.PresetRampSchedules[config.RampMonthly10Pct]
 	for _, tc := range []struct {
 		name, body string
 		stored     config.RampAllocationMode
 		want       config.RampAllocationMode
+		wantRamp   config.RampSchedule
 	}{
-		{"shape change keeps bound_groups", `{"name":"p","ramp_schedule":"monthly-10pct"}`, config.RampAllocationBoundGroups, config.RampAllocationBoundGroups},
+		{"shape change keeps bound_groups", `{"name":"p","ramp_schedule":"monthly-10pct"}`, config.RampAllocationBoundGroups, config.RampAllocationBoundGroups, monthly},
 		// (guard) the same shape already carried every mode.
-		{"same shape keeps bound_groups", `{"name":"renamed","ramp_schedule":"weekly-25pct"}`, config.RampAllocationBoundGroups, config.RampAllocationBoundGroups},
+		{"same shape keeps bound_groups", `{"name":"renamed","ramp_schedule":"weekly-25pct"}`, config.RampAllocationBoundGroups, config.RampAllocationBoundGroups, weekly},
 		// (guard) other modes still reset on a shape change, as today.
-		{"shape change still drops equal_count", `{"name":"p","ramp_schedule":"monthly-10pct"}`, config.RampAllocationEqualCount, ""},
+		{"shape change still drops equal_count", `{"name":"p","ramp_schedule":"monthly-10pct"}`, config.RampAllocationEqualCount, "", monthly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rs := weekly
@@ -34,6 +36,11 @@ func TestUpdatePlan_KeepsBoundGroupsMarker(t *testing.T) {
 			require.Equal(t, 200, resp.StatusCode, resp.Body)
 			require.NotNil(t, saved)
 			assert.Equal(t, tc.want, saved.RampSchedule.AllocationMode)
+			// The requested shape is what gets saved; only the marker is carried.
+			assert.Equal(t, tc.wantRamp.Type, saved.RampSchedule.Type)
+			assert.Equal(t, tc.wantRamp.PercentPerStep, saved.RampSchedule.PercentPerStep)
+			assert.Equal(t, tc.wantRamp.StepIntervalDays, saved.RampSchedule.StepIntervalDays)
+			assert.Equal(t, tc.wantRamp.TotalSteps, saved.RampSchedule.TotalSteps)
 		})
 	}
 }

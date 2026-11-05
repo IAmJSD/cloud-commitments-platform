@@ -17,7 +17,7 @@ func boundRamp(r config.RampSchedule) config.RampSchedule {
 
 // bound_groups takes every default-mode branch of Precheck.
 func TestPrecheck_BoundGroupsModeActsLikeDefault(t *testing.T) {
-	ok := config.ServiceConfig{Provider: "aws", Service: "ec2", Enabled: true}
+	ok := config.ServiceConfig{Provider: "aws", Service: "ec2", Enabled: true, BoundIdentities: []string{"k1"}}
 	assert.NoError(t, Precheck(planWith(ok, boundRamp(config.RampSchedule{Type: "weekly", PercentPerStep: 25}))))
 	assert.NoError(t, Precheck(planWith(ok, boundRamp(config.RampSchedule{Type: "immediate", PercentPerStep: 100}))))
 	err := Precheck(planWith(ok, boundRamp(config.RampSchedule{Type: "immediate", PercentPerStep: 50})))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"strconv"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/aws/aws-lambda-go/events"
 )
 
@@ -212,6 +214,11 @@ func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFun
 // requirePlanArmGrantFor is requirePlanArmGrant for an escalating write whose
 // target accounts are already resolved.
 func (h *Handler) requirePlanArmGrantFor(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan, accountIDs []string) error {
+	// A bound plan that lost its binding must not be armed or widened
+	// (#1746); disarming and disabling it never reach this gate.
+	if err := planstep.CheckBoundBinding(after); err != nil {
+		return NewClientError(http.StatusConflict, err.Error())
+	}
 	if err := h.requireAutoPurchaseGrantForPlan(ctx, req, session, accountIDs, after); err != nil {
 		return err
 	}
