@@ -104,6 +104,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		before := riExchangeArmStateOf(existing)
 		switchBefore = existing.AutoPurchaseEnabled
 		ladderBefore = existing.LadderExecutionEnabled
+		delayBefore := existing.PurchaseDelayHours
 
 		// grace_period_days is a map: json.Unmarshal into a non-nil map MERGES
 		// keys (an omitted key can never be deleted). When the caller sends the
@@ -115,7 +116,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
 			return NewClientError(400, "invalid request body")
 		}
-		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode, providersSent); vErr != nil {
+		if vErr := validateGlobalConfigWrite(existing, modeSent || existing.RIExchangeMode != before.mode, providersSent, h.refusesDelay(present, delayBefore, existing.PurchaseDelayHours)); vErr != nil {
 			return vErr
 		}
 		if gErr := requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), grants.riExchange); gErr != nil {
@@ -160,8 +161,13 @@ func bodyHasKey(present map[string]json.RawMessage, name string) bool {
 // riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
 // null does not: json.Unmarshal leaves the stored value in place for it.
 func riExchangeModeSent(present map[string]json.RawMessage) bool {
+	return bodyWritesKey(present, "ri_exchange_mode")
+}
+
+// bodyWritesKey is bodyHasKey minus JSON null, which json.Unmarshal ignores.
+func bodyWritesKey(present map[string]json.RawMessage, name string) bool {
 	for key, raw := range present {
-		if strings.EqualFold(key, "ri_exchange_mode") && string(raw) != "null" {
+		if strings.EqualFold(key, name) && string(raw) != "null" {
 			return true
 		}
 	}
@@ -178,7 +184,7 @@ func riExchangeModeSent(present map[string]json.RawMessage) bool {
 // such as "Auto". Such a row keeps its value until a caller sends a valid one,
 // and armed() keeps treating it as auto. Runs before the arming gates so a
 // malformed write never reveals grant state.
-func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent bool) error {
+func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent, delayRefused bool) error {
 	// Presence-based, not in Validate: a fresh install stores [] and partial
 	// saves that omit the key must keep working.
 	if providersSent && len(cfg.EnabledProviders) == 0 {
@@ -190,7 +196,19 @@ func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent, providersSent
 	if err := cfg.Validate(); err != nil {
 		return NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
+	if delayRefused && cfg.PurchaseDelayHours > 0 {
+		return NewClientError(400, "purchase_delay_hours must be 0: this deployment schedules no fire_scheduled_purchases sweep, so a delayed purchase would never execute")
+	}
 	return nil
+}
+
+// refusesDelay reports whether this write must keep the delay at 0: the
+// deployment has no fire sweep and the body writes purchase_delay_hours, or
+// the decode changed the stored value (a later duplicate key of null hides
+// an earlier write from the presence map). Presence-based, so a stored delay
+// does not block an unrelated partial save.
+func (h *Handler) refusesDelay(present map[string]json.RawMessage, before, after int) bool {
+	return h.fireSweepOff && (bodyWritesKey(present, "purchase_delay_hours") || after != before)
 }
 
 // requireSwitchGrants chains the arming gates of the two money-spending

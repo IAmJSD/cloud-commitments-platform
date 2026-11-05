@@ -1280,11 +1280,19 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 //
 // Returns (true, nil) when this call won the race and wrote the linkage,
 // (false, nil) when zero rows were affected because a concurrent retry
-// already claimed the row (or it is no longer 'failed'), and (false, err)
+// already claimed the row (or it is no longer 'failed', or an operator
+// settled it: SettleFailedExecution, issue #999), and (false, err)
 // on a real DB error. Must be called inside the same tx that inserts the
 // successor row, after that insert, so the FK on retry_execution_id is
 // satisfied.
 func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID, retryExecutionID string) (linked bool, err error) {
+	// Before the settlement migration no row can be settled (#999).
+	notSettled := ""
+	if ready, readyErr := settlementSchemaReady(ctx, tx); readyErr != nil {
+		return false, readyErr
+	} else if ready {
+		notSettled = "AND outcome_settled_at IS NULL"
+	}
 	q := `
 		UPDATE purchase_executions
 		   SET retry_execution_id = $2,
@@ -1292,7 +1300,7 @@ func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx,
 		 WHERE execution_id = $1
 		   AND status = 'failed'
 		   AND retry_execution_id IS NULL
-	`
+		   ` + notSettled
 	tag, err := tx.Exec(ctx, q, executionID, retryExecutionID)
 	if err != nil {
 		return false, fmt.Errorf("failed to link retry execution: %w", err)
@@ -2942,13 +2950,16 @@ func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
 // offering_class and look up the cloud account (issue #292). Rows saved before
 // migration 000108 can share a purchase_id; the earliest one (created_at, then
 // id) is returned, the same row ClaimMarketplaceListingSlot claims (#267).
+// return_posted_at (migration 000148) is read last so the revoke handler can
+// tell an accepted Azure Return from one still in progress (issue #1522).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
 		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
-		       revocation_in_flight, offering_class, listing_id, listing_state
+		       revocation_in_flight, offering_class, listing_id, listing_state,
+		       return_posted_at
 		FROM purchase_history
 		WHERE purchase_id = $1
 		ORDER BY created_at, id
@@ -2996,6 +3007,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		&n.offeringClass,
 		&n.listingID,
 		&n.listingState,
+		&r.ReturnPostedAt,
 	); err != nil {
 		return nil, fmt.Errorf("GetPurchaseHistoryByPurchaseID scan: %w", err)
 	}

@@ -318,13 +318,11 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 
 	r := armReservationRecord()
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
-	require.Error(t, err)
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 	// A server-side failure is not a 4xx: Azure may have taken the Return, so
-	// the answer is the uncertain 500 (issue #1529).
-	ce, isClient := IsClientError(err)
-	require.True(t, isClient, "want the uncertain-outcome ClientError, got %v", err)
-	assert.Equal(t, 500, ce.code, "server-side Azure errors must not be reported as 4xx")
+	// the answer is the shared pending-confirmation result (issues #1529, #1522).
+	require.NoError(t, err)
+	assertPendingConfirmation(t, result)
 }
 
 // TestRevokePurchase_UsesStampedWindow asserts the window check reads
@@ -1290,31 +1288,15 @@ func TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries(t *testing.T) {
 }
 
 // TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207 verifies that
-// when GetPurchaseHistoryByPurchaseID returns a row with revocation_in_flight=true
-// and revoked_at=nil, the endpoint returns 207 RECONCILE_PENDING rather than
-// re-attempting the Azure Return (which would fail "already returned").
+// when GetPurchaseHistoryByPurchaseID returns a row with revocation_in_flight=true,
+// revoked_at=nil and the return_posted_at stamp set, the endpoint answers
+// RECONCILE_PENDING rather than re-attempting the Azure Return (which would
+// fail "already returned"). Without the stamp the answer is
+// REVOCATION_PENDING_CONFIRMATION (issue #1522).
 func TestLoadAndRevokePurchaseHistory_RevocationInFlightReturns207(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-	mockAuth := new(MockAuthService)
-	t.Cleanup(func() {
-		mockStore.AssertExpectations(t)
-		mockAuth.AssertExpectations(t)
-	})
-
-	mockAuth.On("ValidateSession", ctx, "tok").Return(revokeAdminSession(), nil)
-
-	r := armReservationRecord()
-	r.RevocationInFlight = true
-	r.RevokedAt = nil
-
-	mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
-	mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
-
-	h := &Handler{config: mockStore, auth: mockAuth}
-	result, err := h.revokePurchase(ctx, sessionReq("tok"), r.PurchaseID)
-	require.NoError(t, err)
+	stamp := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	result := upFrontResult(t, inFlightRow(&stamp))
 
 	pending, ok := result.(*revokeReconcilePendingResult)
 	require.True(t, ok, "expected revokeReconcilePendingResult for in-flight row")
@@ -1480,12 +1462,9 @@ func TestCallAzureReturn_TransientError_KeepsInFlight(t *testing.T) {
 	r := armReservationRecord()
 
 	h := &Handler{config: mockStore}
-	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
-	require.Error(t, err)
-	ce, isClientErr := IsClientError(err)
-	require.True(t, isClientErr, "want the uncertain-outcome ClientError, got %v", err)
-	assert.Equal(t, 500, ce.code)
-	assert.Contains(t, ce.message, "verify the reservation state in the Azure portal")
+	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+	require.NoError(t, err)
+	assertPendingConfirmation(t, result)
 	mockStore.AssertNotCalled(t, "ClearRevocationInFlight")
 	mockStore.AssertExpectations(t)
 }

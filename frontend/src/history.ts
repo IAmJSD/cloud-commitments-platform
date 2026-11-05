@@ -7,7 +7,7 @@ import * as state from './state';
 import { formatCurrency, formatDate, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
 import { historyConfirmBody } from './history-confirm-body';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
-import type { RevokeQuote } from './api';
+import type { RevokePurchaseResult, RevokeQuote } from './api';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
@@ -38,6 +38,10 @@ import type {
   PurchaseHistoryColumnId,
   ApprovalQueueColumnId,
 } from './state';
+
+// Owner-approved copy for a revoke whose Azure Return is not yet confirmed (#1522).
+const REVOCATION_PENDING_CONFIRMATION_COPY =
+  "A refund for this purchase is being processed. Check back in a few minutes; don't start another revoke.";
 
 const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 
@@ -1707,13 +1711,23 @@ function wireRowActionHandlers(container: HTMLElement): void {
         destructive: true,
       });
       if (!ok) return;
+      let result: RevokePurchaseResult;
       try {
-        await api.revokePurchase(id, quote);
+        result = await api.revokePurchase(id, quote);
         markMutationSucceeded();
       } catch (revokeError) {
         console.error('Failed to revoke purchase:', revokeError);
         const err = revokeError as Error;
         showToast({ message: `Failed to revoke: ${err.message || 'unknown error'}`, kind: 'error' });
+        return;
+      }
+      if (result.code === 'REVOCATION_PENDING_CONFIRMATION') {
+        // Not proven either way: say so, and do not call it a success (#1522).
+        showToast({ message: REVOCATION_PENDING_CONFIRMATION_COPY, kind: 'info' });
+        return;
+      }
+      if (result.code === 'RECONCILE_PENDING') {
+        showToast({ message: result.message || 'Refund issued. We will reconcile your audit record shortly.', kind: 'warning' });
         return;
       }
       showToast({ message: 'Purchase revocation submitted', kind: 'success', timeout: 5_000 });

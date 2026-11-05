@@ -10,7 +10,7 @@ const cases = [
 for (const scenario of cases) {
   test.describe(scenario.zone, () => {
     test.use({ timezoneId: scenario.zone });
-    test('suggests notice lead time and preserves an earlier user date (mock API)', async ({ page }, testInfo) => {
+    test('suggests notice lead time, warns on an earlier user date and shows the 409 (mock API)', async ({ page }, testInfo) => {
       const errors: string[] = [];
       page.on('pageerror', error => errors.push(error.message));
       page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -22,11 +22,16 @@ for (const scenario of cases) {
       await seedAuth(page);
       await mockApi(page);
       const submitted: unknown[] = [];
+      const refusal = `start_date leaves too little notice before the first purchase; choose a start date on or after ${scenario.suggested}`;
       await page.route('**/api/plans**', async route => {
         const path = new URL(route.request().url()).pathname;
         if (path.endsWith('/purchases') && route.request().method() === 'POST') {
-          submitted.push(route.request().postDataJSON());
-          await route.fulfill({ json: { created: 1 } });
+          // The real backend refuses a date inside the (N+1)-day margin (409).
+          const body = route.request().postDataJSON() as { start_date: string };
+          submitted.push(body);
+          await route.fulfill(body.start_date < scenario.suggested
+            ? { status: 409, json: { error: refusal, code: 'start_date_inside_notice_margin' } }
+            : { json: { created: 1 } });
         } else if (path.endsWith('/accounts')) {
           await route.fulfill({ json: [] });
         } else {
@@ -52,12 +57,15 @@ for (const scenario of cases) {
       await date.fill(scenario.selected);
       await expect(date).toHaveValue(scenario.selected);
       await expect(date).toHaveAttribute('min', minimum!);
-      await expect(page.locator('#add-purchases-date-warning')).toContainText('may leave too little notice');
+      await expect(page.locator('#add-purchases-date-warning')).toContainText('will be refused');
       await page.screenshot({ path: testInfo.outputPath('notice-modal.png'), fullPage: true });
       await modal.getByRole('button', { name: 'Add Purchases', exact: true }).click();
-      await expect(modal).toHaveCount(0);
+      await expect(page.locator('#add-purchases-error')).toHaveText(refusal);
+      await expect(modal).toHaveCount(1);
       expect(submitted).toEqual([{ count: 1, start_date: scenario.selected }]);
-      expect(errors).toEqual([]);
+      // The mocked 409 is the only expected error; the browser also logs it as a console error.
+      expect(errors.some(e => e.startsWith('409 ') && e.endsWith('/api/plans/plan-notice/purchases'))).toBe(true);
+      expect(errors.filter(e => !e.includes('409'))).toEqual([]);
       await testInfo.attach('notice-date-receipt', { body: JSON.stringify({ ...scenario, suggested, minimum, notice: 3, submitted, scripts }), contentType: 'application/json' });
     });
   });

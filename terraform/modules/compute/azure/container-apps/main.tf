@@ -148,7 +148,12 @@ resource "azurerm_container_app" "main" {
             RECOMMENDATION_SCHEDULE = var.enable_scheduled_tasks ? "0 ${local.schedule_hour} * * *" : ""
           },
           local.archera_env,
-          var.additional_env_vars
+          var.additional_env_vars,
+          # Last, so an operator-supplied additional_env_vars entry cannot
+          # re-enable purchase delays on a deployment with no fire sweep (#1588).
+          {
+            FIRE_SWEEP_SCHEDULED = var.enable_scheduled_tasks && var.enable_fire_scheduled_purchases_schedule ? "true" : "false"
+          }
         )
         content {
           name  = env.key

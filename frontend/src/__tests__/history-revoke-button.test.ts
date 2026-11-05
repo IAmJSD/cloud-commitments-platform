@@ -23,6 +23,7 @@
  */
 
 import { loadHistory } from '../history';
+import { showToast } from '../toast';
 
 jest.mock('../api', () => ({
   getHistory: jest.fn(),
@@ -468,6 +469,63 @@ describe('History Revoke click flow (platform#96)', () => {
 
     expect(api.getRevokeQuote).not.toHaveBeenCalled();
     expect(api.revokePurchase).toHaveBeenCalledWith('commit-azure', undefined);
+  });
+
+  // platform#1522 / #1529: the backend answers 2xx with a code when it cannot
+  // prove the Azure Return was accepted; the generic "submitted" success toast
+  // would claim more than is known.
+  describe('unproven revoke outcomes', () => {
+    const quote = { refund_amount: 10, refund_currency: 'USD', quoted_at: '2024-01-16T00:00:00Z' };
+    const toasts = () => (showToast as jest.Mock).mock.calls.map(c => c[0]);
+
+    beforeEach(() => {
+      (api.getRevokeQuote as jest.Mock).mockResolvedValue(quote);
+      (confirmDialog as jest.Mock).mockResolvedValue(true);
+    });
+
+    test('REVOCATION_PENDING_CONFIRMATION: info toast with the owner copy, no success toast', async () => {
+      (api.revokePurchase as jest.Mock).mockResolvedValue({
+        code: 'REVOCATION_PENDING_CONFIRMATION',
+        message: 'server text that must not be shown',
+        retry_after_seconds: 300,
+      });
+
+      await clickRevoke('completed');
+
+      expect(toasts()).toEqual([
+        expect.objectContaining({
+          message: "A refund for this purchase is being processed. Check back in a few minutes; don't start another revoke.",
+          kind: 'info',
+        }),
+      ]);
+    });
+
+    test('RECONCILE_PENDING: shows the backend message as a warning, no success toast', async () => {
+      (api.revokePurchase as jest.Mock).mockResolvedValue({
+        code: 'RECONCILE_PENDING',
+        message: 'Refund issued. We will reconcile your audit record shortly. Do not retry.',
+        azure_returned: true,
+      });
+
+      await clickRevoke('completed');
+
+      expect(toasts()).toEqual([
+        expect.objectContaining({
+          message: 'Refund issued. We will reconcile your audit record shortly. Do not retry.',
+          kind: 'warning',
+        }),
+      ]);
+    });
+
+    test('a normal revoke still shows the success toast', async () => {
+      (api.revokePurchase as jest.Mock).mockResolvedValue({ status: 'revoked' });
+
+      await clickRevoke('completed');
+
+      expect(toasts()).toEqual([
+        expect.objectContaining({ message: 'Purchase revocation submitted', kind: 'success' }),
+      ]);
+    });
   });
 });
 

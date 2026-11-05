@@ -181,7 +181,12 @@ resource "google_cloud_run_v2_service" "main" {
             RECOMMENDATION_SCHEDULE = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
           },
           local.archera_env,
-          var.additional_env_vars
+          var.additional_env_vars,
+          # Last, so an operator-supplied additional_env_vars entry cannot
+          # re-enable purchase delays on a deployment with no fire sweep (#1588).
+          {
+            FIRE_SWEEP_SCHEDULED = var.enable_scheduled_tasks && var.enable_fire_scheduled_purchases_schedule ? "true" : "false"
+          }
         )
         content {
           name  = env.key

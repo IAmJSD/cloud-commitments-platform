@@ -22,9 +22,8 @@ lambda_memory_size          = 2048
 lambda_timeout              = 300
 lambda_reserved_concurrency = -1
 lambda_log_retention_days   = 7
-# Function URL auth_type is derived from enable_cdn (local in compute.tf):
-#   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
-#   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
+# Function URL auth_type is NONE by design (derived from enable_cdn = false in
+# compute.tf): the API authenticates every route (#16, not planned).
 # Static CORS origins: the local Webpack dev server. The deployed Function
 # URL's own origin is not listed here: its host is server-assigned, so the
 # deploy workflow reads it from the previous apply and passes it as

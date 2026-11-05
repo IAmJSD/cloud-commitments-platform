@@ -2053,8 +2053,10 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
     document.getElementById('add-purchases-date-help')!.textContent = `This plan has a ${notificationDays}-day notification window. Dates use midnight UTC; subsequent purchases follow the plan's interval.`;
     const updateDateWarning = (): void => {
       const selected = Date.parse(`${startDateInput.value}T00:00:00Z`);
-      document.getElementById('add-purchases-date-warning')!.textContent = selected < Date.now() + notificationDays * 24 * 60 * 60 * 1000
-        ? `This date may leave too little notice for recommendations to attach. Suggested start date: ${suggested}.`
+      // Mirrors the server's start_date_inside_notice_margin rule (D5 of #631):
+      // a date before now + (N+1) days is refused.
+      document.getElementById('add-purchases-date-warning')!.textContent = selected < Date.now() + (notificationDays + 1) * 24 * 60 * 60 * 1000
+        ? `This date leaves too little notice for recommendations to attach and will be refused. Suggested start date: ${suggested}.`
         : '';
     };
     startDateInput.addEventListener('input', updateDateWarning);

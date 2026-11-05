@@ -23,7 +23,18 @@ const (
 	HealthFactorStalled            PlanHealthFactorCode = "stalled"
 	HealthFactorBehindSchedule     PlanHealthFactorCode = "behind_schedule"
 	HealthFactorDisabledMidway     PlanHealthFactorCode = "disabled_midway"
+	HealthFactorStepWillNotAttach  PlanHealthFactorCode = "step_will_not_attach"
 )
+
+// planHealthFactorCodes lists every PlanHealthFactorCode constant above. A test
+// compares it with the openapi enum and with the factors
+// collectPlanHealthFactors emits, so a code added to one place but not the
+// others fails there.
+var planHealthFactorCodes = []PlanHealthFactorCode{
+	HealthFactorOverdue, HealthFactorFailedExecutions, HealthFactorCanceledExecutions,
+	HealthFactorRampBlocked, HealthFactorStalled, HealthFactorBehindSchedule,
+	HealthFactorDisabledMidway, HealthFactorStepWillNotAttach,
+}
 
 // PlanHealthFactor is one penalty applied when computing a plan's health
 // score. Returned alongside the score so a bad score is actionable instead
@@ -52,6 +63,9 @@ const (
 	// rather than an observation: the plan is not late, it is stopped, and it
 	// stays stopped until an operator acts on the execution that failed.
 	penaltyRampBlocked = 25
+
+	// A doomed root is a certain future failure, weighted like a blocked ramp.
+	penaltyStepWillNotAttach = 25
 
 	// maxCountedFailedExecs / maxCountedCanceledExecs cap how many rows
 	// count toward their respective penalty, so a plan with a long failure
@@ -119,12 +133,12 @@ var planHealthExecutionStatuses = config.HealthScoredExecutionStatuses
 // historical failure/cancellation rows and a disabled toggle-off after
 // completion are expected end-of-life noise, not signals an operator
 // should chase.
-func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock) (int, []PlanHealthFactor) {
+func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock, doomed config.DoomedRoot) (int, []PlanHealthFactor) {
 	if plan.RampSchedule.TotalSteps > 0 && plan.RampSchedule.IsComplete() {
 		return planHealthScoreMax, nil
 	}
 
-	factors := collectPlanHealthFactors(plan, now, counts, block)
+	factors := collectPlanHealthFactors(plan, now, counts, block, doomed)
 
 	score := planHealthScoreMax
 	for _, f := range factors {
@@ -149,7 +163,7 @@ func computePlanHealth(plan config.PurchasePlan, now time.Time, counts config.Ex
 // alongside the cause and read as two independent problems. Which one an
 // operator sees is exactly the distinction issue #1861 asked for: a plan that
 // is merely late looks nothing like a plan whose next step cannot complete.
-func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock) []PlanHealthFactor {
+func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts config.ExecutionStatusCounts, block config.RampStepBlock, doomed config.DoomedRoot) []PlanHealthFactor {
 	var factors []PlanHealthFactor
 	if f, ok := overdueFactor(plan, now); ok {
 		factors = append(factors, f)
@@ -166,6 +180,9 @@ func collectPlanHealthFactors(plan config.PurchasePlan, now time.Time, counts co
 		factors = append(factors, f)
 	}
 	if f, ok := disabledMidwayFactor(plan); ok {
+		factors = append(factors, f)
+	}
+	if f, ok := stepWillNotAttachFactor(plan, doomed); ok {
 		factors = append(factors, f)
 	}
 	return factors
@@ -187,6 +204,29 @@ func rampBlockedFactor(block config.RampStepBlock) (PlanHealthFactor, bool) {
 		Note: fmt.Sprintf("ramp step %d cannot complete: %d execution(s) failed it with no retry in flight",
 			block.StepNumber, block.StuckExecutions),
 	}, true
+}
+
+// stepWillNotAttachFactor: the plan's next root is empty and dated where the
+// notification tick can never attach recommendations, so it will fail on its
+// date (the #631 scenario: health read 100 until the failure). The store read
+// (GetDoomedNextRoots) is the predicate; this only words it.
+//
+// The predicate is "certainly doomed", not "at risk": a root in the last 24h
+// slice of the window, [now+N, now+N+1d), may still be attached by a tick, and
+// flagging it would put false alarms on healthy plans every night. Add Purchases
+// refuses new dates in that slice (validatePurchaseScheduling), so only roots
+// created before that rule can sit there. The note wording is shared with the
+// planned-purchases estimate reason (S2 of #631); keep the two in step.
+func stepWillNotAttachFactor(plan config.PurchasePlan, doomed config.DoomedRoot) (PlanHealthFactor, bool) {
+	if doomed.StepNumber <= 0 {
+		return PlanHealthFactor{}, false
+	}
+	note := fmt.Sprintf("Step %d is scheduled inside the %d-day notice window, so it will not get recommendations and will fail on its date.",
+		doomed.StepNumber, plan.NotificationDaysBefore)
+	if plan.NotificationDaysBefore < 1 {
+		note = fmt.Sprintf("Step %d will not get recommendations because the plan has no notice window (notification_days_before is 0).", doomed.StepNumber)
+	}
+	return PlanHealthFactor{Code: HealthFactorStepWillNotAttach, Penalty: penaltyStepWillNotAttach, Note: note}, true
 }
 
 // overdueFactor: enabled AND next_execution_date < now.

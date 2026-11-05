@@ -20,9 +20,9 @@ import (
 // the Return with a 503, which does not say whether it took the Return:
 //
 //   - the row stays flagged in flight with no recorded Return and not revoked,
-//     and the user is told the outcome is uncertain (before the fix the flag
+//     and the user gets REVOCATION_PENDING_CONFIRMATION (before the fix the flag
 //     was cleared and the answer was a flat failure);
-//   - a retry is answered RECONCILE_PENDING and posts no second Return;
+//   - a retry is answered REVOCATION_PENDING_CONFIRMATION (no stamp) and posts no second Return;
 //   - the finalize_revocations sweep leaves the fresh flag alone, and once it
 //     is older than the 2h stale window releases it without marking the
 //     purchase revoked.
@@ -64,12 +64,9 @@ func TestRevokeAzure_UncertainReturn_FlagKeptUntilSweepReleases(t *testing.T) {
 		return s
 	}
 
-	_, err = h.loadAndRevokePurchaseHistory(ctx, req, revokeAdminSession(), record.PurchaseID)
-	require.Error(t, err)
-	ce, ok := IsClientError(err)
-	require.True(t, ok, "want the uncertain-outcome ClientError, got %v", err)
-	assert.Equal(t, 500, ce.code)
-	assert.Equal(t, errRevokeReturnUncertain, ce.message)
+	first, err := h.loadAndRevokePurchaseHistory(ctx, req, revokeAdminSession(), record.PurchaseID)
+	require.NoError(t, err)
+	assertPendingConfirmation(t, first)
 	got := load()
 	assert.True(t, got.inFlight, "an uncertain Return must keep the in-flight flag")
 	assert.Nil(t, got.returnPostedAt, "an uncertain Return is not recorded as accepted")
@@ -77,9 +74,7 @@ func TestRevokeAzure_UncertainReturn_FlagKeptUntilSweepReleases(t *testing.T) {
 
 	result, err := h.loadAndRevokePurchaseHistory(ctx, req, revokeAdminSession(), record.PurchaseID)
 	require.NoError(t, err)
-	pending, ok := result.(*revokeReconcilePendingResult)
-	require.True(t, ok, "want RECONCILE_PENDING on retry, got %T %+v", result, result)
-	assert.Equal(t, "RECONCILE_PENDING", pending.Code)
+	assertPendingConfirmation(t, result)
 	assert.Equal(t, 1, ret.calls, "the retry must not post a second Return")
 
 	sweeper := purchase.NewManager(purchase.ManagerConfig{ConfigStore: store})

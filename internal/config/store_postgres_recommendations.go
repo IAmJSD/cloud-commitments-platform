@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -416,42 +415,38 @@ func (s *PostgresStore) checkAzurePricingMigration(ctx context.Context, required
 	if !required {
 		return nil
 	}
-	return checkSchemaVersion(ctx, s.db, azurePricingMigrationVersion, ErrAzurePricingNotReady, "Azure pricing")
+	version, dirty, found, err := readSchemaVersion(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("check Azure pricing migration: %w", err)
+	}
+	if !found || version < azurePricingMigrationVersion || dirty {
+		return ErrAzurePricingNotReady
+	}
+	return nil
 }
 
 // CheckAZConfigMigration returns ErrAZConfigMigrationNotReady (wrapped, with
-// the schema version found) until both az_config expand migrations (000155
-// recommendations, 000156 purchase_suppressions) are applied.
+// the schema version found) until both az_config expand migrations are applied.
 func (s *PostgresStore) CheckAZConfigMigration(ctx context.Context) error {
-	return checkSchemaVersion(ctx, s.db, azConfigExpandMigrationVersion, ErrAZConfigMigrationNotReady, "az_config")
+	return checkAZConfigSchema(ctx, s.db)
 }
 
 // checkAZConfigMigrationTx is CheckAZConfigMigration on the caller's open
 // transaction, so a write inside a tx does not take a second pool connection.
 func checkAZConfigMigrationTx(ctx context.Context, tx pgx.Tx) error {
-	return checkSchemaVersion(ctx, tx, azConfigExpandMigrationVersion, ErrAZConfigMigrationNotReady, "az_config")
+	return checkAZConfigSchema(ctx, tx)
 }
 
-// rowQuerier is satisfied by both the pool and pgx.Tx.
-type rowQuerier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// checkSchemaVersion fails with notReady when schema_migrations is empty,
-// dirty or below minVersion. Migrations apply in order, so the version alone
-// says every earlier one ran.
-func checkSchemaVersion(ctx context.Context, q rowQuerier, minVersion int, notReady error, what string) error {
-	var version int
-	var dirty bool
-	err := q.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return notReady
-	}
+func checkAZConfigSchema(ctx context.Context, q rowQuerier) error {
+	version, dirty, found, err := readSchemaVersion(ctx, q)
 	if err != nil {
-		return fmt.Errorf("check %s migration: %w", what, err)
+		return fmt.Errorf("check az_config migration: %w", err)
 	}
-	if version < minVersion || dirty {
-		return fmt.Errorf("%w: schema version %d (dirty=%t), need >= %d", notReady, version, dirty, minVersion)
+	if !found {
+		return ErrAZConfigMigrationNotReady
+	}
+	if version < azConfigExpandMigrationVersion || dirty {
+		return fmt.Errorf("%w: schema version %d (dirty=%t), need >= %d", ErrAZConfigMigrationNotReady, version, dirty, azConfigExpandMigrationVersion)
 	}
 	return nil
 }

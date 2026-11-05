@@ -108,7 +108,7 @@ func (m *Manager) claimFromRows(ctx context.Context, tx pgx.Tx, locked *config.P
 			claim.existing = root
 			return claim, nil
 		}
-		if root.ScheduledDate.Before(vetoWindowEnd(locked, time.Now())) {
+		if root.ScheduledDate.Before(locked.VetoWindowEnd(time.Now())) {
 			// The row keeps its own date. One due, or due before the veto window
 			// ends, would be bought before anyone could cancel; it is left to
 			// the scheduler, which fails a due empty row (S10).
@@ -355,18 +355,12 @@ func (m *Manager) writeAttached(ctx context.Context, tx pgx.Tx, locked *config.P
 	return claim, nil
 }
 
-// vetoWindowEnd is the earliest time a freshly emailed step may be bought:
-// NotificationDaysBefore days from now.
-func vetoWindowEnd(locked *config.PurchasePlan, now time.Time) time.Time {
-	return now.AddDate(0, 0, locked.NotificationDaysBefore)
-}
-
 // attachScheduledDate is the later of the plan's next date and the end of the
 // veto window, so the scheduler (which buys any notified row once its date
 // passes) can never buy before the operator has had NotificationDaysBefore
 // days to cancel, whether the plan date is past or only close.
 func attachScheduledDate(locked *config.PurchasePlan, now time.Time) time.Time {
-	if end := vetoWindowEnd(locked, now); locked.NextExecutionDate.Before(end) {
+	if end := locked.VetoWindowEnd(now); locked.NextExecutionDate.Before(end) {
 		return end
 	}
 	return *locked.NextExecutionDate

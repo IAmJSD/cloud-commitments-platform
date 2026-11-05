@@ -171,6 +171,7 @@ repos:
       - id: cfn-lint
         name: Lint CloudFormation templates
         language: python
+        language_version: python3.12
         additional_dependencies: ['cfn-lint==1.58.0']
         entry: cfn-lint --non-zero-exit-code error
         files: ^(cloudformation/stacks/[^/]+|iac/federation/[^/]+/cloudformation)/template\.ya?ml$

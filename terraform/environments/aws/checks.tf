@@ -27,19 +27,11 @@ module "deployment_checks" {
 # `check` block, not a `precondition`: it runs on every plan/apply and
 # surfaces as a WARNING, but never fails the plan or blocks an apply. A
 # blocking precondition would also block every future prod deploy (any
-# unrelated change) until the CloudFront OAC cutover (#16) lands -- a
-# coordinated runtime cutover (DNS + certificate + a human-run apply) this
-# change does not perform. Mirrors
-# terraform/environments/gcp/checks.tf's identical guard for the GCP half
-# of the same defect.
-#
-# Today this assert fails (WARN) for prod: environment = "prod" has
-# enable_cdn = false, so lambda_function_url_auth_type = "NONE" (compute.tf)
-# leaves the Lambda Function URL reachable from the open internet with no
-# IAM gate. That is the current, tracked state (#128, LeanerCloud/cloud-commitments-cli#575),
-# not a regression introduced here -- the point of this check is to make
-# sure it cannot become "current" again silently once the #16 cutover lands
-# and someone edits a tfvars file back.
+# unrelated change). The Lambda Function URL is public by design (#16, not
+# planned): the API authenticates every route and no CloudFront OAC cut-over
+# is planned. This warning stays as a visibility note that prod has no
+# network-level gate in front of the URL; it is expected on AWS prod.
+# Mirrors terraform/environments/gcp/checks.tf's guard for the GCP half.
 
 check "prod_requires_network_authenticated_ingress" {
   assert {
@@ -48,8 +40,8 @@ check "prod_requires_network_authenticated_ingress" {
       environment = "prod" with enable_cdn = false leaves
       lambda_function_url_auth_type = "NONE" (see compute.tf): the Lambda
       Function URL is reachable from the open internet with no IAM gate.
-      This must be resolved by the enable_cdn = true cutover (CloudFront +
-      OAC, tracked by #16), not by silencing this warning.
+      This is by design (#16, not planned): the API authenticates every
+      route. The warning is informational and is expected for AWS prod.
     EOT
   }
 }
