@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_PurchaseExecutionsOutcomeSettlement covers 000157 and its
-// VALIDATE follow-up 000158: up, down and the all-or-nothing CHECK (#999).
+// TestMigration_PurchaseExecutionsOutcomeSettlement covers 000155 and its
+// VALIDATE follow-up 000156: up, down and the all-or-nothing CHECK (#999).
 func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 	ctx := context.Background()
 	container := testhelpers.RequirePostgresContainer(ctx, t)
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
-	const version, validateVersion = 157, 158
+	const version, validateVersion = 155, 156
 	prev := previousMigrationVersion(t, version)
 	validated := func() bool {
 		var ok bool
@@ -37,7 +37,7 @@ func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 	}
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	require.Zero(t, columns(), "before 000157 the columns must not exist")
+	require.Zero(t, columns(), "before 000155 the columns must not exist")
 	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_executions (execution_id, status, step_number, scheduled_date, recommendations)
 		VALUES ('00000000-0000-0000-0000-0000000009a1', 'failed', 1, now(), '[]')`)
@@ -45,7 +45,7 @@ func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, version))
 	require.Equal(t, 3, columns())
-	require.False(t, validated(), "000157 adds the CHECK NOT VALID to avoid a table scan under lock")
+	require.False(t, validated(), "000155 adds the CHECK NOT VALID to avoid a table scan under lock")
 	var settled bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT outcome_settled_at IS NOT NULL FROM purchase_executions
 		WHERE execution_id = '00000000-0000-0000-0000-0000000009a1'`).Scan(&settled))
@@ -72,7 +72,7 @@ func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 		outcome_settlement = NULL`)
 	require.NoError(t, err)
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, validateVersion))
-	require.True(t, validated(), "000158 validates the CHECK")
+	require.True(t, validated(), "000156 validates the CHECK")
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
 	require.Zero(t, columns(), "down must drop the columns")
@@ -87,7 +87,7 @@ func TestMigration_OutcomeSettlementRefusesRetryLink(t *testing.T) {
 	container := testhelpers.RequirePostgresContainer(ctx, t)
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), 157))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), 155))
 
 	insert := func(id, settled string) {
 		_, err := pool.Exec(ctx, `INSERT INTO purchase_executions (execution_id, status, step_number, scheduled_date, recommendations,
@@ -116,8 +116,8 @@ func TestMigration_OutcomeSettlementDownRefusesWithSettlements(t *testing.T) {
 	container := testhelpers.RequirePostgresContainer(ctx, t)
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
-	prev := previousMigrationVersion(t, 157)
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 157))
+	prev := previousMigrationVersion(t, 155)
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 155))
 	_, err := pool.Exec(ctx, `INSERT INTO purchase_executions (execution_id, status, step_number, scheduled_date, recommendations,
 		outcome_settled_at, outcome_settled_by, outcome_settlement)
 		VALUES (gen_random_uuid(), 'failed', 1, now(), '[]', now(), 'u', 's')`)

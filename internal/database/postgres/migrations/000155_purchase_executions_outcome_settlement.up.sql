@@ -1,4 +1,4 @@
--- Migration 000157 (issue #999): an operator's audited settlement of a failed
+-- Migration 000155 (issue #999): an operator's audited settlement of a failed
 -- execution whose outcome is unknown (failed without no_submission proof).
 --
 -- Settling never changes status and never makes the row count as unbought:
@@ -21,7 +21,7 @@ ALTER TABLE purchase_executions
        AND (outcome_settled_at IS NULL) = (outcome_settlement IS NULL))
     NOT VALID;
 -- NOT VALID still checks every new write and skips the table scan under the
--- ACCESS EXCLUSIVE lock; 000158 validates it.
+-- ACCESS EXCLUSIVE lock; 000156 validates it.
 
 -- A settled row is never retried. LinkRetryExecutionAtomic enforces it, and
 -- this trigger holds it for any other writer, such as a binary from before

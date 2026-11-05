@@ -10,7 +10,7 @@ import (
 
 // settlementMigrationVersion is the migration that adds the outcome-settlement
 // columns to purchase_executions (issue #999).
-const settlementMigrationVersion = 157
+const settlementMigrationVersion = 155
 
 // rowQuerier is satisfied by both the store's connection and a pgx.Tx, so a
 // schema check can run inside the caller's transaction.
