@@ -25,16 +25,13 @@ import (
 // Issue #1529. Stub Azure clients, or the real armreservations Return client
 // pointed at a local TLS server, and a mock store; nothing here calls Azure.
 
-// assertUncertainReturn checks the uncertain-outcome answer: a 500 telling the
-// user to check the Azure portal, the in-flight flag kept, and nothing
-// recorded or revoked.
-func assertUncertainReturn(t *testing.T, mockStore *MockConfigStore, err error) {
+// assertUncertainReturn checks the uncertain-outcome answer: the shared
+// REVOCATION_PENDING_CONFIRMATION result (issue #1522), the in-flight flag
+// kept, and nothing recorded or revoked.
+func assertUncertainReturn(t *testing.T, mockStore *MockConfigStore, result any, err error) {
 	t.Helper()
-	require.Error(t, err)
-	ce, ok := IsClientError(err)
-	require.True(t, ok, "want the uncertain-outcome ClientError, got %v", err)
-	assert.Equal(t, 500, ce.code)
-	assert.Equal(t, errRevokeReturnUncertain, ce.message)
+	require.NoError(t, err)
+	assertPendingConfirmation(t, result)
 	mockStore.AssertCalled(t, "FlipPurchaseRevocationInFlight")
 	mockStore.AssertNotCalled(t, "ClearRevocationInFlight")
 	mockStore.AssertNotCalled(t, "MarkRevocationReturnPosted")
@@ -67,8 +64,8 @@ func TestCallAzureReturn_AmbiguousFailure_KeepsFlagAndAnswersUncertain(t *testin
 			returnClient := &stubReturnClient{err: returnErr}
 			h := &Handler{config: mockStore}
 
-			_, err := h.callAzureReturn(context.Background(), calcClient, returnClient, armReservationRecord(), "order-abc", "res-xyz", confirmedQuote(10, "USD"))
-			assertUncertainReturn(t, mockStore, err)
+			result, err := h.callAzureReturn(context.Background(), calcClient, returnClient, armReservationRecord(), "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+			assertUncertainReturn(t, mockStore, result, err)
 			assert.Equal(t, 1, returnClient.calls, "exactly one Return")
 		})
 	}
@@ -109,7 +106,7 @@ func TestCallAzureReturn_DefiniteRefusal_ClearsFlag(t *testing.T) {
 				require.True(t, isClient, "got %v", err)
 				assert.Equal(t, tc.code, ce.code)
 			}
-			assert.NotEqual(t, errRevokeReturnUncertain, err.Error(), "a definite refusal is not uncertain")
+			assert.NotContains(t, err.Error(), "may already have been accepted", "a definite refusal is not uncertain")
 			mockStore.AssertNotCalled(t, "MarkRevocationReturnPosted")
 			mockStore.AssertNotCalled(t, "MarkPurchaseRevoked")
 		})
@@ -223,8 +220,8 @@ func TestCallAzureReturn_RealClient_AmbiguousKeepsFlag(t *testing.T) {
 			calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-retry"}
 			h := &Handler{config: mockStore}
 
-			_, err := h.callAzureReturn(context.Background(), calcClient, returnClientFor(t, srv), armReservationRecord(), "order-abc", "res-xyz", confirmedQuote(10, "USD"))
-			assertUncertainReturn(t, mockStore, err)
+			result, err := h.callAzureReturn(context.Background(), calcClient, returnClientFor(t, srv), armReservationRecord(), "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+			assertUncertainReturn(t, mockStore, result, err)
 			assert.Equal(t, tc.requests, srv.requests.Load(), "requests the client sent")
 		})
 	}

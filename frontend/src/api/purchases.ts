@@ -94,9 +94,20 @@ export async function approvePurchase(executionId: string): Promise<void> {
  * throws on 4xx/5xx.
  */
 export interface RevokePurchaseResult {
-  status: string;
-  revoked_at: string;
-  revoked_via: string;
+  status?: string;
+  revoked_at?: string;
+  revoked_via?: string;
+  /**
+   * Set instead of status when the outcome is not final: RECONCILE_PENDING
+   * (the refund was issued, the record follows) or
+   * REVOCATION_PENDING_CONFIRMATION (not yet proven; do not revoke again).
+   */
+  code?: 'RECONCILE_PENDING' | 'REVOCATION_PENDING_CONFIRMATION';
+  message?: string;
+  /** Present (true) only with RECONCILE_PENDING; omitted when unproven. */
+  azure_returned?: boolean;
+  /** REVOCATION_PENDING_CONFIRMATION only: when to check back. */
+  retry_after_seconds?: number;
 }
 
 /** Azure refund quote from GET /purchases/{id}/revoke/calculate. */

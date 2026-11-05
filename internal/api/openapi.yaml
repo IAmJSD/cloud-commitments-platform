@@ -1512,10 +1512,15 @@ paths:
         Azure reservations are supported, within 7 days of purchase less a
         one-hour safety margin, and the body must echo the quote from GET
         /api/purchases/{id}/revoke/calculate. An already revoked row answers
-        "already_revoked"; a row whose Azure refund was issued but not yet
-        recorded, or is being posted by a concurrent revoke of the same
-        purchase, answers code RECONCILE_PENDING and must not be retried.
-        Only one revoke at a time posts the Azure return.
+        "already_revoked"; a row whose Azure refund is proven issued (the
+        return was recorded) but whose revocation is not yet recorded answers
+        code RECONCILE_PENDING with azure_returned true and must not be
+        retried. When it is not proven that Azure accepted the return (a
+        concurrent revoke of the same purchase is still posting it, or an
+        earlier return failed without a definite answer) it answers code
+        REVOCATION_PENDING_CONFIRMATION with no azure_returned and a
+        retry_after_seconds hint: check back later and do not start another
+        revoke. Only one revoke at a time posts the Azure return.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -8583,9 +8588,12 @@ components:
         One of three shapes. A canceled scheduled execution: status
         "canceled" and message. A revoked purchase history row: status
         "revoked" or "already_revoked" with revoked_at and revoked_via. An
-        Azure refund that was issued but could not be recorded yet, or that a
-        concurrent revoke of the same purchase is posting: code
-        RECONCILE_PENDING, azure_returned and message (do not retry).
+        Azure refund that was issued but could not be recorded yet: code
+        RECONCILE_PENDING, azure_returned true and message (do not retry). A
+        refund not proven issued, for example one a concurrent revoke of the
+        same purchase is still posting, or whose outcome is uncertain: code
+        REVOCATION_PENDING_CONFIRMATION, message and retry_after_seconds, with
+        no azure_returned (check back later; do not start another revoke).
       properties:
         status:
           type: string
@@ -8600,9 +8608,17 @@ components:
           description: How the revocation was made, for example direct-api.
         code:
           type: string
-          enum: [RECONCILE_PENDING]
+          enum: [RECONCILE_PENDING, REVOCATION_PENDING_CONFIRMATION]
         azure_returned:
           type: boolean
+          description: >
+            Present and true only with RECONCILE_PENDING. Omitted with
+            REVOCATION_PENDING_CONFIRMATION, where the refund is not proven.
+        retry_after_seconds:
+          type: integer
+          description: >
+            REVOCATION_PENDING_CONFIRMATION only: seconds to wait before
+            checking the purchase again.
 
     RevokeRefundQuote:
       type: object

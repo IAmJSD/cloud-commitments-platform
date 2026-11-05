@@ -1252,6 +1252,12 @@ type PurchaseHistoryRecord struct {
 	// can detect and retry the MarkPurchaseRevoked write without re-calling Azure
 	// (preventing a duplicate-refund error).
 	RevocationInFlight bool `json:"revocation_in_flight,omitempty" dynamodbav:"revocation_in_flight,omitempty"`
+	// ReturnPostedAt is when the revoke handler recorded that Azure accepted
+	// the Return (MarkRevocationReturnPosted, migration 000148). Set means the
+	// refund was issued; unset proves nothing, because the stamp is best-effort
+	// (issue #1522). Read only by GetPurchaseHistoryByPurchaseID and never
+	// serialized, so history responses do not expose it.
+	ReturnPostedAt *time.Time `json:"-" dynamodbav:"-"`
 
 	// OfferingClass records whether this commitment is a 'standard' or
 	// 'convertible' RI. NULL on pre-migration rows. The Sell-on-Marketplace

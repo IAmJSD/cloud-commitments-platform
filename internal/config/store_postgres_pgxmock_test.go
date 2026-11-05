@@ -1024,10 +1024,13 @@ func TestPGXMock_GetPurchaseHistoryByPurchaseID_Success(t *testing.T) {
 		"revocation_in_flight",
 		// marketplace columns (issue #292)
 		"offering_class", "listing_id", "listing_state",
+		// return_posted_at (migration 000148, issue #1522)
+		"return_posted_at",
 	}
 	// monthly_cost scans straight into the *float64 r.MonthlyCost (not through
 	// the nullables struct), so the mock value must be a *float64.
 	monthly := 50.0
+	posted := now.Add(-time.Minute)
 	rows := pgxmock.NewRows(cols).
 		AddRow("acc-1", "pur-1", now, "aws", "ec2", "us-east-1",
 			"m5.large", 2, 1, "no-upfront", 100.0, &monthly, 200.0,
@@ -1041,7 +1044,9 @@ func TestPGXMock_GetPurchaseHistoryByPurchaseID_Success(t *testing.T) {
 			// marketplace columns (issue #292)
 			sql.NullString{Valid: true, String: "standard"},
 			sql.NullString{Valid: true, String: "listing-1"},
-			sql.NullString{Valid: true, String: "active"})
+			sql.NullString{Valid: true, String: "active"},
+			// return_posted_at (migration 000148, issue #1522)
+			&posted)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
 	record, err := store.GetPurchaseHistoryByPurchaseID(ctx, "pur-1")
@@ -1057,6 +1062,10 @@ func TestPGXMock_GetPurchaseHistoryByPurchaseID_Success(t *testing.T) {
 	assert.Equal(t, "standard", record.OfferingClass)
 	assert.Equal(t, "listing-1", record.ListingID)
 	assert.Equal(t, "active", record.ListingState)
+	// The stamp the revoke handler uses to tell an accepted Azure Return from
+	// one still in progress (issue #1522).
+	require.NotNil(t, record.ReturnPostedAt)
+	assert.True(t, record.ReturnPostedAt.Equal(posted))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
