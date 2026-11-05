@@ -48,18 +48,17 @@ type ExecutionSettlement struct {
 
 // settleTarget is the locked row SettleFailedExecution judges.
 type settleTarget struct {
-	status       string
-	noSubmission bool
-	retryID      *string
-	planID       *string
-	settledAt    *time.Time
-	settledBy    *string
-	settlement   *string
+	status     string
+	retryID    *string
+	planID     *string
+	settledAt  *time.Time
+	settledBy  *string
+	settlement *string
 }
 
 // SettleFailedExecution records an operator's audited settlement of a failed
-// plan execution that has no no_submission proof, so it stops blocking the
-// delete of its editor-managed plan (requireManagedDeleteTx). It never changes
+// plan execution, so it stops blocking the delete of its editor-managed plan
+// (requireManagedDeleteTx). It never changes
 // the status and never makes the row count as unbought: the ramp ledger and
 // the retention trigger keep treating it as possibly bought. A settled row can
 // no longer be retried (LinkRetryExecutionAtomic), because a retry of a row
@@ -141,10 +140,10 @@ func lockSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*sett
 		return nil, fmt.Errorf("lock plan %s: %w", *planID, lockErr)
 	}
 	var t settleTarget
-	err = tx.QueryRow(ctx, `SELECT status, no_submission, retry_execution_id::text, plan_id::text,
+	err = tx.QueryRow(ctx, `SELECT status, retry_execution_id::text, plan_id::text,
 		outcome_settled_at, outcome_settled_by, outcome_settlement
 		FROM purchase_executions WHERE execution_id = $1 FOR UPDATE`, executionID).Scan(
-		&t.status, &t.noSubmission, &t.retryID, &t.planID, &t.settledAt, &t.settledBy, &t.settlement)
+		&t.status, &t.retryID, &t.planID, &t.settledAt, &t.settledBy, &t.settlement)
 	if err != nil {
 		return nil, fmt.Errorf("lock execution %s: %w", executionID, err)
 	}
@@ -160,10 +159,10 @@ func lockSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*sett
 // once written, so no lock is needed.
 func readDetachedSettleTarget(ctx context.Context, tx pgx.Tx, executionID string) (*settleTarget, error) {
 	var t settleTarget
-	err := tx.QueryRow(ctx, `SELECT status, no_submission, retry_execution_id::text,
+	err := tx.QueryRow(ctx, `SELECT status, retry_execution_id::text,
 		outcome_settled_at, outcome_settled_by, outcome_settlement
 		FROM purchase_executions WHERE execution_id = $1`, executionID).Scan(
-		&t.status, &t.noSubmission, &t.retryID, &t.settledAt, &t.settledBy, &t.settlement)
+		&t.status, &t.retryID, &t.settledAt, &t.settledBy, &t.settlement)
 	if err != nil {
 		return nil, fmt.Errorf("read execution %s: %w", executionID, err)
 	}
@@ -173,14 +172,11 @@ func readDetachedSettleTarget(ctx context.Context, tx pgx.Tx, executionID string
 	return &t, nil
 }
 
-// checkSettleTarget allows only the rows that block a managed delete for an
-// unknown outcome: failed without a no_submission proof.
+// checkSettleTarget allows only a failed row. One proven never submitted is
+// allowed too: retry still accepts it, so settling is how it stops being retried.
 func checkSettleTarget(t *settleTarget) error {
 	if t.status != StatusFailed {
 		return fmt.Errorf("%w: execution is %s; only a failed execution can be settled", ErrExecutionSettleConflict, t.status)
-	}
-	if t.noSubmission {
-		return fmt.Errorf("%w: execution is proven never submitted and needs no settlement", ErrExecutionSettleConflict)
 	}
 	return nil
 }

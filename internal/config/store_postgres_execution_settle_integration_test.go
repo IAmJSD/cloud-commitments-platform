@@ -76,10 +76,9 @@ func TestSettleFailedExecutionRefusals(t *testing.T) {
 	f := managedSettleFixture(ctx, t)
 	acct := &f.accounts[0]
 	conflict := map[string]string{
-		"completed":            f.row(ctx, t, 1, acct, StatusCompleted).ExecutionID,
-		"pending":              f.row(ctx, t, 1, acct, "pending").ExecutionID,
-		"canceled":             f.row(ctx, t, 1, acct, StatusCanceled).ExecutionID,
-		"failed no_submission": f.rowWithRecs(ctx, t, 1, acct, StatusFailed, true).ExecutionID,
+		"completed": f.row(ctx, t, 1, acct, StatusCompleted).ExecutionID,
+		"pending":   f.row(ctx, t, 1, acct, "pending").ExecutionID,
+		"canceled":  f.row(ctx, t, 1, acct, StatusCanceled).ExecutionID,
 	}
 	for _, tail := range []string{"pending", "running", StatusFailed} {
 		head := f.row(ctx, t, 2, acct, StatusFailed)
@@ -170,19 +169,47 @@ func TestSettleReplayAfterPlanDelete(t *testing.T) {
 	require.ErrorIs(t, err, ErrExecutionSettleConflict)
 }
 
-// A failed tail with a no_submission proof can still be retried, so it keeps
-// its predecessor's settlement refused.
-func TestSettleRefusesChainWhoseTailIsFailedNoSubmission(t *testing.T) {
+// A never-submitted failed row can still be retried, so it must be settleable:
+// otherwise a head whose tail is such a row could never be settled.
+func TestSettleFailedNoSubmissionChain(t *testing.T) {
 	ctx := context.Background()
 	f := managedSettleFixture(ctx, t)
 	head := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
 	tail := f.retryInOneTx(ctx, t, head, uuid.NewString(), StatusFailed)
 	_, err := f.store.db.Exec(ctx, `UPDATE purchase_executions SET no_submission = true WHERE execution_id = $1`, tail.ExecutionID)
 	require.NoError(t, err)
+	ledger := f.committed(ctx, t)
 
 	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
-	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+	require.ErrorIs(t, err, ErrExecutionSettleConflict, "the unsettled tail may still be retried")
 	require.False(t, f.settled(ctx, t, head.ExecutionID))
+	_, err = f.settle(ctx, tail.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.Equal(t, ledger, f.committed(ctx, t), "settling must not change what the ledger counts")
+
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+	successor := &PurchaseExecution{ExecutionID: uuid.NewString(), Status: "pending", StepNumber: 1}
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		require.NoError(t, f.store.SavePurchaseExecutionTx(ctx, tx, successor))
+		linked, linkErr := f.store.LinkRetryExecutionAtomic(ctx, tx, tail.ExecutionID, successor.ExecutionID)
+		require.NoError(t, linkErr)
+		require.False(t, linked, "a settled tail must not be retried")
+		return nil
+	}))
+}
+
+// A never-submitted row on its own is settleable and stays never-submitted.
+func TestSettleFailedNoSubmissionRow(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	row := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, true)
+	_, err := f.settle(ctx, row.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	got, err := f.store.GetExecutionByID(ctx, row.ExecutionID)
+	require.NoError(t, err)
+	require.True(t, got.NoSubmission)
 }
 
 // A retry that links the row first wins: the settle waits on the row lock,

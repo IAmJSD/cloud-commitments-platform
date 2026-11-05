@@ -1494,8 +1494,9 @@ paths:
         Requires execute permission on purchases, execution account access and
         matching permission constraints. The row remains failed and counts as
         possibly bought; settlement permanently prevents retry and can unblock
-        deletion of its managed plan. A retry chain that may still buy is
-        refused. Repeating an identical settlement returns the stored result.
+        deletion of its managed plan. A failed execution proven never
+        submitted can be settled too, to stop it being retried. A retry chain
+        that may still buy is refused. Repeating an identical settlement returns the stored result.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
