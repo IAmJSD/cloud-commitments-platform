@@ -113,7 +113,7 @@ resource "aws_iam_policy" "networking" {
       },
       {
         # ec2:RunInstances is needed for the fck-nat AutoScaling group
-        # (one t4g.nano per AZ). Restricting allowed instance types prevents
+        # (one t4g.nano NAT instance in total). Restricting allowed instance types prevents
         # the deploy SA from launching arbitrary large instances and attaching
         # CUDly IAM roles to exfiltrate credentials or run compute at account
         # cost.

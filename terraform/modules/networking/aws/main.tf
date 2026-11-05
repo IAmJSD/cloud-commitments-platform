@@ -254,8 +254,11 @@ resource "aws_launch_template" "fck_nat" {
   # still terminating has released it), and NATs traffic arriving on it out
   # of the primary interface. The unit is Type=oneshot with no start timeout
   # and an unbounded attach loop, so the restart is bounded: on timeout or
-  # failure (exit status means attached AND NATing) the instance powers off
-  # and the ASG replaces it, instead of hanging with a green health check.
+  # failure the instance powers off and the ASG replaces it, instead of
+  # hanging with a green health check. This catches a hung or failed ENI
+  # attach (the script's attach and ip link waits are blocking loops), not
+  # every NAT misconfiguration: the script has no set -e and exits 0 even if
+  # the primary ENI's modify-network-interface-attribute call fails.
   user_data = base64encode(<<-EOF
     #!/bin/sh
     : > /etc/fck-nat.conf
