@@ -30,4 +30,4 @@
 
 **Status:** ✔️ Resolved
 
-**Resolved by:** an explicit, audited operator settle, `POST /api/purchases/{id}/settle` (`SettleFailedExecution`, migration 000143). It needs `execute:purchases`, account access and the grant's constraints, a reason and `acknowledge_unknown_outcome: true`, and refuses while the row's retry chain may still buy. The row stays `failed` and keeps counting as possibly bought in the ramp ledger; once settled it can no longer be retried and no longer blocks `requireManagedDeleteTx`. Delete itself gained no flag.
+**Resolved by:** an explicit, audited operator settle, `POST /api/purchases/{id}/settle` (`SettleFailedExecution`, the outcome-settlement migration, 000157 on this branch and renumbered at merge). It needs `execute:purchases`, account access and the grant's constraints, a reason and `acknowledge_unknown_outcome: true`, and refuses while the row's retry chain may still buy. The row stays `failed` and keeps counting as possibly bought in the ramp ledger; once settled it can no longer be retried and no longer blocks `requireManagedDeleteTx`. Delete itself gained no flag.
