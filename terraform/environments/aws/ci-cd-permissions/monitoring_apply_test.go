@@ -33,10 +33,11 @@ func TestDeployPolicyGrantsEveryActionTheMonitoringModuleNeeds(t *testing.T) {
 	add(alarm, "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource")
 	// The migration alarm's filter is on the Lambda log group; the monitoring
 	// module's filters are on the Lambda and ECS groups.
-	add(lambdaLG, "logs:PutMetricFilter", "logs:DeleteMetricFilter")
-	add(ecsLG, "logs:PutMetricFilter", "logs:DeleteMetricFilter")
+	// DescribeMetricFilters lists the log-group resource type in the SAR.
+	add(lambdaLG, "logs:PutMetricFilter", "logs:DeleteMetricFilter", "logs:DescribeMetricFilters")
+	add(ecsLG, "logs:PutMetricFilter", "logs:DeleteMetricFilter", "logs:DescribeMetricFilters")
 	// No resource-level permissions for these.
-	for _, a := range []string{"logs:DescribeMetricFilters", "logs:PutQueryDefinition", "logs:DescribeQueryDefinitions", "logs:DeleteQueryDefinition"} {
+	for _, a := range []string{"logs:PutQueryDefinition", "logs:DescribeQueryDefinitions", "logs:DeleteQueryDefinition"} {
 		needs = append(needs, grantNeed{action: a, noResource: true})
 	}
 	assertGranted(t, "monitoring", needs)

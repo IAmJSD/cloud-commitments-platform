@@ -123,7 +123,7 @@ var requiredRDSProxyTypes = map[string][]string{
 	"rds:DeleteDBProxy":            {"db-proxy"},
 	"rds:ModifyDBProxy":            {"db-proxy"},
 	"rds:RegisterDBProxyTargets":   {"db", "target-group"},
-	"rds:DeregisterDBProxyTargets": {"db-proxy", "target-group"},
+	"rds:DeregisterDBProxyTargets": {"db", "db-proxy", "target-group"},
 	"rds:ModifyDBProxyTargetGroup": {"target-group"},
 }
 
