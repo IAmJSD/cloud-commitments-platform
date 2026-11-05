@@ -89,6 +89,10 @@ resource "aws_iam_role" "eventbridge_sweeps" {
           Service = "events.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnEquals    = { "aws:SourceArn" = [for rule in aws_cloudwatch_event_rule.sweep : rule.arn] }
+        }
       }
     ]
   })
