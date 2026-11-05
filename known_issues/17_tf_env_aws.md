@@ -155,7 +155,9 @@
 
 **Rationale:** CUDly is a browser-served SPA that talks directly to the Lambda Function URL. The browser has no AWS identity and cannot SigV4-sign requests, so setting `AWS_IAM` would break the app entirely. Authentication is enforced at the application layer — session cookies, JWT, API keys, and CSRF — see `internal/api/handler_login.go` and middleware in `internal/api/router.go`. The variable now carries a long-form description explaining this plus a validation block restricting the value to `{AWS_IAM, NONE}`, but the default stays `NONE`. Operators fronting the URL with a SigV4-capable gateway (CloudFront+Lambda@Edge, API Gateway) can override to `AWS_IAM` explicitly.
 
-### Original implementation plan
+**Update (#16):** The owner confirmed the Function URL is public by design (`AuthType NONE`; the API authenticates every route). The AWS_IAM default and CloudFront/OAC cut-over below were closed as not planned (#16, PR #1741). The plan is kept for history only.
+
+### Original implementation plan (not planned, see #16)
 
 **Goal:** Default Lambda Function URL auth to `AWS_IAM` so new deployments are not publicly reachable without opt-in.
 
