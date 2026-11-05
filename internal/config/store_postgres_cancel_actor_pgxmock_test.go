@@ -136,7 +136,7 @@ func TestPGXMock_ExecutionCancelActorWritesOnlyCanceledBy(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`(?s)approved_by, canceled_by, capacity_percent.*canceled_by = COALESCE\(purchase_executions\.canceled_by, \$17\)`).
-		WithArgs(anyArgsCfg(29)...).
+		WithArgs(anyArgsCfg(30)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 	require.NoError(t, store.SavePurchaseExecution(ctx, &PurchaseExecution{
