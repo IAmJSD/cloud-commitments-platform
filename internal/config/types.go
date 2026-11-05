@@ -400,6 +400,9 @@ type PurchaseExecution struct {
 	// request, never rewritten by the upsert. Implies CreatedByUserID == nil
 	// (CHECK in migration 000130).
 	CreatedBySystem bool `json:"-" dynamodbav:"-"`
+	// FirstDispatchAt is the time of the first dispatch of a purchase lineage.
+	// Server-only; written once at INSERT, never updated (migration 000154).
+	FirstDispatchAt *time.Time `json:"-" dynamodbav:"-"`
 	// RetryExecutionID points from a *failed* execution to the new
 	// execution created when the user clicked Retry (issue #47). Set
 	// only on the original failed row; NULL on every other row including

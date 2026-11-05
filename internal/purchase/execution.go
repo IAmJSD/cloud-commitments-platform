@@ -642,6 +642,9 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 		Source:      m.normalizePurchaseSource(exec),
 		ExecutionID: exec.ExecutionID,
 	}
+	if exec.FirstDispatchAt != nil {
+		opts.RequestedAt = exec.FirstDispatchAt.UTC()
+	}
 
 	// Load GlobalConfig to pick up the OfferingClass setting for EC2 RI
 	// purchases. A load error is fatal: proceeding with an empty OfferingClass
@@ -1218,8 +1221,12 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
-	// go's Redshift dedupe needs the dispatch time to bound its DescribeReservedNodes match window.
-	opts.RequestedAt = time.Now().UTC()
+	// go's Redshift dedupe bounds its DescribeReservedNodes match window by RequestedAt, which must
+	// be the lineage's first dispatch time, never this call's.
+	opts, err = withDispatchTime(rec, opts)
+	if err != nil {
+		return common.PurchaseResult{}, err
+	}
 	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {

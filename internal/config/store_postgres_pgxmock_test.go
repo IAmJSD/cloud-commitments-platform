@@ -724,7 +724,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission", "created_by_system",
+		"no_submission", "created_by_system", "first_dispatch_at",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -734,9 +734,9 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
-		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false, false,   // no_submission, created_by_system
+		nil,               // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false, false, nil, // no_submission, created_by_system, first_dispatch_at
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -776,7 +776,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission", "created_by_system",
+		"no_submission", "created_by_system", "first_dispatch_at",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -792,7 +792,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
 		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false, false,      // no_submission, created_by_system
+		false, false, nil, // no_submission, created_by_system, first_dispatch_at
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -844,7 +844,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
-		"no_submission", "created_by_system",
+		"no_submission", "created_by_system", "first_dispatch_at",
 	}
 	schedAt := now.Add(2 * time.Hour)
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -856,8 +856,8 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
-		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false, false,   // no_submission, created_by_system
+		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false, false, nil, // no_submission, created_by_system, first_dispatch_at
 	).AddRow(
 		"plan-1", "exec-2", "pending", 1, now,
 		sql.NullTime{}, "tok-456", recsJSON,
@@ -868,13 +868,13 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-delayed",
 		sql.NullTime{Time: schedAt, Valid: true}, // scheduled_execution_at populated (pre-fire delay path)
-		false, false,                             // no_submission, created_by_system
+		false, false, nil,                        // no_submission, created_by_system, first_dispatch_at
 	)
 	// Regexp matcher: only matches if the issued SELECT projects both
 	// idempotency_key and scheduled_execution_at. The alternation forces both
-	// names to appear; a projection missing either column fails to match, the
-	// mock returns no rows, and the test catches the column-count drift.
-	mock.ExpectQuery(`idempotency_key.*scheduled_execution_at|scheduled_execution_at.*idempotency_key`).
+	// names to appear, and first_dispatch_at must follow; a projection missing any
+	// column fails to match, the mock returns no rows, and the test catches the column-count drift.
+	mock.ExpectQuery(`(idempotency_key.*scheduled_execution_at|scheduled_execution_at.*idempotency_key).*first_dispatch_at`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
@@ -927,7 +927,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission", "created_by_system",
+		"no_submission", "created_by_system", "first_dispatch_at",
 	}
 	// Simulates the exact row shape the atomic-cancel paths produce: the
 	// actor lives only in canceled_by (legacy cancelled_by is NULL). What
@@ -944,7 +944,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		nil,
 		sql.NullTime{},
-		false, false,
+		false, false, nil,
 	)
 	mock.ExpectQuery(`COALESCE\(canceled_by,\s*cancelled_by\)`).
 		WithArgs(pgxmock.AnyArg()).
@@ -2897,9 +2897,9 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
-		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
-		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false, false,   // no_submission, created_by_system
+		nil,               // idempotency_key (NULL: legacy-row scan path, migration 000066)
+		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false, false, nil, // no_submission, created_by_system, first_dispatch_at
 	}
 }
 
@@ -2914,7 +2914,7 @@ func stuckExecCols() []string {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission", "created_by_system",
+		"no_submission", "created_by_system", "first_dispatch_at",
 	}
 }
 

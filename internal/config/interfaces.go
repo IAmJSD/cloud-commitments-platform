@@ -792,6 +792,11 @@ type StoreInterface interface {
 	SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution, expected []string) error
 	RecoverReapedExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
 
+	// StampFirstDispatchTx sets the lineage's first_dispatch_at on the
+	// running row (kept once set; minted only per the mint rule) and reports
+	// whether it is within horizon on the database clock.
+	StampFirstDispatchTx(ctx context.Context, tx pgx.Tx, executionID string, horizon time.Duration) (StampResult, error)
+
 	// ListRecentSubmitsTx takes a per-creator transaction-scoped lock and
 	// returns the creator's web-submitted executions scheduled at or after
 	// since that are pending, in flight or bought. executePurchase's
