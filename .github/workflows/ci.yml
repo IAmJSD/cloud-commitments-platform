@@ -218,6 +218,13 @@ jobs:
           bash scripts/check-terraform-pin.sh
           bash scripts/test-check-terraform-pin.sh
 
+      - name: Assert rollback applies match the deploy applies
+        # Issue #1744: a rollback apply that omits or changes a deploy TF_VAR_
+        # or -var resets it on the live stack. Parses the workflows (PyYAML).
+        run: |
+          python3 scripts/check-rollback-tf-vars.py
+          python3 scripts/test-check-rollback-tf-vars.py
+
       - name: Assert shellcheck is available to actionlint
         # actionlint does not fail when shellcheck is missing from PATH: it
         # silently skips every run: block and still exits 0. That silent skip is
