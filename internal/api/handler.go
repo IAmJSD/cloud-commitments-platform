@@ -167,6 +167,9 @@ type Handler struct {
 	// at construction. Nil when the schedule is unset or unparsable, which
 	// makes next_collection_at null.
 	collectionSchedule schedexpr.Schedule
+
+	// fireSweepOff is HandlerConfig.FireSweepOff.
+	fireSweepOff bool
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
@@ -221,6 +224,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		encryptionKeySource: cfg.EncryptionKeySource,
 		isLambda:            cfg.IsLambda,
 		collectionSchedule:  parseCollectionSchedule(cfg.RecommendationSchedule),
+		fireSweepOff:        cfg.FireSweepOff,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)

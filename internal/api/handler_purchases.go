@@ -1148,7 +1148,15 @@ func (h *Handler) purchaseDelay(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to read global config for purchase delay check: %w", err)
 	}
-	return globalCfg.GetPurchaseDelay(), nil
+	delay := globalCfg.GetPurchaseDelay()
+	if delay > 0 && h.fireSweepOff {
+		// A stored (or default) delay predating the deployment's loss of its
+		// fire sweep: scheduling would strand the approval (#1588). Executing
+		// immediately would drop the free-cancel window the approver was
+		// promised, so refuse until the delay is set to 0.
+		return 0, NewClientError(409, "this deployment schedules no fire_scheduled_purchases sweep, so a delayed approval would never execute: set purchase_delay_hours to 0 first")
+	}
+	return delay, nil
 }
 
 // executeTokenApprove is the immediate (no pre-fire delay) tail of
