@@ -2848,7 +2848,7 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 			map[string]any{})
 	case errors.Is(err, errRetryLinkRaceLost):
 		return NewClientErrorWithDetails(409,
-			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
+			fmt.Sprintf("execution %s was already retried or settled; reload it", failedExec.ExecutionID),
 			map[string]any{})
 	case errors.As(err, &dup):
 		return NewClientErrorWithDetails(409,

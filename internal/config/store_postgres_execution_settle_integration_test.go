@@ -1,0 +1,324 @@
+//go:build integration
+// +build integration
+
+package config
+
+import (
+	"context"
+	"os"
+	"regexp"
+	"strconv"
+	"testing"
+
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
+)
+
+const settleActor = "00000000-0000-0000-0000-0000000000a9"
+
+// managedSettleFixture is a managed 4-step ramp plan with one account.
+func managedSettleFixture(ctx context.Context, t *testing.T) *rampFixture {
+	t.Helper()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	_, err := f.store.db.Exec(ctx, `UPDATE purchase_plans SET ramp_schedule = ramp_schedule || '{"dates_managed":true}' WHERE id = $1`, f.planID)
+	require.NoError(t, err)
+	return f
+}
+
+func (f *rampFixture) settle(ctx context.Context, execID, reason string) (*ExecutionSettlement, error) {
+	return f.store.SettleFailedExecution(ctx, ExecutionSettleRequest{ExecutionID: execID, Actor: settleActor, Reason: reason, Acknowledge: true})
+}
+
+func (f *rampFixture) settled(ctx context.Context, t *testing.T, execID string) bool {
+	t.Helper()
+	var settled bool
+	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT outcome_settled_at IS NOT NULL FROM purchase_executions WHERE execution_id = $1`, execID).Scan(&settled))
+	return settled
+}
+
+// A failed row with an unknown outcome blocks the managed delete until an
+// operator settles it; then the delete detaches it without changing it, and the
+// ledger still counts it as possibly bought (issue #999).
+func TestSettleFailedExecutionLetsManagedDeleteProceed(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	rec := baselineRec(f.accounts[0], "m5.large", 4)
+	failed := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, false, rec)
+	retry := f.retryInOneTx(ctx, t, failed, uuid.NewString(), StatusCompleted)
+	retry.Recommendations = []RecommendationRecord{rec}
+	require.NoError(t, f.store.SavePurchaseExecution(ctx, retry))
+	ledger := f.committed(ctx, t)
+
+	require.ErrorIs(t, f.store.DeletePurchasePlan(ctx, f.planID), ErrManagedPlanLiveExecutions)
+
+	res, err := f.settle(ctx, failed.ExecutionID, "checked the account: retry bought it")
+	require.NoError(t, err)
+	require.False(t, res.Replayed)
+	require.Equal(t, settleActor, res.SettledBy)
+	require.Contains(t, res.Settlement, "chain_tail="+retry.ExecutionID+" tail_status=completed")
+	require.Equal(t, ledger, f.committed(ctx, t), "settling must not change what the ledger counts")
+
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+	got, err := f.store.GetExecutionByID(ctx, failed.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, StatusFailed, got.Status, "the settled row keeps its failed status")
+	require.False(t, got.NoSubmission, "settling is not a no_submission proof")
+	require.Empty(t, got.PlanID)
+	require.True(t, f.settled(ctx, t, failed.ExecutionID), "the audit record survives the delete")
+}
+
+func TestSettleFailedExecutionRefusals(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	acct := &f.accounts[0]
+	conflict := map[string]string{
+		"completed": f.row(ctx, t, 1, acct, StatusCompleted).ExecutionID,
+		"pending":   f.row(ctx, t, 1, acct, "pending").ExecutionID,
+		"canceled":  f.row(ctx, t, 1, acct, StatusCanceled).ExecutionID,
+	}
+	for _, tail := range []string{"pending", "running", StatusFailed} {
+		head := f.row(ctx, t, 2, acct, StatusFailed)
+		f.retryInOneTx(ctx, t, head, uuid.NewString(), tail)
+		conflict["retry tail "+tail] = head.ExecutionID
+	}
+	adHoc := &PurchaseExecution{ExecutionID: uuid.NewString(), Status: StatusFailed, StepNumber: 1}
+	require.NoError(t, f.store.SavePurchaseExecution(ctx, adHoc))
+	conflict["no plan"] = adHoc.ExecutionID
+
+	for name, id := range conflict {
+		_, err := f.settle(ctx, id, "operator checked the account")
+		require.ErrorIs(t, err, ErrExecutionSettleConflict, name)
+		require.False(t, f.settled(ctx, t, id), name)
+	}
+	_, err := f.settle(ctx, uuid.NewString(), "operator checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleNotFound)
+
+	failed := f.row(ctx, t, 3, acct, StatusFailed)
+	for name, req := range map[string]ExecutionSettleRequest{
+		"no ack":    {ExecutionID: failed.ExecutionID, Actor: settleActor, Reason: "checked"},
+		"no actor":  {ExecutionID: failed.ExecutionID, Reason: "checked", Acknowledge: true},
+		"no reason": {ExecutionID: failed.ExecutionID, Actor: settleActor, Acknowledge: true},
+	} {
+		_, err := f.store.SettleFailedExecution(ctx, req)
+		require.ErrorIs(t, err, ErrExecutionSettleInvalid, name)
+	}
+	require.False(t, f.settled(ctx, t, failed.ExecutionID))
+}
+
+// A failed tail blocks its predecessor's settle only while it can still be
+// retried: once the tail is settled, the head can be too.
+func TestSettleFailedExecutionChainOfUnknownOutcomes(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	head := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	tail := f.retryInOneTx(ctx, t, head, uuid.NewString(), StatusFailed)
+
+	_, err := f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+	_, err = f.settle(ctx, tail.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.ErrorIs(t, f.store.DeletePurchasePlan(ctx, f.planID), ErrManagedPlanLiveExecutions, "the unsettled head still blocks")
+	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+}
+
+func TestSettleFailedExecutionReplayAndRetry(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	first, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+
+	again, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.True(t, again.Replayed)
+	require.True(t, first.SettledAt.Equal(again.SettledAt), "a replay writes nothing")
+	_, err = f.settle(ctx, failed.ExecutionID, "a different reason entirely")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+
+	successor := &PurchaseExecution{ExecutionID: uuid.NewString(), PlanID: f.planID, Status: "pending", StepNumber: 1}
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		require.NoError(t, f.store.SavePurchaseExecutionTx(ctx, tx, successor))
+		linked, linkErr := f.store.LinkRetryExecutionAtomic(ctx, tx, failed.ExecutionID, successor.ExecutionID)
+		require.NoError(t, linkErr)
+		require.False(t, linked, "a settled row must not be retried")
+		return nil
+	}))
+}
+
+// Once the plan is deleted the settled row is detached, yet an identical
+// repeat request still replays the stored result; a different one conflicts.
+func TestSettleReplayAfterPlanDelete(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	first, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+
+	again, err := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.True(t, again.Replayed)
+	require.True(t, first.SettledAt.Equal(again.SettledAt))
+	_, err = f.settle(ctx, failed.ExecutionID, "a different reason entirely")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict)
+}
+
+// A never-submitted failed row can still be retried, so it must be settleable:
+// otherwise a head whose tail is such a row could never be settled.
+func TestSettleFailedNoSubmissionChain(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	head := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	tail := f.retryInOneTx(ctx, t, head, uuid.NewString(), StatusFailed)
+	_, err := f.store.db.Exec(ctx, `UPDATE purchase_executions SET no_submission = true WHERE execution_id = $1`, tail.ExecutionID)
+	require.NoError(t, err)
+	ledger := f.committed(ctx, t)
+
+	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleConflict, "the unsettled tail may still be retried")
+	require.False(t, f.settled(ctx, t, head.ExecutionID))
+	_, err = f.settle(ctx, tail.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	_, err = f.settle(ctx, head.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	require.Equal(t, ledger, f.committed(ctx, t), "settling must not change what the ledger counts")
+
+	require.NoError(t, f.store.DeletePurchasePlan(ctx, f.planID))
+	successor := &PurchaseExecution{ExecutionID: uuid.NewString(), Status: "pending", StepNumber: 1}
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		require.NoError(t, f.store.SavePurchaseExecutionTx(ctx, tx, successor))
+		linked, linkErr := f.store.LinkRetryExecutionAtomic(ctx, tx, tail.ExecutionID, successor.ExecutionID)
+		require.NoError(t, linkErr)
+		require.False(t, linked, "a settled tail must not be retried")
+		return nil
+	}))
+}
+
+// A never-submitted row on its own is settleable and stays never-submitted.
+func TestSettleFailedNoSubmissionRow(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	row := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, true)
+	_, err := f.settle(ctx, row.ExecutionID, "operator checked the account")
+	require.NoError(t, err)
+	got, err := f.store.GetExecutionByID(ctx, row.ExecutionID)
+	require.NoError(t, err)
+	require.True(t, got.NoSubmission)
+}
+
+// A retry that links the row first wins: the settle waits on the row lock,
+// then sees the live successor and refuses.
+func TestSettleWaitsForRetryAndRefusesItsLiveSuccessor(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	retryTx, err := f.store.db.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = retryTx.Rollback(ctx) })
+	successor := &PurchaseExecution{ExecutionID: uuid.NewString(), PlanID: f.planID, Status: "pending", StepNumber: 1}
+	require.NoError(t, f.store.SavePurchaseExecutionTx(ctx, retryTx, successor))
+	linked, err := f.store.LinkRetryExecutionAtomic(ctx, retryTx, failed.ExecutionID, successor.ExecutionID)
+	require.NoError(t, err)
+	require.True(t, linked)
+
+	done := make(chan error, 1)
+	go func() {
+		_, settleErr := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+		done <- settleErr
+	}()
+	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%FOR UPDATE%")
+	require.NoError(t, retryTx.Commit(ctx))
+	require.ErrorIs(t, testhelpers.Await(t, done), ErrExecutionSettleConflict)
+	require.False(t, f.settled(ctx, t, failed.ExecutionID))
+}
+
+// A delete that holds the plan lock first wins: the settle waits, then finds
+// the row detached and refuses instead of settling it against no plan.
+func TestSettleWaitsForDeleteAndRefusesDetachedRow(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	del := testhelpers.HoldCommandFootprint(ctx, t, f.store.db, f.planID)
+
+	done := make(chan error, 1)
+	go func() {
+		_, settleErr := f.settle(ctx, failed.ExecutionID, "operator checked the account")
+		done <- settleErr
+	}()
+	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%FOR SHARE%")
+	_, err := del.Exec(ctx, `DELETE FROM purchase_plans WHERE id = $1`, f.planID)
+	require.NoError(t, err)
+	require.NoError(t, del.Commit(ctx))
+	require.ErrorIs(t, testhelpers.Await(t, done), ErrExecutionSettleConflict)
+	require.False(t, f.settled(ctx, t, failed.ExecutionID))
+}
+
+// A delete that queues behind a settle sees the committed settlement.
+func TestDeleteWaitsForSettleAndSeesIt(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	failed := f.row(ctx, t, 1, &f.accounts[0], StatusFailed)
+	settleTx, err := f.store.db.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = settleTx.Rollback(ctx) })
+	// The settle's own lock footprint and write, paused before commit.
+	_, err = settleTx.Exec(ctx, `SELECT 1 FROM purchase_plans WHERE id = $1 FOR SHARE`, f.planID)
+	require.NoError(t, err)
+	_, err = settleTx.Exec(ctx, `UPDATE purchase_executions SET outcome_settled_at = now(),
+		outcome_settled_by = $2, outcome_settlement = 'operator:settled_unknown_outcome' WHERE execution_id = $1`, failed.ExecutionID, settleActor)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() { done <- f.store.DeletePurchasePlan(ctx, f.planID) }()
+	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%FOR UPDATE%")
+	require.NoError(t, settleTx.Commit(ctx))
+	require.NoError(t, testhelpers.Await(t, done))
+}
+
+// migrationBelow is the highest migration on disk below version, so a test can
+// roll back exactly one migration whatever gaps the numbering has.
+func migrationBelow(t *testing.T, version int) uint {
+	t.Helper()
+	entries, err := os.ReadDir(getTestMigrationsPath())
+	require.NoError(t, err)
+	re := regexp.MustCompile(`^(\d{6})_.*\.up\.sql$`)
+	best := 0
+	for _, e := range entries {
+		if m := re.FindStringSubmatch(e.Name()); m != nil {
+			if n, _ := strconv.Atoi(m[1]); n < version && n > best {
+				best = n
+			}
+		}
+	}
+	require.NotZero(t, best)
+	return uint(best)
+}
+
+// main deploys on merge while prod migrations are applied separately, so this
+// code must work on a schema without the settlement columns (#999): delete
+// and retry behave as before, and settling is refused instead of erroring.
+func TestSettlementPathsBeforeTheMigration(t *testing.T) {
+	ctx := context.Background()
+	f := managedSettleFixture(ctx, t)
+	rec := baselineRec(f.accounts[0], "m5.large", 4)
+	failed := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, false, rec)
+
+	conn, ok := f.store.db.(*database.Connection)
+	require.True(t, ok)
+	require.NoError(t, migrations.MigrateToVersion(ctx, conn.Pool(), getTestMigrationsPath(), migrationBelow(t, settlementMigrationVersion)))
+	var cols int
+	require.NoError(t, conn.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'purchase_executions' AND column_name = 'outcome_settled_at'`).Scan(&cols))
+	require.Zero(t, cols, "precondition: the settlement columns are gone")
+
+	require.ErrorIs(t, f.store.DeletePurchasePlan(ctx, f.planID), ErrManagedPlanLiveExecutions,
+		"the delete guard works and still refuses, rather than failing on a missing column")
+	_, err := f.settle(ctx, failed.ExecutionID, "checked the account")
+	require.ErrorIs(t, err, ErrExecutionSettleNotReady)
+	f.retryInOneTx(ctx, t, failed, uuid.NewString(), StatusCompleted) // the retry link still works
+}

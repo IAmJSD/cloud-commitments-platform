@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -407,16 +406,11 @@ func (s *PostgresStore) checkAzurePricingMigration(ctx context.Context, required
 	if !required {
 		return nil
 	}
-	var version int
-	var dirty bool
-	err := s.db.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrAzurePricingNotReady
-	}
+	version, dirty, found, err := readSchemaVersion(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("check Azure pricing migration: %w", err)
 	}
-	if version < azurePricingMigrationVersion || dirty {
+	if !found || version < azurePricingMigrationVersion || dirty {
 		return ErrAzurePricingNotReady
 	}
 	return nil
