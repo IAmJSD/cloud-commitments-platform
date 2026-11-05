@@ -98,7 +98,7 @@ func TestSessionApproveScheduleFailure_HidesStoreError(t *testing.T) {
 	ctx := context.Background()
 	const execID = "00000000-0000-0000-0000-000000000000"
 	store := new(MockConfigStore)
-	store.On("TransitionExecutionStatus", ctx, execID, mock.Anything, "scheduled", mock.Anything).
+	store.On("ScheduleApprovedExecution", ctx, execID, mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).
 		Return(nil, errors.New("pq: password authentication failed for user cudly at db.internal.example:5432"))
 	h := &Handler{config: store}
 	_, err := h.approveWithDelay(ctx, &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, 48*time.Hour, "a@example.com", nil, "")

@@ -284,6 +284,13 @@ type StoreInterface interface {
 	// status returns ErrApprovalTokenChanged; a lost status CAS returns
 	// ErrExecutionNotInExpectedStatus as usual.
 	TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*PurchaseExecution, error)
+	// ScheduleApprovedExecution moves a delayed approval to "scheduled" and
+	// stamps scheduled_execution_at (and approved_by when non-nil) in one
+	// transaction, so a failed stamp can never leave a scheduled row that no
+	// scheduler run picks up (#348 F6). A non-empty rawToken pins the approval
+	// token as TransitionExecutionStatusTokenPinned does; the errors match the
+	// two transition methods.
+	ScheduleApprovedExecution(ctx context.Context, executionID string, fromStatuses []string, transitionedBy *string, rawToken string, scheduledAt time.Time, approvedBy *string) (*PurchaseExecution, error)
 	// RescheduleAwaitingExecution sets scheduled_date on an execution that is
 	// still pending or notified and touches no other column. It returns false
 	// (and writes nothing) when the row has left those statuses, so a cancel or

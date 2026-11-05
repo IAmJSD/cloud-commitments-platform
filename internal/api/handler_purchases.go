@@ -1517,10 +1517,12 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 	}, nil
 }
 
-// scheduleApprovedExecution atomically transitions an execution from
-// status=pending or status=notified to status=scheduled, then stamps
-// ScheduledExecutionAt = now+delay and ApprovedBy. No SDK call is made.
-// Returns the updated execution on success.
+// scheduleApprovedExecution transitions an execution from status=pending or
+// status=notified to status=scheduled and stamps ScheduledExecutionAt =
+// now+delay and ApprovedBy, in one store transaction: a scheduled row without
+// an execution time is never selected by the scheduler, so a stamp that failed
+// after a committed transition stranded the purchase (#348 F6). No SDK call
+// is made. Returns the updated execution on success.
 //
 // actor is the human-readable approver identity (email) recorded in
 // ApprovedBy. transitionedBy is the approver's user UUID stamped onto the
@@ -1538,32 +1540,17 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 // snapshot rejects the transition with config.ErrApprovalTokenChanged
 // (issue #590). The session path passes "" and is not token-gated.
 func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (*config.PurchaseExecution, error) {
-	from := []string{"pending", "notified"}
-	var updated *config.PurchaseExecution
-	var err error
-	if approvalToken != "" {
-		updated, err = h.config.TransitionExecutionStatusTokenPinned(ctx, execution.ExecutionID, from, "scheduled", transitionedBy, approvalToken)
-	} else {
-		updated, err = h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, from, "scheduled", transitionedBy)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to transition execution %s to scheduled: %w", execution.ExecutionID, err)
-	}
-
-	// Stamp the scheduled time and actor onto the post-CAS row, then persist.
-	// The write is a full-row upsert, so the extra fields go on the returned
-	// (freshly-transitioned) execution, and it is guarded on "scheduled": a
-	// revoke that lands between the CAS and here flips the row to canceled,
-	// and an unguarded upsert would put "scheduled" back, so the scheduler
-	// would buy a purchase the user revoked (issue #835). A lost guard returns
-	// ErrExecutionNotInExpectedStatus, which approveWithDelay maps to a 409.
-	scheduledAt := time.Now().Add(delay)
-	updated.ScheduledExecutionAt = &scheduledAt
+	var approvedBy *string
 	if actor != "" {
-		updated.ApprovedBy = &actor
+		approvedBy = &actor
 	}
-	if err := h.config.SaveExecutionIfStatus(ctx, updated, []string{"scheduled"}); err != nil {
-		return nil, fmt.Errorf("failed to stamp scheduled_execution_at on execution %s: %w", execution.ExecutionID, err)
+	// One transaction: no other writer can see or change the row between the
+	// transition and the stamp, so a revoke can no longer land in between
+	// (issue #835).
+	updated, err := h.config.ScheduleApprovedExecution(ctx, execution.ExecutionID, []string{"pending", "notified"},
+		transitionedBy, approvalToken, time.Now().Add(delay), approvedBy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to schedule execution %s: %w", execution.ExecutionID, err)
 	}
 	return updated, nil
 }
