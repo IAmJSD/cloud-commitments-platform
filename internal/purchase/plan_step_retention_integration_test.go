@@ -167,7 +167,7 @@ func TestCumulativeAttach_UntrustedHistoryCannotSizeOrNotify(t *testing.T) {
 				require.NoError(t, f.pool.QueryRow(f.ctx, `SELECT COUNT(*) FROM purchase_suppressions WHERE account_id = 'other-acct'`).Scan(&others))
 				require.Equal(t, 1, others, "another execution's suppressions are untouched")
 			}
-			require.False(t, f.m.sendPlanNotification(f.ctx, f.plan()))
+			require.False(t, f.m.sendPlanNotification(f.ctx, f.plan(), false))
 			require.Zero(t, calls, "no new sizing or resizing")
 			require.Zero(t, f.m.email.(*countingSender).sends)
 			require.Zero(t, suppressedTotal(f.ctx, t, f.pool))

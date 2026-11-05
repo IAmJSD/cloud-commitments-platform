@@ -797,3 +797,21 @@ func TestRenderRIExchangePendingApprovalEmail_PlainTextVerbatim(t *testing.T) {
 	assert.NotContains(t, body, "&#39;", "plain-text must not HTML-encode apostrophe")
 	assert.NotContains(t, body, "&amp;", "plain-text must not HTML-encode ampersand")
 }
+
+func TestRenderScheduledPurchaseEmail_NeedsApprovalWording(t *testing.T) {
+	data := NotificationData{
+		PlanName: "p", PurchaseDate: "November 3, 2026", DaysUntilPurchase: 3, DashboardURL: "https://d.example", ExecutionID: "e1",
+		TotalCommitment: 100, StepCap: 500, TotalUnits: 1, Recommendations: []RecommendationSummary{{Count: 1, ResourceType: "m5.large", Region: "r"}},
+	}
+	body, err := RenderScheduledPurchaseEmail(data)
+	require.NoError(t, err)
+	assert.Contains(t, body, ", cap $500.00, on November 3, 2026 unless canceled.")
+	assert.Contains(t, body, "You have 3 days to modify or cancel before automatic execution.")
+
+	data.NeedsApproval = true
+	body, err = RenderScheduledPurchaseEmail(data)
+	require.NoError(t, err)
+	assert.Contains(t, body, ", cap $500.00, due on November 3, 2026. It is bought once approved. Review & Edit below and approve it in the approval queue.")
+	assert.NotContains(t, body, "unless canceled")
+	assert.NotContains(t, body, "before automatic execution")
+}

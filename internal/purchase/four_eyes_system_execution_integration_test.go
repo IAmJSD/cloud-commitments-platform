@@ -20,18 +20,17 @@ func TestFourEyes_SweepMintedRowIsApprovableByIdentifiedApprover(t *testing.T) {
 	plan := attachPlanInDB(ctx, t, store, "four-eyes-sweep", time.Now().Add(24*time.Hour))
 	m := &Manager{config: store, email: newCountingSender(ctx),
 		resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 2)}}}
-	require.True(t, m.sendPlanNotification(ctx, plan))
+	global, err := store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	global.RequireDifferentApprover = true
+	require.NoError(t, store.SaveGlobalConfig(ctx, global))
+	require.True(t, m.sendPlanNotification(ctx, plan, planNeedsApproval(*plan, global)))
 
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
 	require.Equal(t, "notified", rows[0].Status)
 	assert.True(t, rows[0].CreatedBySystem, "sweep-minted row must be marked system-created")
 	assert.Nil(t, rows[0].CreatedByUserID)
-
-	global, err := store.GetGlobalConfig(ctx)
-	require.NoError(t, err)
-	global.RequireDifferentApprover = true
-	require.NoError(t, store.SaveGlobalConfig(ctx, global))
 
 	require.NoError(t, m.enforceFourEyesPolicy(ctx, rows[0].ExecutionID, "approver@example.com", nil))
 	require.ErrorIs(t, m.enforceFourEyesPolicy(ctx, rows[0].ExecutionID, "", nil), ErrFourEyesDenied)

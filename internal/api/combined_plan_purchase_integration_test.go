@@ -143,7 +143,10 @@ func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, 
 	global, err := f.store.GetGlobalConfig(ctx)
 	require.NoError(t, err)
 	recipient := "fixture@example.invalid"
-	global.NotificationEmail, global.AutoPurchaseEnabled, global.RequireDifferentApprover = &recipient, automatic, true
+	// 4-eyes is on for the manual (approval) flows only. With 4-eyes on, an
+	// AutoPurchase step waits for a human approval instead of auto-executing
+	// (#1771); internal/purchase/four_eyes_auto_plan_integration_test.go covers that.
+	global.NotificationEmail, global.AutoPurchaseEnabled, global.RequireDifferentApprover = &recipient, automatic, !automatic
 	global.PurchaseDelayHours = 0
 	require.NoError(t, f.store.SaveGlobalConfig(ctx, global))
 	response := combinedRoute(t, f.handler, "POST", "/api/plans", PlanRequest{
@@ -384,6 +387,40 @@ func TestCombinedPlanPurchase_NonUSDApprovalRefusedUnderCap(t *testing.T) {
 	f.assertCompleted(t)
 }
 
+// With 4-eyes on, an AutoPurchase plan's due step is not auto-executed: it
+// waits for a human approval, and a different user's approval then buys it
+// (#1771).
+func TestCombinedPlanPurchase_AutomaticWithFourEyesWaitsForApproval(t *testing.T) {
+	capAmount := 2400.0
+	f := newCombinedPlanFixture(t, true, &capAmount)
+	f.assertAttached(t)
+	ctx := context.Background()
+	global, err := f.store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	global.RequireDifferentApprover = true
+	require.NoError(t, f.store.SaveGlobalConfig(ctx, global))
+	_, err = f.pool.Exec(ctx, `UPDATE purchase_executions SET scheduled_date=now()-interval '1 minute' WHERE execution_id=$1`, f.root.ExecutionID)
+	require.NoError(t, err)
+
+	result, err := f.manager.ProcessScheduledPurchases(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, result.Executed, "%+v", result)
+	assert.Zero(t, result.Failed, "%+v", result)
+	assert.Empty(t, f.service.recorded(), "4-eyes on: the due step must not be bought automatically")
+	row, err := f.store.GetExecutionByID(ctx, f.root.ExecutionID)
+	require.NoError(t, err)
+	assert.Equal(t, "notified", row.Status, "the step waits in the approval queue")
+
+	approver := uuid.NewString()
+	_, err = f.pool.Exec(ctx, `INSERT INTO users (id,email,password_hash,salt,active,group_ids,created_at,updated_at) SELECT $1,'approver@example.invalid','x','y',true,ARRAY[g.id],now(),now() FROM groups g ORDER BY g.name LIMIT 1`, approver)
+	require.NoError(t, err)
+	response := f.approveAs(t, approver, 0)
+	require.Equal(t, 200, response.StatusCode, response.Body)
+	f.assertCompleted(t)
+	assert.Len(t, f.service.recorded(), 1)
+}
+
+// With 4-eyes off (the fixture's automatic default), the due step auto-executes.
 func TestCombinedPlanPurchase_AutomaticOnScheduledExecution(t *testing.T) {
 	capAmount := 2400.0
 	f := newCombinedPlanFixture(t, true, &capAmount)

@@ -879,6 +879,9 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 //   - The global kill switch (GlobalConfig.AutoPurchaseEnabled) must be on. A
 //     read error is propagated. Only AutoPurchase plans reach this check, so
 //     manual purchases are unaffected.
+//   - With 4-eyes approval mode on (GlobalConfig.RequireDifferentApprover), a
+//     recommendation-bearing row is never auto-executed: it waits for a human
+//     approval in the approval queue (#1771).
 //   - A recommendation-bearing row must be "notified" (the notification email is
 //     the human veto window; a "pending" row may never have been emailed) and
 //     must fit the plan's max_step_commitment (CheckStepCommitmentCap, whose
@@ -902,15 +905,21 @@ func (m *Manager) executableByScheduler(ctx context.Context, exec *config.Purcha
 	if plan == nil {
 		return false, nil
 	}
-	enabled, err := m.autoPurchaseEnabled(ctx)
+	cfg, err := m.autoPurchaseConfig(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !enabled {
+	if !cfg.AutoPurchaseEnabled {
 		return false, nil
 	}
 	if len(exec.Recommendations) == 0 {
 		return true, nil
+	}
+	// With 4-eyes on, no step buys without a second person: an auto plan's
+	// step waits in the approval queue for a human approval (session approve),
+	// like a manual plan's (#1771).
+	if cfg.RequireDifferentApprover {
+		return false, nil
 	}
 	if exec.Status != "notified" {
 		return false, nil
@@ -951,14 +960,24 @@ func (m *Manager) autoPurchasePlan(ctx context.Context, exec *config.PurchaseExe
 // autoPurchaseEnabled reads the global auto-purchase kill switch. It fails
 // closed: a read error is returned, never read as "enabled".
 func (m *Manager) autoPurchaseEnabled(ctx context.Context) (bool, error) {
-	cfg, err := m.config.GetGlobalConfig(ctx)
+	cfg, err := m.autoPurchaseConfig(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to read global config for the auto-purchase kill switch: %w", err)
-	}
-	if cfg == nil {
-		return false, errors.New("global config unavailable for the auto-purchase kill switch")
+		return false, err
 	}
 	return cfg.AutoPurchaseEnabled, nil
+}
+
+// autoPurchaseConfig reads the global config the auto-purchase gates need. A
+// read error or a missing config is returned, so no gate reads it as "on".
+func (m *Manager) autoPurchaseConfig(ctx context.Context) (*config.GlobalConfig, error) {
+	cfg, err := m.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read global config for the auto-purchase kill switch: %w", err)
+	}
+	if cfg == nil {
+		return nil, errors.New("global config unavailable for the auto-purchase kill switch")
+	}
+	return cfg, nil
 }
 
 // processOneExecution runs the full gate+claim+execute pipeline for a single
@@ -979,7 +998,7 @@ func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseE
 		return
 	}
 	if !eligible {
-		logging.Infof("Skipping execution %s (AutoPurchase=false, kill switch off, source=web, or recommendation-bearing row not yet notified; requires explicit approval)", exec.ExecutionID)
+		logging.Infof("Skipping execution %s (AutoPurchase=false, kill switch off, source=web, 4-eyes on so it needs a human approval in the approval queue, or recommendation-bearing row not yet notified; requires explicit approval)", exec.ExecutionID)
 		return
 	}
 

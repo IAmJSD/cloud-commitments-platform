@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestManager_ProcessMessage(t *testing.T) {
@@ -189,4 +190,24 @@ func TestManager_ProcessMessage(t *testing.T) {
 		// Should skip without error when status is not executable
 		assert.NoError(t, err)
 	})
+}
+
+// #1771: an SQS execute_purchase for an auto row is refused while 4-eyes is
+// on, with an error that names the reason, and nothing is claimed or bought.
+func TestCheckAutoExecuteGate_FourEyesOnRefusesNotifiedRow(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore) // TransitionExecutionStatus is not mocked: a claim would panic
+	assertMocksOnCleanup(t, store)
+	cfg := autoPurchaseOnCfg()
+	cfg.RequireDifferentApprover = true
+	store.On("GetPurchasePlan", ctx, "plan-gate").Return(&config.PurchasePlan{ID: "plan-gate", AutoPurchase: true, MaxStepCommitment: f64(1000)}, nil)
+	store.On("GetGlobalConfig", ctx).Return(cfg, nil)
+	manager := &Manager{config: store}
+	exec := dueRecExec("notified", upfrontRec(10))
+
+	err := manager.checkAutoExecuteGate(ctx, &exec)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "4-eyes")
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }

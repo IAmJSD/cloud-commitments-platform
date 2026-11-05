@@ -49,7 +49,7 @@ func TestCrash_BeforeCommitPersistsNothing(t *testing.T) {
 	sender := newCountingSender(ctx)
 	m := &Manager{config: suppressionFailingStore{store}, email: sender, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 3)}}}
 
-	require.False(t, m.sendPlanNotification(ctx, plan))
+	require.False(t, m.sendPlanNotification(ctx, plan, false))
 
 	assert.Empty(t, stepRowsInDB(ctx, t, store, plan.ID), "the row insert rolled back with the failed suppressions")
 	assert.Zero(t, suppressedTotal(ctx, t, pool))
@@ -65,13 +65,13 @@ func TestCrash_AfterEmailBeforeNotifiedResendsAndPromotes(t *testing.T) {
 	res := &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 3)}}
 	m := &Manager{config: &rotateLosingStore{PostgresStore: store}, email: sender, resolver: res}
 
-	require.False(t, m.sendPlanNotification(ctx, plan))
+	require.False(t, m.sendPlanNotification(ctx, plan, false))
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "pending", rows[0].Status, "the scheduler refuses a pending row")
 	assert.Equal(t, 1, sender.sends)
 
-	require.True(t, m.sendPlanNotification(ctx, plan), "the next tick re-sends and promotes")
+	require.True(t, m.sendPlanNotification(ctx, plan, false), "the next tick re-sends and promotes")
 	rows = stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "notified", rows[0].Status)

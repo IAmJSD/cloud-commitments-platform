@@ -41,9 +41,9 @@ This is an automated message from CUDly.
 const scheduledPurchaseTemplate = `CUDly - Scheduled Purchase in {{.DaysUntilPurchase}} Days
 =========================================
 
-Based on your Purchase Plan "{{.PlanName}}", the following commitments will be purchased on {{.PurchaseDate}}:
+Based on your Purchase Plan "{{.PlanName}}", the following commitments {{if .NeedsApproval}}are due on{{else}}will be purchased on{{end}} {{.PurchaseDate}}:
 {{if gt .TotalCommitment 0.0}}
-Will buy {{len .Recommendations}} recommendation(s) ({{.TotalUnits}} units) for ${{printf "%.2f" .TotalCommitment}} total commitment (upfront ${{printf "%.2f" .TotalUpfrontCost}} + ${{printf "%.2f" .TotalRecurring}} recurring over the terms){{if gt .StepCap 0.0}}, cap ${{printf "%.2f" .StepCap}}{{end}}, on {{.PurchaseDate}} unless canceled.
+Will buy {{len .Recommendations}} recommendation(s) ({{.TotalUnits}} units) for ${{printf "%.2f" .TotalCommitment}} total commitment (upfront ${{printf "%.2f" .TotalUpfrontCost}} + ${{printf "%.2f" .TotalRecurring}} recurring over the terms){{if gt .StepCap 0.0}}, cap ${{printf "%.2f" .StepCap}}{{end}}, {{if .NeedsApproval}}due on {{.PurchaseDate}}. It is bought once approved. Review & Edit below and approve it in the approval queue.{{else}}on {{.PurchaseDate}} unless canceled.{{end}}
 {{end}}
 {{range .Recommendations}}
 - {{.Count}}x {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}} in {{.Region}}{{if .AvailabilityZone}} ({{.AvailabilityZone}}){{end}}{{if .Platform}} | {{.Platform}}{{end}}{{if .Tenancy}} | {{.Tenancy}}{{end}}
@@ -64,7 +64,7 @@ Actions:
 
 [Cancel This Purchase] {{.DashboardURL}}/purchases/cancel/{{.ExecutionID}}?token={{urlquery .ApprovalToken}}
 
-You have {{.DaysUntilPurchase}} days to modify or cancel before automatic execution.
+{{if .NeedsApproval}}This purchase is not bought automatically. It needs a human approval in the approval queue; you have {{.DaysUntilPurchase}} days to review, modify or cancel it.{{else}}You have {{.DaysUntilPurchase}} days to modify or cancel before automatic execution.{{end}}
 
 This is an automated message from CUDly.
 `

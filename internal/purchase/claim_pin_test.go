@@ -201,7 +201,7 @@ func TestNotification_EmailFailureLeavesRowPendingAndSchedulerRefusesIt(t *testi
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(errors.New("ses down"))
 	manager := &Manager{config: store, email: sender}
 
-	require.False(t, manager.sendPlanNotification(ctx, plan))
+	require.False(t, manager.sendPlanNotification(ctx, plan, false))
 	store.AssertNotCalled(t, "RotatePendingApprovalToken", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	// The row as the DB still holds it: pending. The scheduler leaves it alone.

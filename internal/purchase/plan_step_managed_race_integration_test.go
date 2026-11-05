@@ -39,7 +39,7 @@ func TestClaimSkipsPlanTheCommandConvertedWhileItWaited(t *testing.T) {
 	r := newClaimRace(ctx, t)
 	command := testhelpers.HoldCommandFootprint(ctx, t, r.pool, r.plan.ID)
 	done := make(chan bool, 1)
-	go func() { done <- r.m.sendPlanNotification(ctx, r.plan) }() // r.plan is the stale, unmanaged copy
+	go func() { done <- r.m.sendPlanNotification(ctx, r.plan, false) }() // r.plan is the stale, unmanaged copy
 	testhelpers.WaitForLockWait(ctx, t, r.pool, "%FOR UPDATE%")
 	command.SetManaged(ctx, t, r.plan.ID)
 	require.NoError(t, command.Commit(ctx))
@@ -52,7 +52,7 @@ func TestClaimSkipsPlanTheCommandConvertedWhileItWaited(t *testing.T) {
 func TestCommandCaptureSeesRootTheClaimCommittedFirst(t *testing.T) {
 	ctx := context.Background()
 	r := newClaimRace(ctx, t)
-	require.True(t, r.m.sendPlanNotification(ctx, r.plan))
+	require.True(t, r.m.sendPlanNotification(ctx, r.plan, false))
 	rows := stepRowsInDB(ctx, t, r.store, r.plan.ID)
 	require.Len(t, rows, 1)
 
