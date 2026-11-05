@@ -85,6 +85,11 @@ func parseRecommendationFilter(params map[string]string) (config.RecommendationF
 
 // Recommendations handlers.
 func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
+	resp, err := h.listRecommendations(ctx, req, params)
+	return resp, azConfigNotReadyError(err)
+}
+
+func (h *Handler) listRecommendations(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (*RecommendationsResponse, error) {
 	// Require view:recommendations permission
 	session, err := h.requirePermission(ctx, req, "view", "recommendations")
 	if err != nil {
