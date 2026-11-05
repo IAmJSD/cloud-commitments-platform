@@ -16,6 +16,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// versionBeforeCanceledContract is the schema a deployment is at when the
+// build under test starts: the highest migration below the canceled contract
+// (the file ending _contract_canceled_spelling.up.sql), which narrows the
+// status CHECKs. The cutoff is read from that file, so a renumber needs no edit
+// here. The new build must read and write correctly there, because the
+// migration and the release roll out in either order.
+func versionBeforeCanceledContract(t *testing.T, dir string) uint {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	prefix := func(name string) (uint, bool) {
+		v, err := strconv.ParseUint(strings.SplitN(name, "_", 2)[0], 10, 32)
+		return uint(v), err == nil
+	}
+	var contract uint
+	for _, e := range entries {
+		if v, ok := prefix(e.Name()); ok && strings.HasSuffix(e.Name(), "_contract_canceled_spelling.up.sql") {
+			contract = v
+		}
+	}
+	require.NotZero(t, contract, "no *_contract_canceled_spelling.up.sql migration in %s", dir)
+	var best uint
+	for _, e := range entries {
+		if v, ok := prefix(e.Name()); ok && v < contract && v > best {
+			best = v
+		}
+	}
+	require.NotZero(t, best, "no migration below %d", contract)
+	return best
+}
+
 // TestCancelOrRecoverExecution_LegacyCanceledRowBeforeContractMigration runs
 // the cancel-race recovery on the schema before 000155 against a row an older
 // build canceled (legacy status spelling, actor only in the legacy column). The
@@ -27,15 +58,7 @@ func TestCancelOrRecoverExecution_LegacyCanceledRowBeforeContractMigration(t *te
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	path := getMigrationsPath()
-	entries, err := os.ReadDir(path)
-	require.NoError(t, err)
-	var before uint
-	for _, e := range entries {
-		v, parseErr := strconv.ParseUint(strings.SplitN(e.Name(), "_", 2)[0], 10, 32)
-		if parseErr == nil && v < 159 && uint(v) > before {
-			before = uint(v)
-		}
-	}
+	before := versionBeforeCanceledContract(t, path)
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, before))
 	store := config.NewPostgresStore(container.DB)
 
