@@ -125,9 +125,15 @@ func TestSelfAccountScopeDispatch_JoinWiderGroupRefused(t *testing.T) {
 // check untouched.
 func TestSelfAccountScopeDispatch_LeaveScopingGroupRefused(t *testing.T) {
 	viewers := &auth.Group{
-		ID:          "55555555-5555-4555-8555-555555555556",
-		Name:        "Viewers",
-		Permissions: []auth.Permission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}},
+		ID:   "55555555-5555-4555-8555-555555555556",
+		Name: "Viewers",
+		// view:groups keeps the refusal detail visible: the mock store hands
+		// back one shared user whose groups the refused edit has already
+		// rewritten, so the caller is judged by this group alone.
+		Permissions: []auth.Permission{
+			{Action: auth.ActionView, Resource: auth.ResourceRecommendations},
+			{Action: auth.ActionView, Resource: auth.ResourceGroups},
+		},
 	}
 	handler, mockStore := newSelfScopeHarness(t, []string{scopeDispatchGroupID, viewers.ID})
 	mockStore.On("GetGroup", mock.Anything, viewers.ID).Return(viewers, nil)
