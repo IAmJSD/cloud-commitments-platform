@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 )
 
 // Grant ceiling for group-permission writes (issues #1550, #1629).
@@ -52,7 +54,9 @@ func (s *Service) grantCeilingPermissions(ctx context.Context, actorUserID strin
 	}
 	perms, err := s.GetUserPermissions(ctx, actorUserID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: could not resolve the acting user's permissions: %w", ErrPermissionCeiling, err)
+		// The store error stays in the server log; the refusal text reaches callers.
+		logging.Errorf("group ceiling: resolving permissions for actor %s: %v", actorUserID, err)
+		return nil, fmt.Errorf("%w: could not resolve the acting user's permissions", ErrPermissionCeiling)
 	}
 	return perms, nil
 }
@@ -278,7 +282,9 @@ func (s *Service) grantCeilingAccounts(ctx context.Context, actorUserID string) 
 	}
 	authCtx, err := s.BuildAuthContext(ctx, actorUserID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: could not resolve the acting user's account scope: %w", ErrPermissionCeiling, err)
+		// The store error stays in the server log; the refusal text reaches callers.
+		logging.Errorf("group ceiling: resolving account scope for actor %s: %v", actorUserID, err)
+		return nil, fmt.Errorf("%w: could not resolve the acting user's account scope", ErrPermissionCeiling)
 	}
 	// A PARTIAL resolution can WIDEN the actor's scope, which is the case that
 	// matters and the one an earlier version of this guard missed.

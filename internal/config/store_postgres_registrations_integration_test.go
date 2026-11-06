@@ -65,3 +65,56 @@ func TestCreateAccountRegistration_UniquenessPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.CreateAccountRegistration(ctx, newPendingRegistration("tok-137-d", "111111111111")))
 }
+
+func registrationPayload(t *testing.T, store *PostgresStore, id string) *string {
+	t.Helper()
+	var payload *string
+	require.NoError(t, store.db.QueryRow(context.Background(),
+		`SELECT reg_credential_payload FROM account_registrations WHERE id = $1`, id).Scan(&payload))
+	return payload
+}
+
+func newRegistrationWithPayload(token, externalID string) *AccountRegistration {
+	reg := newPendingRegistration(token, externalID)
+	reg.RegCredentialType = "gcp_workload_identity_config"
+	reg.RegCredentialPayload = "encrypted-blob"
+	return reg
+}
+
+func TestRegistrationCredentialPayload_ClearedAfterApprovalPostgres(t *testing.T) {
+	ctx := context.Background()
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
+	store := NewPostgresStore(container.DB)
+
+	reg := newRegistrationWithPayload("tok-clear-a", "111111111111")
+	require.NoError(t, store.CreateAccountRegistration(ctx, reg))
+	require.NotNil(t, registrationPayload(t, store, reg.ID))
+
+	account := &CloudAccount{Name: "Prod", Provider: "aws", ExternalID: "111111111111", Enabled: true}
+	require.NoError(t, store.ApproveAccountRegistration(ctx, reg, account, nil))
+	assert.NotNil(t, registrationPayload(t, store, reg.ID), "approval alone keeps the payload")
+
+	require.NoError(t, store.ClearRegistrationCredentialPayload(ctx, reg.ID))
+	assert.Nil(t, registrationPayload(t, store, reg.ID))
+}
+
+func TestRegistrationCredentialPayload_ClearedOnRejectionPostgres(t *testing.T) {
+	ctx := context.Background()
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
+	store := NewPostgresStore(container.DB)
+
+	reg := newRegistrationWithPayload("tok-clear-b", "222222222222")
+	require.NoError(t, store.CreateAccountRegistration(ctx, reg))
+
+	reg.Status = "rejected"
+	require.NoError(t, store.TransitionRegistrationStatus(ctx, reg, "pending", nil))
+	assert.Nil(t, registrationPayload(t, store, reg.ID))
+}
+
+func TestClearRegistrationCredentialPayload_MissingIDIsNoOpPostgres(t *testing.T) {
+	ctx := context.Background()
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
+	store := NewPostgresStore(container.DB)
+
+	require.NoError(t, store.ClearRegistrationCredentialPayload(ctx, "00000000-0000-0000-0000-000000000000"))
+}

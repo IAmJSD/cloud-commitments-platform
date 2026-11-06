@@ -54,6 +54,7 @@ func rampStepStore(ctx context.Context, t *testing.T) (*config.PostgresStore, *p
 // the real store with a provider that always sells.
 type rampStepFixture struct {
 	store    *config.PostgresStore
+	pool     *pgxpool.Pool
 	manager  *Manager
 	email    *MockEmailSender
 	plan     *config.PurchasePlan
@@ -80,7 +81,7 @@ type rampStepFixture struct {
 func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 	t.Helper()
 
-	store, _ := rampStepStore(ctx, t)
+	store, pool := rampStepStore(ctx, t)
 
 	plan := &config.PurchasePlan{
 		Name:              "Ramp Step Plan",
@@ -131,7 +132,7 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 	require.Equal(t, "role_arn", accounts[1].AWSAuthMode, "accounts[1] must be a failing account")
 	require.Equal(t, "role_arn", accounts[2].AWSAuthMode, "accounts[2] must be a failing account")
 
-	f := &rampStepFixture{store: store, plan: plan, accounts: accounts}
+	f := &rampStepFixture{store: store, pool: pool, plan: plan, accounts: accounts}
 
 	mockEmail := new(MockEmailSender)
 	f.email = mockEmail

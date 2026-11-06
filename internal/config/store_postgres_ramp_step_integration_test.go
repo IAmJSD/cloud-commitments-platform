@@ -544,7 +544,7 @@ func TestRampStepStatusListsPartitionEveryWrittenStatus(t *testing.T) {
 	written := []string{
 		"pending", "notified", "scheduled", "approved", "running", "paused",
 		StatusCompleted, StatusPartiallyCompleted, StatusFailed, StatusExpired,
-		StatusCanceled, LegacyStatusCanceled,
+		StatusCanceled,
 	}
 	// In-flight statuses hold a step open on purpose and are deliberately not
 	// reported as stuck; they are listed here so adding a status to the schema

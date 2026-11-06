@@ -69,10 +69,39 @@ func (h *Handler) createUser(ctx context.Context, req *events.LambdaFunctionURLR
 	// requested groups at the actor's own grant ceiling (issue #226).
 	user, err := h.auth.CreateUserAPI(ctx, session.UserID, createReq)
 	if err != nil {
-		return nil, mapAuthError(err)
+		return nil, h.mapUserWriteError(ctx, req, err)
 	}
 
 	return user, nil
+}
+
+// groupCombinationDeniedMessage is what a caller who cannot view groups is
+// told about a refused group combination: no group name and no view/write split.
+const groupCombinationDeniedMessage = "this group combination is not allowed"
+
+// groupGrantDeniedMessage is what a caller who cannot view groups is told about
+// a refused group grant: no group name and no permission.
+const groupGrantDeniedMessage = "you cannot grant one or more of the requested groups"
+
+// mapUserWriteError maps a user create/update failure like mapAuthError, except
+// that a refused group combination, group grant or self-escalation only carries its
+// group-specific explanation when the caller may view groups. A failed or
+// erroring permission check gets the generic message.
+func (h *Handler) mapUserWriteError(ctx context.Context, req *events.LambdaFunctionURLRequest, err error) error {
+	status, generic := 0, ""
+	switch {
+	case errors.Is(err, auth.ErrContradictoryGroups):
+		status, generic = 400, groupCombinationDeniedMessage
+	case errors.Is(err, auth.ErrPermissionCeiling), errors.Is(err, auth.ErrPermissionNotGrantable),
+		errors.Is(err, auth.ErrSelfEscalation):
+		status, generic = 403, groupGrantDeniedMessage
+	default:
+		return mapAuthError(err)
+	}
+	if _, permErr := h.requirePermission(ctx, req, "view", "groups"); permErr != nil {
+		return NewClientError(status, generic)
+	}
+	return mapAuthError(err)
 }
 
 // mapAuthError maps internal/auth sentinel errors to the appropriate
@@ -146,7 +175,7 @@ func (h *Handler) updateUser(ctx context.Context, req *events.LambdaFunctionURLR
 	// the self-escalation guard (issue #907).
 	user, err := h.auth.UpdateUserAPI(ctx, session.UserID, userID, updateReq)
 	if err != nil {
-		return nil, mapAuthError(err)
+		return nil, h.mapUserWriteError(ctx, req, err)
 	}
 
 	return user, nil

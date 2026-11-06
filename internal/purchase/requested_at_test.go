@@ -163,6 +163,9 @@ func runRedshiftFinalize(t *testing.T, exec *config.PurchaseExecution, accounts 
 	}
 	mockStore.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) { return accounts, nil }
 	if stamp != nil {
+		mockStore.On("LockRedshiftTuplesTx", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockStore.On("FindOpenRedshiftLineageConflictsTx", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+			mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
 		res, stampErr := stamp()
 		mockStore.On("StampFirstDispatchTx", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Run(func(args mock.Arguments) {
@@ -310,6 +313,7 @@ func TestStampRedshiftDispatch_NilAtRefusalByAttempt(t *testing.T) {
 		wantBeforeSubmit bool
 	}{{0, true}, {1, false}} {
 		store := new(MockConfigStore)
+		store.On("LockRedshiftTuplesTx", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		store.On("StampFirstDispatchTx", mock.Anything, mock.Anything, "rs-x", mock.Anything).
 			Return(config.StampResult{At: nil}, nil).Once()
 		m := &Manager{config: store}

@@ -407,7 +407,7 @@ type PurchaseExecution struct {
 	// (CHECK in migration 000130).
 	CreatedBySystem bool `json:"-" dynamodbav:"-"`
 	// FirstDispatchAt is the time of the first dispatch of a purchase lineage.
-	// Server-only; written once at INSERT, never updated (migration 000154).
+	// Server-only; insert-only in the upsert, set once by the dispatch stamp (migration 000154).
 	FirstDispatchAt *time.Time `json:"-" dynamodbav:"-"`
 	// RetryExecutionID points from a *failed* execution to the new
 	// execution created when the user clicked Retry (issue #47). Set

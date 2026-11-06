@@ -307,7 +307,13 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	}
 
 	// Auto-store credentials if the registration included them.
-	h.storeRegistrationCredentials(ctx, reg, account.ID, regCred)
+	// The registration's copy is dropped only after the save succeeds; until
+	// then it is the only copy. The account exists, so a failed clear is logged.
+	if h.storeRegistrationCredentials(ctx, reg, account.ID, regCred) {
+		if err := h.config.ClearRegistrationCredentialPayload(ctx, reg.ID); err != nil {
+			logging.Errorf("registration %s: failed to clear stored credential payload: %v", reg.ID, err)
+		}
+	}
 
 	h.notifyRegistrant(reg, email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,

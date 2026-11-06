@@ -296,11 +296,10 @@ type StoreInterface interface {
 	// (and writes nothing) when the row has left those statuses, so a cancel or
 	// approve that lands first is never overwritten.
 	RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error)
-	// SetCancelledBy stamps canceled_by and the legacy cancelled_by column on
-	// an execution without overwriting any other columns. Used after
-	// TransitionExecutionStatus to fold the actor attribution into the same
-	// logical write without the full-row SavePurchaseExecution clobber risk
-	// (Finding #5 / PR #889).
+	// SetCancelledBy stamps canceled_by on an execution without overwriting
+	// any other columns. Used after TransitionExecutionStatus to fold the actor
+	// attribution into the same logical write without the full-row
+	// SavePurchaseExecution clobber risk (Finding #5 / PR #889).
 	SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error
 	// LinkRetryExecutionAtomic stamps retry_execution_id on a failed
 	// execution row without a full-row overwrite, conditional on
@@ -780,6 +779,9 @@ type StoreInterface interface {
 	// TransitionRegistrationStatus atomically updates a registration's workflow fields.
 	// actor is the UUID of the reviewer (nil for system-initiated transitions).
 	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error
+	// ClearRegistrationCredentialPayload removes the encrypted credential kept
+	// with a registration. A missing id is not an error.
+	ClearRegistrationCredentialPayload(ctx context.Context, registrationID string) error
 	// ApproveAccountRegistration atomically approves a pending registration,
 	// creates its cloud account and links them. Returns ErrRegistrationConflict
 	// when the registration is no longer pending; on any error nothing is saved.
@@ -815,6 +817,15 @@ type StoreInterface interface {
 	// running row (kept once set; minted only per the mint rule) and reports
 	// whether it is within horizon on the database clock.
 	StampFirstDispatchTx(ctx context.Context, tx pgx.Tx, executionID string, horizon time.Duration) (StampResult, error)
+
+	// LockRedshiftTuplesTx takes a transaction-scoped advisory lock per
+	// distinct tuple, in sorted order, serializing dispatches that share one.
+	LockRedshiftTuplesTx(ctx context.Context, tx pgx.Tx, tuples []RedshiftTuple) error
+
+	// FindOpenRedshiftLineageConflictsTx returns the other open executions
+	// holding a Redshift rec for one of tuples that a dispatch of family must
+	// not race (see the implementation for the predicate).
+	FindOpenRedshiftLineageConflictsTx(ctx context.Context, tx pgx.Tx, selfID, family string, tuples []RedshiftTuple, accountID *string, horizon time.Duration) ([]RedshiftLineageConflict, error)
 
 	// ListRecentSubmitsTx takes a per-creator transaction-scoped lock and
 	// returns the creator's web-submitted executions scheduled at or after

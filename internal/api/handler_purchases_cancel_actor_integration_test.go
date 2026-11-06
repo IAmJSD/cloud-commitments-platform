@@ -39,7 +39,7 @@ func TestDeletePlannedPurchase_RecordsCancelActor(t *testing.T) {
 	require.Equal(t, config.StatusCanceled, row.Status)
 	require.NotNil(t, row.CancelledBy, "cancel actor must be readable after a UI cancel")
 	require.Equal(t, "creator@example.com", *row.CancelledBy)
-	requireRawCancelColumns(ctx, t, f, execID, "creator@example.com")
+	requireRawCanceledBy(ctx, t, f, execID, "creator@example.com")
 
 	// The record TransitionExecutionStatus returns must use the same projection.
 	directID := uuid.NewString()
@@ -55,7 +55,7 @@ func TestDeletePlannedPurchase_RecordsCancelActor(t *testing.T) {
 
 // TestTransitionExecutionStatus_NonCancelLeavesCancelColumnsNull pins the
 // cancel-only guard: a non-cancel transition with an actor stamps
-// transitioned_by but must not write either cancel column.
+// transitioned_by but must not write canceled_by.
 func TestTransitionExecutionStatus_NonCancelLeavesCancelColumnsNull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	t.Cleanup(cancel)
@@ -72,26 +72,19 @@ func TestTransitionExecutionStatus_NonCancelLeavesCancelColumnsNull(t *testing.T
 	_, err := f.store.TransitionExecutionStatus(ctx, execID, []string{"pending"}, config.StatusFailed, &creator)
 	require.NoError(t, err)
 
-	var canceledBy, cancelledBy *string
+	var canceledBy *string
 	require.NoError(t, f.pool.QueryRow(ctx,
-		"SELECT canceled_by, "+legacyCancelColumn+" FROM purchase_executions WHERE execution_id=$1", execID,
-	).Scan(&canceledBy, &cancelledBy))
+		"SELECT canceled_by FROM purchase_executions WHERE execution_id=$1", execID,
+	).Scan(&canceledBy))
 	require.Nil(t, canceledBy, "canceled_by must stay NULL on a non-cancel transition")
-	require.Nil(t, cancelledBy, legacyCancelColumn+" must stay NULL on a non-cancel transition")
 }
 
-func requireRawCancelColumns(ctx context.Context, t *testing.T, f *createConcurrencyFixture, execID, want string) {
+func requireRawCanceledBy(ctx context.Context, t *testing.T, f *createConcurrencyFixture, execID, want string) {
 	t.Helper()
-	var canceledBy, cancelledBy *string
+	var canceledBy *string
 	require.NoError(t, f.pool.QueryRow(ctx,
-		"SELECT canceled_by, "+legacyCancelColumn+" FROM purchase_executions WHERE execution_id=$1", execID,
-	).Scan(&canceledBy, &cancelledBy))
+		"SELECT canceled_by FROM purchase_executions WHERE execution_id=$1", execID,
+	).Scan(&canceledBy))
 	require.NotNil(t, canceledBy, "canceled_by column")
-	require.NotNil(t, cancelledBy, legacyCancelColumn+" column")
 	require.Equal(t, want, *canceledBy)
-	require.Equal(t, want, *cancelledBy)
 }
-
-// legacyCancelColumn is the pre-migration-000089 British spelling, split so the
-// misspell linter does not flag the column name.
-const legacyCancelColumn = "cancel" + "led_by"

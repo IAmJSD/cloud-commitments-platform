@@ -569,6 +569,26 @@ func (m *MockConfigStore) StampFirstDispatchTx(ctx context.Context, tx pgx.Tx, e
 	return res, args.Error(1)
 }
 
+// LockRedshiftTuplesTx mocks the Redshift tuple advisory locks (no default: testify panics if unexpected).
+func (m *MockConfigStore) LockRedshiftTuplesTx(ctx context.Context, tx pgx.Tx, tuples []config.RedshiftTuple) error {
+	m.record("LockRedshiftTuplesTx", ctx, tx, tuples)
+	return m.Called(ctx, tx, tuples).Error(0)
+}
+
+// FindOpenRedshiftLineageConflictsTx mocks the Redshift lineage conflict query (no default: testify panics if unexpected).
+func (m *MockConfigStore) FindOpenRedshiftLineageConflictsTx(ctx context.Context, tx pgx.Tx, selfID, family string, tuples []config.RedshiftTuple, accountID *string, horizon time.Duration) ([]config.RedshiftLineageConflict, error) {
+	m.record("FindOpenRedshiftLineageConflictsTx", ctx, tx, selfID, family, tuples, accountID, horizon)
+	args := m.Called(ctx, tx, selfID, family, tuples, accountID, horizon)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	res, ok := args.Get(0).([]config.RedshiftLineageConflict)
+	if !ok {
+		m.reporter.wrongReturnType("FindOpenRedshiftLineageConflictsTx", "[]config.RedshiftLineageConflict", args.Get(0))
+	}
+	return res, args.Error(1)
+}
+
 // TransitionExecutionStatus mocks the TransitionExecutionStatus operation.
 func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*config.PurchaseExecution, error) {
 	m.record("TransitionExecutionStatus", ctx, executionID, fromStatuses, toStatus, actor)
@@ -2141,6 +2161,12 @@ func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *co
 func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg *config.AccountRegistration, fromStatus string, actor *string) error {
 	m.record("TransitionRegistrationStatus", ctx, reg, fromStatus, actor)
 	args := m.Called(ctx, reg, fromStatus, actor)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ClearRegistrationCredentialPayload(ctx context.Context, registrationID string) error {
+	m.record("ClearRegistrationCredentialPayload", ctx, registrationID)
+	args := m.Called(ctx, registrationID)
 	return args.Error(0)
 }
 
