@@ -23,13 +23,14 @@ import (
 
 const zoneTestRIID = "ri-zone-test"
 
-// zoneRecordingEC2API serves one convertible RI and records the AZ of every
-// offering lookup. The embedded nil API makes any other call (including the
-// exchange accept) panic.
+// zoneRecordingEC2API serves one convertible RI and records the AZ and
+// offering type of every offering lookup. The embedded nil API makes any other
+// call (including the exchange accept) panic.
 type zoneRecordingEC2API struct {
 	ec2svc.API
 	ri          ec2types.ReservedInstances
 	lookupZones []*string
+	lookupTypes []ec2types.OfferingTypeValues
 }
 
 func (a *zoneRecordingEC2API) DescribeReservedInstances(context.Context, *awsec2sdk.DescribeReservedInstancesInput, ...func(*awsec2sdk.Options)) (*awsec2sdk.DescribeReservedInstancesOutput, error) {
@@ -38,6 +39,7 @@ func (a *zoneRecordingEC2API) DescribeReservedInstances(context.Context, *awsec2
 
 func (a *zoneRecordingEC2API) DescribeReservedInstancesOfferings(_ context.Context, in *awsec2sdk.DescribeReservedInstancesOfferingsInput, _ ...func(*awsec2sdk.Options)) (*awsec2sdk.DescribeReservedInstancesOfferingsOutput, error) {
 	a.lookupZones = append(a.lookupZones, in.AvailabilityZone)
+	a.lookupTypes = append(a.lookupTypes, in.OfferingType)
 	return &awsec2sdk.DescribeReservedInstancesOfferingsOutput{
 		ReservedInstancesOfferings: []ec2types.ReservedInstancesOffering{{
 			ReservedInstancesOfferingId: aws.String("offering-in-zone"),
@@ -45,6 +47,7 @@ func (a *zoneRecordingEC2API) DescribeReservedInstancesOfferings(_ context.Conte
 			OfferingClass:               ec2types.OfferingClassTypeConvertible,
 			InstanceTenancy:             ec2types.TenancyDefault,
 			Duration:                    aws.Int64(31536000),
+			OfferingType:                in.OfferingType,
 		}},
 	}, nil
 }
@@ -60,6 +63,7 @@ func zoneTestRI(scope ec2types.Scope, az string) ec2types.ReservedInstances {
 		Duration:            aws.Int64(31536000),
 		FixedPrice:          aws.Float32(876),
 		OfferingClass:       ec2types.OfferingClassTypeConvertible,
+		OfferingType:        ec2types.OfferingTypeValuesPartialUpfront,
 		CurrencyCode:        ec2types.CurrencyCodeValuesUsd,
 	}
 	if az != "" {
@@ -123,6 +127,9 @@ func TestExecuteRIExchangeReshape_ZonalRIForwardsAvailabilityZone(t *testing.T) 
 	for _, z := range api.lookupZones {
 		assert.Equal(t, "us-east-1b", aws.ToString(z), "every lookup must be pinned to the source RI's AZ")
 	}
+	for _, ot := range api.lookupTypes {
+		assert.Equal(t, ec2types.OfferingTypeValuesPartialUpfront, ot, "every lookup must keep the source RI's offering type (#1789)")
+	}
 	assert.True(t, quoted)
 	require.Len(t, result.Pending, 1)
 	assert.Empty(t, result.Skipped)
@@ -170,12 +177,14 @@ func TestNewConvertibleOfferingLookup_MapsEveryField(t *testing.T) {
 	id, err := newConvertibleOfferingLookup(f)(context.Background(), exchange.LookupOfferingParams{
 		InstanceType: "m5.xlarge", ProductDescription: "Linux/UNIX", Tenancy: "default",
 		Scope: "Availability Zone", AvailabilityZone: "us-east-1b", Duration: 31536000,
+		OfferingType: "Partial Upfront",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "offering-1", id)
 	assert.Equal(t, ec2svc.FindConvertibleOfferingParams{
 		InstanceType: "m5.xlarge", ProductDescription: "Linux/UNIX", Tenancy: "default",
 		Scope: "Availability Zone", AvailabilityZone: "us-east-1b", Duration: 31536000,
+		OfferingType: "Partial Upfront",
 	}, f.got)
 }
 
@@ -186,4 +195,15 @@ func TestConvertForAutoExchange_CarriesAvailabilityZone(t *testing.T) {
 	}, nil)
 	assert.Equal(t, "us-east-1b", meta["ri-zonal"].AvailabilityZone)
 	assert.Empty(t, meta["ri-regional"].AvailabilityZone)
+}
+
+// #1789: the provider refuses a lookup without the source RI's offering type,
+// so the metadata must carry it for every RI, or no exchange can find a target.
+func TestConvertForAutoExchange_CarriesOfferingType(t *testing.T) {
+	_, _, meta := convertForAutoExchange([]ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-partial", Scope: "Region", Duration: 31536000, FixedPrice: 876, OfferingType: "Partial Upfront"},
+		{ReservedInstanceID: "ri-none", Scope: "Region", Duration: 31536000, OfferingType: "No Upfront", UsagePrice: 0.1},
+	}, nil)
+	assert.Equal(t, "Partial Upfront", meta["ri-partial"].OfferingType)
+	assert.Equal(t, "No Upfront", meta["ri-none"].OfferingType)
 }
