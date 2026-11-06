@@ -91,7 +91,6 @@ func TestResolveLadderTrancheFailed_ProvenChain(t *testing.T) {
 	for name, nodes := range map[string][]resolveNode{
 		"no_submission head":   {{"failed", true, time.Minute}},
 		"canceled after proof": {{"failed", true, time.Hour}, {"canceled", false, time.Minute}},
-		"legacy spelling":      {{LegacyStatusCanceled, false, time.Minute}},
 		"expired":              {{"expired", false, time.Minute}},
 	} {
 		t.Run(name, func(t *testing.T) {

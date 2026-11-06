@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -76,13 +77,23 @@ func accountExists(ctx context.Context, t *testing.T, store *PostgresStore, id s
 	return n == 1
 }
 
+// storableTerminalExecutionStatuses is TerminalExecutionStatuses minus the
+// legacy canceled spelling, which migration 000157 forbids in the status CHECK
+// on a fully migrated schema. Legacy rows are covered against the schema before
+// 000157 in TestPostgresStore_NewCodeAgainstPreContractSchema.
+func storableTerminalExecutionStatuses() []string {
+	return slices.DeleteFunc(slices.Clone(TerminalExecutionStatuses), func(s string) bool {
+		return s == LegacyStatusCanceled
+	})
+}
+
 // An account whose executions are all terminal is deletable, and the history
 // rows survive with their status intact and the account reference detached.
 func TestDeleteCloudAccount_TerminalExecutionsAreDetached(t *testing.T) {
 	ctx := context.Background()
 	store := setupLadderStore(ctx, t)
 
-	for _, status := range TerminalExecutionStatuses {
+	for _, status := range storableTerminalExecutionStatuses() {
 		t.Run(status, func(t *testing.T) {
 			acct := seedDeleteAccount(ctx, t, store)
 			execID := seedDeleteAccountExec(ctx, t, store, acct, status)
@@ -158,7 +169,7 @@ func TestCountLiveExecutionsForAccount(t *testing.T) {
 	for _, status := range liveExecutionStatuses {
 		seedDeleteAccountExec(ctx, t, store, acct, status)
 	}
-	for _, status := range TerminalExecutionStatuses {
+	for _, status := range storableTerminalExecutionStatuses() {
 		seedDeleteAccountExec(ctx, t, store, acct, status)
 	}
 	seedDeleteAccountExec(ctx, t, store, other, "running")
@@ -191,7 +202,7 @@ func TestTerminalExecutionStatuses_CoverSchema(t *testing.T) {
 	}
 	require.NotEmpty(t, schema, "could not parse %q", def)
 
-	classified := append(append([]string{}, TerminalExecutionStatuses...), liveExecutionStatuses...)
+	classified := append(append([]string{}, storableTerminalExecutionStatuses()...), liveExecutionStatuses...)
 	sort.Strings(schema)
 	sort.Strings(classified)
 	assert.Equal(t, schema, classified)
