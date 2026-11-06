@@ -148,7 +148,7 @@ func TestSuppressionsMatchAcrossEC2Slugs_RealPostgres(t *testing.T) {
 }
 
 // TestRDSSuppressionScopedToAZConfig_RealPostgres is the issue #408
-// regression on a real database: after migrations 000157-000159 a Single-AZ
+// regression on a real database: after migrations 000158-000160 a Single-AZ
 // and a Multi-AZ db.r5.large mysql rec coexist. Buying 2x Single-AZ must leave
 // the Multi-AZ rec at its full count, while a suppression row written before
 // az_config existed (variant set, az_config NULL) still hides both.

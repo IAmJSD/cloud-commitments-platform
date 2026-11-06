@@ -109,7 +109,7 @@ func (s *PostgresStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup 
 	// A nil Variant writes NULL into all three variant columns (a legacy,
 	// 6-tuple-wide row); otherwise all three are written, empty strings included
 	// (migration 000134 keeps them all-NULL or all-set).
-	// az_config is NULL when empty: unknown or not applicable (migration 000158).
+	// az_config is NULL when empty: unknown or not applicable (migration 000159).
 	var az, platform, tenancy, azConfig *string
 	if sup.Variant != nil {
 		az, platform, tenancy = &sup.Variant.AvailabilityZone, &sup.Variant.Platform, &sup.Variant.Tenancy
@@ -210,7 +210,7 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 // columns. The 000134 CHECK keeps them all-NULL or all-set; a row with any
 // NULL is read as having no variant (a 6-tuple-wide wildcard), which
 // over-suppresses rather than over-shows. A NULL az_config (rows written before
-// migration 000158, or a rec with none) is read as "" = any az_config.
+// migration 000159, or a rec with none) is read as "" = any az_config.
 func suppressionVariantFromColumns(az, platform, tenancy, azConfig *string) *SuppressionVariant {
 	if az == nil || platform == nil || tenancy == nil {
 		return nil

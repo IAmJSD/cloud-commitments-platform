@@ -33,7 +33,7 @@ func newMock(t *testing.T) pgxmock.PgxPoolIface {
 // ListActiveSuppressions run first, reporting the fully migrated version.
 func expectAZConfigReady(mock pgxmock.PgxPoolIface) {
 	mock.ExpectQuery("SELECT version, dirty FROM schema_migrations").
-		WillReturnRows(pgxmock.NewRows([]string{"version", "dirty"}).AddRow(159, false))
+		WillReturnRows(pgxmock.NewRows([]string{"version", "dirty"}).AddRow(160, false))
 }
 
 // anyArgs returns n AnyArg() matchers.
