@@ -83,7 +83,7 @@ func TestAttachIntegration_NewRowAttachesSuppressesAndBecomesNotified(t *testing
 	sender := newCountingSender(ctx)
 	m := &Manager{config: store, email: sender, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-b", 2), attachRec("rec-a", 3)}}}
 
-	require.True(t, m.sendPlanNotification(ctx, plan))
+	require.True(t, m.sendPlanNotification(ctx, plan, false))
 
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
@@ -112,12 +112,12 @@ func TestAttachIntegration_EmailFailureLeavesPendingAndNextTickDoesNotResolveAga
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(nil).Once()
 	m := &Manager{config: store, email: sender, resolver: res}
 
-	require.False(t, m.sendPlanNotification(ctx, plan))
+	require.False(t, m.sendPlanNotification(ctx, plan, false))
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "pending", rows[0].Status)
 
-	require.True(t, m.sendPlanNotification(ctx, plan))
+	require.True(t, m.sendPlanNotification(ctx, plan, false))
 	assert.Equal(t, "notified", stepRowsInDB(ctx, t, store, plan.ID)[0].Status)
 	assert.EqualValues(t, 1, res.calls.Load(), "the second tick adopts the committed row")
 }
@@ -130,7 +130,7 @@ func TestAttachIntegration_NoMatchAndCap(t *testing.T) {
 	t.Run("no match inside the grace window writes no row", func(t *testing.T) {
 		plan := attachPlanInDB(ctx, t, store, "attach-nomatch-early", time.Now().Add(24*time.Hour))
 		m := &Manager{config: store, email: newCountingSender(ctx), resolver: &fakeResolver{err: planstep.ErrNoMatch}}
-		require.False(t, m.sendPlanNotification(ctx, plan))
+		require.False(t, m.sendPlanNotification(ctx, plan, false))
 		assert.Empty(t, stepRowsInDB(ctx, t, store, plan.ID))
 	})
 	t.Run("cap lowered between list and lock fails the step on the locked plan", func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestAttachIntegration_NoMatchAndCap(t *testing.T) {
 		sender := newCountingSender(ctx)
 		m := &Manager{config: store, email: sender, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 5)}}}
 
-		require.False(t, m.sendPlanNotification(ctx, &snapshot))
+		require.False(t, m.sendPlanNotification(ctx, &snapshot, false))
 		assert.Equal(t, 1, sender.failedSends, "the failed step is reported once (issue #1195)")
 
 		rows := stepRowsInDB(ctx, t, store, plan.ID)
@@ -158,7 +158,7 @@ func TestAttachIntegration_NoMatchAndCap(t *testing.T) {
 		require.NoError(t, store.SavePurchaseExecution(ctx, root))
 		m := &Manager{config: store, email: newCountingSender(ctx), resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 2)}}}
 
-		require.True(t, m.sendPlanNotification(ctx, plan))
+		require.True(t, m.sendPlanNotification(ctx, plan, false))
 
 		rows := stepRowsInDB(ctx, t, store, plan.ID)
 		require.Len(t, rows, 1, "no second row")
@@ -216,7 +216,7 @@ func TestAttachIntegration_PlansOnOneAccountNeverOverAttach(t *testing.T) {
 		}
 		m := &Manager{config: store, email: sender, resolver: res}
 		wg.Add(1)
-		go func() { defer wg.Done(); m.sendPlanNotification(ctx, plan) }()
+		go func() { defer wg.Done(); m.sendPlanNotification(ctx, plan, false) }()
 	}
 	wg.Wait()
 

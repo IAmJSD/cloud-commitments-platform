@@ -154,6 +154,7 @@ func newConvertibleOfferingLookup(finder convertibleOfferingFinder) exchange.Loo
 			Scope:              p.Scope,
 			AvailabilityZone:   p.AvailabilityZone,
 			Duration:           p.Duration,
+			OfferingType:       p.OfferingType,
 		})
 	}
 }
@@ -357,6 +358,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 			Scope:              inst.Scope,
 			AvailabilityZone:   inst.AvailabilityZone,
 			Duration:           inst.Duration,
+			OfferingType:       inst.OfferingType,
 		}
 	}
 

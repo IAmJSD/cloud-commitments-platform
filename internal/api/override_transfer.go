@@ -15,8 +15,9 @@ import (
 // UpdatedAt are informational: import ignores them.
 //
 // An import row is the desired state of the override: an unset field clears
-// that field, unlike the sparse PUT /api/accounts/:id/service-overrides/...
-// merge. Overrides missing from the file are left alone.
+// that field, unlike the PUT /api/accounts/:id/service-overrides/... merge,
+// which keeps the stored value of any key the body omits. Overrides missing
+// from the file are left alone.
 type OverrideTransferRow struct {
 	AccountID         string     `json:"account_id,omitempty"`
 	AccountName       string     `json:"account_name,omitempty"`

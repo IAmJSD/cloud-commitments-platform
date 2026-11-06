@@ -214,21 +214,12 @@ resource "aws_iam_policy" "data" {
         # NO rds:Describe* action lives here; they are all in
         # RDSDescribeAccountWide below. See that statement for why.
         #
-        # KNOWN DEAD SCOPES: the proxy actions below (DeleteDBProxy,
-        # ModifyDBProxy, RegisterDBProxyTargets, DeregisterDBProxyTargets)
-        # can never be authorized, because their only resource types are
-        # `proxy` and `target-group`, whose real ARNs are
-        # arn:aws:rds:<r>:<a>:db-proxy:prx-<opaque> and
-        # arn:aws:rds:<r>:<a>:target-group:prx-tg-<opaque>: a different ARN
-        # segment (`db-proxy`, not `proxy`) and a server-assigned opaque id
-        # that never contains the resource name. `proxy:cudly-*` and
-        # `target-group:cudly-*` therefore match nothing. Nothing exercises
-        # this today (modules/database/aws is instantiated with
-        # enable_rds_proxy = false, terraform/environments/aws/database.tf),
-        # so it is left as-is rather than widened to db-proxy:* here; fixing
-        # it needs a scoping mechanism that actually constrains an opaque id
-        # (tag condition), tracked separately. Do NOT add new proxy actions
-        # to this statement; they would be dead on arrival.
+        # RDS DB proxy mutations (DeleteDBProxy, ModifyDBProxy,
+        # Register/DeregisterDBProxyTargets) are deliberately absent: their
+        # resource types are db-proxy and target-group with server-assigned
+        # opaque ids, which no cudly-* name scope can match. enable_rds_proxy
+        # is a literal false, pinned by rds_proxy_tripwire_test.go, which lists
+        # the grants to add when it is turned on (#157).
         Sid    = "RDSResourceScoped"
         Effect = "Allow"
         Action = [
@@ -239,19 +230,13 @@ resource "aws_iam_policy" "data" {
           "rds:DeleteDBInstance",
           "rds:DeleteDBSubnetGroup",
           "rds:ListTagsForResource",
-          "rds:DeleteDBProxy",
-          "rds:DeregisterDBProxyTargets",
           "rds:ModifyDBInstance",
-          "rds:ModifyDBProxy",
           "rds:ModifyDBSubnetGroup",
-          "rds:RegisterDBProxyTargets",
           "rds:RemoveTagsFromResource",
         ]
         Resource = [
           "arn:aws:rds:*:*:db:cudly-*",
           "arn:aws:rds:*:*:subgrp:cudly-*",
-          "arn:aws:rds:*:*:proxy:cudly-*",
-          "arn:aws:rds:*:*:target-group:cudly-*",
           "arn:aws:rds:*:*:snapshot:cudly-*",
         ]
       },
@@ -301,7 +286,7 @@ resource "aws_iam_policy" "data" {
         # opaque ids (see the RDSResourceScoped note above), so no name-based
         # ARN scope can ever match them. Those are belt-and-braces rather than
         # load-bearing: enable_rds_proxy is a literal `false` at
-        # terraform/environments/aws/database.tf:28, not a variable, so no
+        # terraform/environments/aws/database.tf:41, not a variable, so no
         # tfvars can turn the proxy resources on.
         #
         # All six are read-only and expose only resource metadata; every

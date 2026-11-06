@@ -126,7 +126,7 @@ func TestTokenApprove_DelayedScheduleFailureOmitsStoreText(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "pending", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := delayTokenHandler(t, exec)
 	store := h.config.(*MockConfigStore)
-	store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, mock.Anything, "scheduled", mock.Anything, tokenErrRawToken).
+	store.On("ScheduleApprovedExecution", mock.Anything, tokenErrExecID, mock.Anything, mock.Anything, tokenErrRawToken, mock.Anything, mock.Anything).
 		Return(nil, errors.New("pq: connection to 10.0.0.5:5432 refused")).Once()
 
 	resp, err := h.HandleRequest(context.Background(), tokenErrRequest("approve", tokenErrRawToken))

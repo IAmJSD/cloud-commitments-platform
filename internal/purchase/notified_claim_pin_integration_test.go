@@ -64,7 +64,7 @@ func TestNotifiedTransition_OnlyAfterEmailSucceeds(t *testing.T) {
 	assertMocksOnCleanup(t, sender)
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(errors.New("ses down")).Once()
 	manager := &Manager{config: store, email: sender, providerFactory: factory}
-	require.False(t, manager.sendPlanNotification(ctx, plan))
+	require.False(t, manager.sendPlanNotification(ctx, plan, false))
 	assert.Equal(t, "pending", statusInDB(ctx, t, store, row.ExecutionID).Status)
 
 	result, err := manager.ProcessScheduledPurchases(ctx)
@@ -73,7 +73,7 @@ func TestNotifiedTransition_OnlyAfterEmailSucceeds(t *testing.T) {
 	assert.Equal(t, "pending", statusInDB(ctx, t, store, row.ExecutionID).Status)
 
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(nil).Once()
-	require.True(t, manager.sendPlanNotification(ctx, plan))
+	require.True(t, manager.sendPlanNotification(ctx, plan, false))
 	notified := statusInDB(ctx, t, store, row.ExecutionID)
 	assert.Equal(t, "notified", notified.Status)
 	assert.NotEmpty(t, notified.ApprovalToken)

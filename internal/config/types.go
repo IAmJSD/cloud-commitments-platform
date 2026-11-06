@@ -117,7 +117,13 @@ type GlobalConfig struct {
 	// mode first (the admin wildcard is NOT exempt from the restriction).
 	// While it is on, unattended RI exchange runs (RIExchangeMode "auto" and
 	// ladder reshapes) run as "manual" and only raise pending records
-	// (issue #679).
+	// (issue #679), and recommendation-bearing AutoPurchase steps are not
+	// auto-executed: they wait for a human approval in the approval queue
+	// (issue #1771); empty steps still route as before. A step root
+	// pre-created with the plan keeps its human creator, who then cannot
+	// approve it. A step root pre-created through the admin API key (no
+	// creator and not system-created) cannot be approved by anyone while this
+	// is on: it waits, then expires, and a human recreates the plan.
 	RequireDifferentApprover bool `json:"require_different_approver" dynamodbav:"require_different_approver"`
 }
 

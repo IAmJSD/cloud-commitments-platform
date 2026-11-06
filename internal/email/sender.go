@@ -587,6 +587,9 @@ type NotificationData struct {
 	TotalRecurring  float64
 	TotalUnits      int
 	StepCap         float64
+	// NeedsApproval is set when the step does not run on its date but waits
+	// for a human approval in the approval queue (manual plan, or 4-eyes on).
+	NeedsApproval bool
 	// RevocationToken is the one-time token embedded in the revocation link
 	// of a post-execution notification email. When non-empty, the template
 	// renders a "Revoke this purchase" CTA that hits

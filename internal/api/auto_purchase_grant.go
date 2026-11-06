@@ -216,8 +216,8 @@ func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFun
 func (h *Handler) requirePlanArmGrantFor(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before, after *config.PurchasePlan, accountIDs []string) error {
 	// A bound plan that lost its binding must not be armed or widened
 	// (#1746); disarming and disabling it never reach this gate.
-	if err := planstep.CheckBoundBinding(after); err != nil {
-		return NewClientError(http.StatusConflict, err.Error())
+	if err := refuseUnboundBinding(after); err != nil {
+		return err
 	}
 	if err := h.requireAutoPurchaseGrantForPlan(ctx, req, session, accountIDs, after); err != nil {
 		return err
@@ -298,7 +298,32 @@ func (h *Handler) requireRetargetOfArmedPlan(ctx context.Context, req *events.La
 	if !planArmed(plan) {
 		return plan, nil
 	}
+	if err := refuseUnboundBinding(plan); err != nil {
+		return nil, err
+	}
 	return plan, h.requireAutoPurchaseGrantForPlan(ctx, req, session, accountIDs, plan)
+}
+
+// refuseUnboundBinding answers 409 for a bound plan that lost its binding
+// (#1746), so a write that arms it, widens it or moves where it buys is
+// refused at save time instead of failing its next step.
+func refuseUnboundBinding(plan *config.PurchasePlan) error {
+	if err := planstep.CheckBoundBinding(plan); err != nil {
+		return NewClientError(http.StatusConflict, err.Error())
+	}
+	return nil
+}
+
+// enablesEntry reports whether the write turns on a services entry that was
+// off or absent. DerivePlanServices ignores Enabled, so planArmEscalates
+// cannot see this widening.
+func enablesEntry(before, after *config.PurchasePlan) bool {
+	for k := range after.Services {
+		if after.Services[k].Enabled && !before.Services[k].Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // errPlanMovedUnderGate means the plan changed between the grant check and the

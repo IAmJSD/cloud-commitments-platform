@@ -42,7 +42,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 			continue
 		}
 		if m.shouldNotifyPlan(plan, autoPurchaseEnabled) || shouldRetryOverduePlan(plan, autoPurchaseEnabled, global, time.Now()) {
-			if m.sendPlanNotification(ctx, &plan) {
+			if m.sendPlanNotification(ctx, &plan, planNeedsApproval(plan, global)) {
 				notified++
 			}
 		}
@@ -152,8 +152,17 @@ func (m *Manager) dueManualRootTx(ctx context.Context, tx pgx.Tx, planID string)
 // plan's NextExecutionDate advances hits it, so it is skipped quietly.
 var errExecutionNotNotifiable = errors.New("execution is no longer awaiting approval")
 
-// sendPlanNotification sends a notification for a plan and returns true if successful.
-func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.PurchasePlan) bool {
+// planNeedsApproval reports whether the plan's recommendation-bearing step
+// waits for a human approval instead of executing on its date: manual plans
+// always do, and auto plans do while 4-eyes mode is on (#1771). A missing
+// config fails closed.
+func planNeedsApproval(plan config.PurchasePlan, global *config.GlobalConfig) bool {
+	return !plan.AutoPurchase || global == nil || global.RequireDifferentApprover
+}
+
+// sendPlanNotification sends a notification for a plan and returns true if
+// successful. needsApproval selects the approval wording of the email.
+func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.PurchasePlan, needsApproval bool) bool {
 	daysUntil := int(time.Until(*plan.NextExecutionDate).Hours() / config.HoursPerDay)
 	logging.Infof("Sending notification for plan %s (purchase in %d days)", plan.Name, daysUntil)
 
@@ -180,7 +189,7 @@ func (m *Manager) sendPlanNotification(ctx context.Context, plan *config.Purchas
 	// The row's own date, not the plan's: an attach for an overdue plan is
 	// scheduled NotificationDaysBefore days out.
 	daysUntil = int(time.Until(execution.ScheduledDate).Hours() / config.HoursPerDay)
-	data := m.buildNotificationData(*plan, execution, rawApprovalToken, daysUntil, notifyEmail)
+	data := m.buildNotificationData(*plan, execution, rawApprovalToken, daysUntil, notifyEmail, needsApproval)
 	if err := m.email.SendScheduledPurchaseNotification(ctx, data); err != nil {
 		logging.Errorf("Failed to send notification: %v", err)
 		return false
@@ -388,7 +397,9 @@ func bareStepFailure(planID string, step int, reason string) error {
 // as RecipientEmail so the token-bearing body routes through targeted SES.
 // rawApprovalToken is the RAW token from getOrCreateExecution -- never read
 // from exec.ApprovalToken, which holds only the hash (issue #103).
-func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, rawApprovalToken string, daysUntil int, notifyEmail string) email.NotificationData {
+// needsApproval is decided by the caller from the tick's global config (see
+// planNeedsApproval); this function reads no config.
+func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.PurchaseExecution, rawApprovalToken string, daysUntil int, notifyEmail string, needsApproval bool) email.NotificationData {
 	data := email.NotificationData{
 		DashboardURL:      m.dashboardURL,
 		ApprovalToken:     rawApprovalToken,
@@ -400,6 +411,7 @@ func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.P
 		DaysUntilPurchase: daysUntil,
 		PlanName:          plan.Name,
 		RecipientEmail:    notifyEmail,
+		NeedsApproval:     needsApproval,
 	}
 
 	if plan.MaxStepCommitment != nil {

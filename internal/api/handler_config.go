@@ -382,7 +382,7 @@ func mergeServiceConfig(existing *config.ServiceConfig, cfg config.ServiceConfig
 }
 
 // presentKeys returns the subset of keys that appear as top-level fields in the
-// JSON body. A malformed body is reported as a client error so the caller
+// JSON body, matched case-insensitively like encoding/json binds them. A malformed body is reported as a client error so the caller
 // returns 400 rather than silently overlaying nothing.
 func presentKeys(body string, keys []string) (map[string]bool, error) {
 	var raw map[string]json.RawMessage
@@ -391,7 +391,7 @@ func presentKeys(body string, keys []string) (map[string]bool, error) {
 	}
 	present := make(map[string]bool, len(keys))
 	for _, k := range keys {
-		if _, ok := raw[k]; ok {
+		if bodyHasKey(raw, k) {
 			present[k] = true
 		}
 	}

@@ -1275,3 +1275,46 @@ func TestManager_RecoverStrandedApprovals_AWSClaimLost_NoRedrive(t *testing.T) {
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
+
+// #1771: with 4-eyes on, an armed auto plan's rec-bearing notified row is not
+// auto-executed; it waits for a human approval in the approval queue.
+func TestManager_ProcessScheduledPurchases_FourEyesOnSkipsAutoRow(t *testing.T) {
+	cfg := autoPurchaseOnCfg()
+	cfg.RequireDifferentApprover = true
+	plan := &config.PurchasePlan{ID: "plan-gate", AutoPurchase: true, MaxStepCommitment: f64(1000)}
+	result := gateHarness(t, plan, dueRecExec("notified", upfrontRec(10)), cfg, nil)
+	assert.Equal(t, 0, result.Processed)
+	assert.Equal(t, 0, result.Executed)
+	assert.Equal(t, 0, result.Failed, "waiting for approval is a skip, not a failure")
+}
+
+// With 4-eyes off the gate is unchanged.
+func TestExecutableByScheduler_FourEyesOffUnchanged(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
+	plan := &config.PurchasePlan{ID: "plan-gate", AutoPurchase: true, MaxStepCommitment: f64(1000)}
+	store.On("GetPurchasePlan", ctx, "plan-gate").Return(plan, nil)
+	store.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	manager := &Manager{config: store}
+	exec := dueRecExec("notified", upfrontRec(10))
+	ok, err := manager.executableByScheduler(ctx, &exec)
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
+// An empty step buys nothing, so 4-eyes does not park it in limbo.
+func TestExecutableByScheduler_FourEyesOnEmptyStepStillRoutes(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
+	cfg := autoPurchaseOnCfg()
+	cfg.RequireDifferentApprover = true
+	store.On("GetPurchasePlan", ctx, "plan-gate").Return(&config.PurchasePlan{ID: "plan-gate", AutoPurchase: true}, nil)
+	store.On("GetGlobalConfig", ctx).Return(cfg, nil)
+	manager := &Manager{config: store}
+	exec := dueRecExec("notified")
+	ok, err := manager.executableByScheduler(ctx, &exec)
+	require.NoError(t, err)
+	assert.True(t, ok)
+}

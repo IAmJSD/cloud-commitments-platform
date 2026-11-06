@@ -5815,8 +5815,8 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 		config.ErrExecutionNotInExpectedStatus, execID)
 
 	mockConfig := new(MockConfigStore)
-	// TransitionExecutionStatus fails because a concurrent Cancel already landed.
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
+	// ScheduleApprovedExecution fails because a concurrent Cancel already landed.
+	mockConfig.On("ScheduleApprovedExecution", ctx, execID, []string{"pending", "notified"}, mock.Anything, "", mock.Anything, mock.Anything).
 		Return(nil, concurrentCancelErr)
 
 	handler := &Handler{config: mockConfig}
@@ -5829,8 +5829,8 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 }
 
 // TestHandler_scheduleApprovedExecution_HappyPath verifies the normal path:
-// TransitionExecutionStatus succeeds and the returned execution has
-// ScheduledExecutionAt stamped.
+// one ScheduleApprovedExecution call carries the approver and a scheduled time
+// of now+delay, and its result is returned.
 func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	execID := "11112222-3333-4444-5555-666677778888"
@@ -5840,30 +5840,32 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 		Status:      "pending",
 	}
 
-	// TransitionExecutionStatus returns an execution with status="scheduled".
-	transitioned := &config.PurchaseExecution{
-		ExecutionID: execID,
-		Status:      "scheduled",
+	actor := "actor@example.com"
+	scheduledAt := time.Now().Add(48 * time.Hour)
+	scheduled := &config.PurchaseExecution{
+		ExecutionID:          execID,
+		Status:               "scheduled",
+		ScheduledExecutionAt: &scheduledAt,
+		ApprovedBy:           &actor,
 	}
 
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
-		Return(transitioned, nil)
-	// The stamp is guarded on "scheduled" (issue #835); the mock falls back to
-	// SavePurchaseExecution without a guarded expectation, so this pins it.
-	mockConfig.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
-		return e.ExecutionID == execID &&
-			e.ScheduledExecutionAt != nil &&
-			*e.ApprovedBy == "actor@example.com"
-	}), []string{"scheduled"}).Return(nil)
+	before := time.Now()
+	mockConfig.On("ScheduleApprovedExecution", ctx, execID, []string{"pending", "notified"}, mock.Anything, "",
+		mock.MatchedBy(func(at time.Time) bool {
+			return !at.Before(before.Add(48*time.Hour)) && at.Before(time.Now().Add(48*time.Hour).Add(time.Second))
+		}),
+		mock.MatchedBy(func(by *string) bool { return by != nil && *by == actor })).
+		Return(scheduled, nil).Once()
 
 	handler := &Handler{config: mockConfig}
 
-	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, actor, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "scheduled", result.Status)
 	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
 	mockConfig.AssertExpectations(t)
+	mockConfig.AssertNotCalled(t, "SaveExecutionIfStatus", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestApproveWithDelay_CASLostMaps409 verifies that when scheduleApprovedExecution
@@ -5878,7 +5880,7 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 		config.ErrExecutionNotInExpectedStatus, execID)
 
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
+	mockConfig.On("ScheduleApprovedExecution", ctx, execID, []string{"pending", "notified"}, mock.Anything, "", mock.Anything, mock.Anything).
 		Return(nil, concurrentCancelErr)
 
 	handler := &Handler{config: mockConfig}
@@ -5891,29 +5893,26 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 	mockConfig.AssertExpectations(t)
 }
 
-// TestApproveWithDelay_StampLostToRevokeMaps409 covers issue #835: the CAS to
-// scheduled wins, then a revoke flips the row to canceled before the
-// scheduled_execution_at stamp. The stamp is guarded on "scheduled", so it
-// writes nothing and the approver gets the same 409 as a lost CAS, instead of
-// an unguarded upsert putting "scheduled" back for the scheduler to buy.
-func TestApproveWithDelay_StampLostToRevokeMaps409(t *testing.T) {
+// TestApproveWithDelay_ScheduleLostToRevokeMaps409 covers issue #835 on the
+// atomic path: the transition and the scheduled_execution_at stamp are one
+// store call, so a revoke or cancel that wins the row surfaces as
+// ErrExecutionNotInExpectedStatus and the approver gets a 409.
+func TestApproveWithDelay_ScheduleLostToRevokeMaps409(t *testing.T) {
 	ctx := context.Background()
 	execID := "exec-stamp-409"
 	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
-	transitioned := &config.PurchaseExecution{ExecutionID: execID, Status: "scheduled"}
-	revoked := fmt.Errorf("%w: execution %s is %q, expected one of [scheduled]",
+	revoked := fmt.Errorf("%w: execution %s is %q, expected one of [pending notified]",
 		config.ErrExecutionNotInExpectedStatus, execID, config.StatusCanceled)
 
 	mockConfig := new(MockConfigStore)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
-		Return(transitioned, nil)
-	mockConfig.On("SaveExecutionIfStatus", ctx, transitioned, []string{"scheduled"}).Return(revoked).Once()
+	mockConfig.On("ScheduleApprovedExecution", ctx, execID, []string{"pending", "notified"}, mock.Anything, "", mock.Anything, mock.Anything).
+		Return(nil, revoked).Once()
 
 	handler := &Handler{config: mockConfig}
 
 	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
 	ce, ok := IsClientError(err)
-	require.True(t, ok, "a stamp lost to a revoke must be a ClientError, got %v", err)
+	require.True(t, ok, "a schedule lost to a revoke must be a ClientError, got %v", err)
 	assert.Equal(t, 409, ce.code)
 	mockConfig.AssertExpectations(t)
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)

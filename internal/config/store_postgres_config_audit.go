@@ -137,17 +137,68 @@ func scanAccountServiceOverride(row pgx.Row) (*AccountServiceOverride, error) {
 // Callers writing several overrides in one tx must call this in a consistent
 // key order, or two such transactions could deadlock on each other's locks.
 func (s *PostgresStore) SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, o *AccountServiceOverride, audit AuditContext) error {
-	key := accountServiceOverrideLockPrefix + o.AccountID + "/" + o.Provider + "/" + o.Service
+	before, err := lockAndReadOverride(ctx, tx, o.AccountID, o.Provider, o.Service)
+	if err != nil {
+		return err
+	}
+	return writeOverrideAudited(ctx, tx, o, before, audit)
+}
+
+// UpdateAccountServiceOverrideAtomic is a serialized read-merge-write of one
+// override (issue #1775). In one transaction it takes the same advisory lock
+// and FOR UPDATE read as SaveAccountServiceOverrideAuditedTx, hands the stored
+// row (nil when none) to merge, and writes and audits the row merge returns.
+// Two partial PUTs of one override therefore cannot merge onto the same stale
+// base and lose a field. merge must not modify existing, and must not touch
+// the database: the transaction holds a pooled connection. An error from
+// merge aborts the transaction and is returned unchanged. The saved row is
+// returned.
+func (s *PostgresStore) UpdateAccountServiceOverrideAtomic(ctx context.Context, accountID, provider, service string, audit AuditContext, merge func(existing *AccountServiceOverride) (*AccountServiceOverride, error)) (*AccountServiceOverride, error) {
+	var saved *AccountServiceOverride
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		before, err := lockAndReadOverride(ctx, tx, accountID, provider, service)
+		if err != nil {
+			return err
+		}
+		next, err := merge(before)
+		if err != nil {
+			return err
+		}
+		if next == nil || next.AccountID != accountID || next.Provider != provider || next.Service != service {
+			return fmt.Errorf("service override update for %s/%s/%s must return a row with the same key", accountID, provider, service)
+		}
+		if err := writeOverrideAudited(ctx, tx, next, before, audit); err != nil {
+			return err
+		}
+		saved = next
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
+// lockAndReadOverride takes the override's transaction-scoped advisory lock,
+// then reads the stored row FOR UPDATE (nil when none).
+func lockAndReadOverride(ctx context.Context, tx pgx.Tx, accountID, provider, service string) (*AccountServiceOverride, error) {
+	key := accountServiceOverrideLockPrefix + accountID + "/" + provider + "/" + service
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
-		return fmt.Errorf("failed to lock service override: %w", err)
+		return nil, fmt.Errorf("failed to lock service override: %w", err)
 	}
 	before, err := scanAccountServiceOverride(tx.QueryRow(ctx,
 		`SELECT `+accountServiceOverrideColumns+` FROM account_service_overrides
 		WHERE account_id = $1 AND provider = $2 AND service = $3 FOR UPDATE`,
-		o.AccountID, o.Provider, o.Service))
+		accountID, provider, service))
 	if err != nil {
-		return fmt.Errorf("failed to read service override: %w", err)
+		return nil, fmt.Errorf("failed to read service override: %w", err)
 	}
+	return before, nil
+}
+
+// writeOverrideAudited upserts o, updates o to the stored row and records the
+// change against before.
+func writeOverrideAudited(ctx context.Context, tx pgx.Tx, o, before *AccountServiceOverride, audit AuditContext) error {
 	after, err := upsertAccountServiceOverrideReturning(ctx, tx, o)
 	if err != nil {
 		return err

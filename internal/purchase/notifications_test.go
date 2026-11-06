@@ -155,7 +155,7 @@ func TestManager_BuildNotificationData(t *testing.T) {
 		},
 	}
 
-	data := manager.buildNotificationData(plan, execution, "token-abc", 5, "notify@example.com")
+	data := manager.buildNotificationData(plan, execution, "token-abc", 5, "notify@example.com", false)
 
 	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
 	assert.Equal(t, "token-abc", data.ApprovalToken)
@@ -521,7 +521,9 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 	expectStepRows(mockStore, &plans[0], *pendingExec)
 	mockStore.On("RotatePendingApprovalToken", ctx, "pending-exec-id", mock.Anything, mock.Anything).Return(true, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
-	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.MatchedBy(func(data email.NotificationData) bool {
+		return !data.NeedsApproval // auto plan, 4-eyes off: the original wording
+	})).Return(nil)
 	mockStore.On("StampPlanNotificationSent", ctx, "plan-123", mock.AnythingOfType("time.Time")).Return(nil)
 
 	manager := &Manager{
@@ -551,7 +553,7 @@ func TestManager_SendUpcomingPurchaseNotifications_ManualCleanupErrorDoesNotBloc
 	}
 	address := "fixture@example.invalid"
 	store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
-	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &address, AutoPurchaseEnabled: true}, nil)
+	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &address, AutoPurchaseEnabled: true, RequireDifferentApprover: true}, nil)
 	store.On("WithTx", ctx, mock.Anything).Return(errors.New("manual cleanup transaction failed")).Once()
 	store.On("WithTx", ctx, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		require.NoError(t, args.Get(1).(func(pgx.Tx) error)(nil))
@@ -563,7 +565,7 @@ func TestManager_SendUpcomingPurchaseNotifications_ManualCleanupErrorDoesNotBloc
 	store.On("RotatePendingApprovalToken", ctx, "automatic-root", mock.Anything, mock.Anything).Return(true, nil).Once()
 	store.On("StampPlanNotificationSent", ctx, plans[1].ID, mock.AnythingOfType("time.Time")).Return(nil).Once()
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.MatchedBy(func(data email.NotificationData) bool {
-		return data.PlanID == plans[1].ID
+		return data.PlanID == plans[1].ID && data.NeedsApproval // auto plan, 4-eyes on
 	})).Return(nil).Once()
 
 	manager := &Manager{config: store, email: sender, dashboardURL: "https://dashboard.example.invalid"}
@@ -760,7 +762,7 @@ func TestManager_SendPlanNotification_NoRecipientLeavesLiveTokenAlone(t *testing
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 
 	manager := &Manager{config: mockStore, email: mockEmail, dashboardURL: "https://dashboard.example.com"}
-	assert.False(t, manager.sendPlanNotification(ctx, plan))
+	assert.False(t, manager.sendPlanNotification(ctx, plan, false))
 	assert.Equal(t, config.HashApprovalToken("previously-emailed-token"), existing.ApprovalToken)
 	mockStore.AssertExpectations(t)
 	mockEmail.AssertExpectations(t)
@@ -779,7 +781,7 @@ func TestManager_SendPlanNotification_SendFailureLeavesLiveTokenAlone(t *testing
 	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.AnythingOfType("email.NotificationData")).Return(errors.New("ses down"))
 
 	manager := &Manager{config: mockStore, email: mockEmail, dashboardURL: "https://dashboard.example.com"}
-	assert.False(t, manager.sendPlanNotification(ctx, plan))
+	assert.False(t, manager.sendPlanNotification(ctx, plan, false))
 	mockStore.AssertNotCalled(t, "RotatePendingApprovalToken", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertNotCalled(t, "StampPlanNotificationSent", mock.Anything, mock.Anything, mock.Anything)
 	mockStore.AssertExpectations(t)
@@ -812,7 +814,7 @@ func TestManager_SendPlanNotification_PersistsEmailedTokenHashAfterSend(t *testi
 	mockStore.On("StampPlanNotificationSent", ctx, plan.ID, mock.AnythingOfType("time.Time")).Return(nil)
 
 	manager := &Manager{config: mockStore, email: mockEmail, dashboardURL: "https://dashboard.example.com"}
-	assert.True(t, manager.sendPlanNotification(ctx, plan))
+	assert.True(t, manager.sendPlanNotification(ctx, plan, false))
 	require.NotEmpty(t, emailedToken)
 	assert.Equal(t, config.HashApprovalToken(emailedToken), persistedHash)
 	assert.NotEqual(t, emailedToken, persistedHash)
@@ -831,7 +833,7 @@ func TestManager_SendPlanNotification_StampFailure(t *testing.T) {
 	store.On("RotatePendingApprovalToken", ctx, "exec-rot", mock.Anything, mock.Anything).Return(true, nil)
 	store.On("StampPlanNotificationSent", ctx, plan.ID, mock.Anything).Return(errors.New("stamp failed"))
 	manager := &Manager{config: store, email: sender}
-	require.False(t, manager.sendPlanNotification(ctx, plan))
+	require.False(t, manager.sendPlanNotification(ctx, plan, false))
 	require.Nil(t, plan.LastNotificationSent)
 	store.AssertExpectations(t)
 	sender.AssertExpectations(t)

@@ -1,6 +1,8 @@
 # AWS Fargate Compute Module
 # ECS Fargate with Application Load Balancer
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name_prefix = "${var.stack_name}-fargate"
 
@@ -933,6 +935,10 @@ resource "aws_iam_role" "eventbridge" {
           Service = "events.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnEquals    = { "aws:SourceArn" = aws_cloudwatch_event_rule.recommendations[0].arn }
+        }
       }
     ]
   })
@@ -1044,6 +1050,10 @@ resource "aws_iam_role" "eventbridge_ri_exchange" {
           Service = "events.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnEquals    = { "aws:SourceArn" = aws_cloudwatch_event_rule.ri_exchange[0].arn }
+        }
       }
     ]
   })
@@ -1160,6 +1170,10 @@ resource "aws_iam_role" "eventbridge_ladder_run" {
           Service = "events.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnEquals    = { "aws:SourceArn" = aws_cloudwatch_event_rule.ladder_run[0].arn }
+        }
       }
     ]
   })
@@ -1270,6 +1284,10 @@ resource "aws_iam_role" "eventbridge_fire_scheduled_purchases" {
           Service = "events.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnEquals    = { "aws:SourceArn" = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].arn }
+        }
       }
     ]
   })

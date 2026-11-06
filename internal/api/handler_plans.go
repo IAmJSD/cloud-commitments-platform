@@ -353,6 +353,11 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 // same lock). before is the snapshot plan was built from; if the row moved on,
 // the write fails its optimistic check instead.
 func (h *Handler) updatePlanGated(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, session *Session, before, plan *config.PurchasePlan, op string) error {
+	if planArmed(plan) && enablesEntry(before, plan) {
+		if err := refuseUnboundBinding(plan); err != nil {
+			return err
+		}
+	}
 	if !planArmEscalates(before, plan) {
 		return h.mapPlanUpdateError(h.config.UpdatePurchasePlan(ctx, plan), op)
 	}
@@ -901,6 +906,23 @@ type PatchPlanRequest struct {
 	NotificationDaysBefore *int    `json:"notification_days_before,omitempty"`
 }
 
+// patchDeescalates reports whether a PATCH only stops the plan: it disables or
+// disarms it and turns nothing on. Such a write skips the bound-group checks
+// (ValidateDeescalation), so a plan can always be stopped; a PATCH that also
+// enables or arms the plan runs every check.
+func patchDeescalates(req PatchPlanRequest) bool {
+	off := func(b *bool) bool { return b != nil && !*b }
+	on := func(b *bool) bool { return b != nil && *b }
+	return (off(req.Enabled) || off(req.AutoPurchase)) && !on(req.Enabled) && !on(req.AutoPurchase)
+}
+
+func validatePatchedPlan(plan *config.PurchasePlan, req PatchPlanRequest) error {
+	if patchDeescalates(req) {
+		return plan.ValidateDeescalation()
+	}
+	return plan.Validate()
+}
+
 // applyPatchFields applies validated partial-update fields to a plan.
 func applyPatchFields(plan *config.PurchasePlan, req PatchPlanRequest) error {
 	if req.Name != nil {
@@ -968,7 +990,7 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, err
 	}
 
-	if err := plan.Validate(); err != nil {
+	if err := validatePatchedPlan(plan, req); err != nil {
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
 

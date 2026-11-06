@@ -133,3 +133,58 @@ func TestOverrideAudit_AfterIsTheStoredRow(t *testing.T) {
 	assert.Equal(t, 33.33, after["coverage"])
 	assert.Equal(t, 33.33, *o.Coverage, "the caller's override is updated to the stored row")
 }
+
+// TestOverrideAtomic_MergeErrorAbortsUnchanged: an error from merge rolls the
+// transaction back (no row, no event) and reaches the caller as the same
+// value, so a ClientError such as the combo 400 is not rewrapped.
+func TestOverrideAtomic_MergeErrorAbortsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	f := newOverrideAuditStoreFixture(ctx, t)
+	sentinel := errors.New("combo refused")
+
+	got, err := f.store.UpdateAccountServiceOverrideAtomic(ctx, f.account, "aws", "rds", AuditContext{},
+		func(existing *AccountServiceOverride) (*AccountServiceOverride, error) {
+			assert.Nil(t, existing)
+			return nil, sentinel
+		})
+	require.Nil(t, got)
+	require.Same(t, sentinel, err, "merge error must be returned unchanged")
+	stored, gerr := f.store.GetAccountServiceOverride(ctx, f.account, "aws", "rds")
+	require.NoError(t, gerr)
+	assert.Nil(t, stored)
+}
+
+// TestOverrideAtomic_QueuesBehindCompetingWriter: the merge sees the row a
+// concurrent writer committed, not the one that existed when the call began.
+func TestOverrideAtomic_QueuesBehindCompetingWriter(t *testing.T) {
+	ctx := context.Background()
+	f := newOverrideAuditStoreFixture(ctx, t)
+	require.NoError(t, saveAccountServiceOverride(ctx, f.store.db, &AccountServiceOverride{AccountID: f.account, Provider: "aws", Service: "rds", Term: intPtrAudit(1)}))
+
+	writer := f.hold(ctx, t)
+	_, err := writer.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+		accountServiceOverrideLockPrefix+f.account+"/aws/rds")
+	require.NoError(t, err)
+	_, err = writer.Exec(ctx, `UPDATE account_service_overrides SET term = 3 WHERE account_id = $1`, f.account)
+	require.NoError(t, err)
+
+	var seen *int
+	done := make(chan error, 1)
+	go func() {
+		_, e := f.store.UpdateAccountServiceOverrideAtomic(ctx, f.account, "aws", "rds", AuditContext{Actor: AuditActor{Identity: "admin@example.com"}},
+			func(existing *AccountServiceOverride) (*AccountServiceOverride, error) {
+				seen = existing.Term
+				next := *existing
+				next.Coverage = floatPtrAudit(50)
+				return &next, nil
+			})
+		done <- e
+	}()
+	testhelpers.WaitForLockWait(ctx, t, f.store.db, "")
+	require.NoError(t, writer.Commit(ctx))
+	require.NoError(t, testhelpers.Await(t, done))
+	require.NotNil(t, seen)
+	assert.Equal(t, 3, *seen, "merge must read the committed row")
+}
+
+func floatPtrAudit(v float64) *float64 { return &v }

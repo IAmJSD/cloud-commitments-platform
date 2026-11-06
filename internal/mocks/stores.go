@@ -640,6 +640,21 @@ func (m *MockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Conte
 	return v, args.Error(1)
 }
 
+// ScheduleApprovedExecution mocks the atomic delayed-approval schedule. It has
+// no default: a test of the delayed-approve path must register it.
+func (m *MockConfigStore) ScheduleApprovedExecution(ctx context.Context, executionID string, fromStatuses []string, transitionedBy *string, rawToken string, scheduledAt time.Time, approvedBy *string) (*config.PurchaseExecution, error) {
+	m.record("ScheduleApprovedExecution", ctx, executionID, fromStatuses, transitionedBy, rawToken, scheduledAt, approvedBy)
+	args := m.Called(ctx, executionID, fromStatuses, transitionedBy, rawToken, scheduledAt, approvedBy)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		m.reporter.wrongReturnType("ScheduleApprovedExecution", "*config.PurchaseExecution", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 // RescheduleAwaitingExecution mocks the conditional scheduled_date update.
 func (m *MockConfigStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
 	args := m.Called(ctx, executionID, scheduledDate)
@@ -1789,6 +1804,40 @@ func (m *MockConfigStore) SaveAccountServiceOverrideAuditedTx(ctx context.Contex
 	}
 	args := m.Called(ctx, tx, override, audit)
 	return args.Error(0)
+}
+
+// UpdateAccountServiceOverrideAtomic mocks the locked read-merge-write of one
+// override. With an expectation it dispatches through m.Called; otherwise it
+// emulates the store via the mocked WithTx, GetAccountServiceOverride, merge
+// and SaveAccountServiceOverrideAuditedTx, so tests that seed those keep working.
+func (m *MockConfigStore) UpdateAccountServiceOverrideAtomic(ctx context.Context, accountID, provider, service string, audit config.AuditContext, merge func(*config.AccountServiceOverride) (*config.AccountServiceOverride, error)) (*config.AccountServiceOverride, error) {
+	m.record("UpdateAccountServiceOverrideAtomic", ctx, accountID, provider, service, audit, merge)
+	if isExpected(&m.Mock, "UpdateAccountServiceOverrideAtomic") {
+		args := m.Called(ctx, accountID, provider, service, audit, merge)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		v, ok := args.Get(0).(*config.AccountServiceOverride)
+		if !ok {
+			m.reporter.wrongReturnType("UpdateAccountServiceOverrideAtomic", "*config.AccountServiceOverride", args.Get(0))
+		}
+		return v, args.Error(1)
+	}
+	var next *config.AccountServiceOverride
+	err := m.WithTx(ctx, func(tx pgx.Tx) error {
+		existing, err := m.GetAccountServiceOverride(ctx, accountID, provider, service)
+		if err != nil {
+			return err
+		}
+		if next, err = merge(existing); err != nil {
+			return err
+		}
+		return m.SaveAccountServiceOverrideAuditedTx(ctx, tx, next, audit)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return next, nil
 }
 
 // DeleteAccountServiceOverrideAuditedTx falls back to

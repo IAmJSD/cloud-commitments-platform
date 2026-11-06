@@ -154,3 +154,46 @@ run "invoker_roles_are_scoped" {
     error_message = "eventbridge_sweeps: iam:PassRole must be one statement on the task and task-execution roles, conditioned on StringEquals iam:PassedToService = ecs-tasks.amazonaws.com."
   }
 }
+
+# Trust policies: events.amazonaws.com may assume each invoker role only for
+# this account and only on behalf of that role's own rule, so another account's
+# rule (or another rule in this account) cannot borrow the role.
+run "invoker_roles_trust_is_scoped_to_account_and_rule" {
+  command = apply
+
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role.eventbridge[0].assume_role_policy).Statement :
+      [s.Condition.StringEquals["aws:SourceAccount"], s.Condition.ArnEquals["aws:SourceArn"]]
+    ] == [[data.aws_caller_identity.current.account_id, aws_cloudwatch_event_rule.recommendations[0].arn]]
+    error_message = "eventbridge: the trust policy must be conditioned on aws:SourceAccount = this account and aws:SourceArn = the recommendations rule."
+  }
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role.eventbridge_ri_exchange[0].assume_role_policy).Statement :
+      [s.Condition.StringEquals["aws:SourceAccount"], s.Condition.ArnEquals["aws:SourceArn"]]
+    ] == [[data.aws_caller_identity.current.account_id, aws_cloudwatch_event_rule.ri_exchange[0].arn]]
+    error_message = "eventbridge_ri_exchange: the trust policy must be conditioned on aws:SourceAccount = this account and aws:SourceArn = the ri_exchange rule."
+  }
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role.eventbridge_ladder_run[0].assume_role_policy).Statement :
+      [s.Condition.StringEquals["aws:SourceAccount"], s.Condition.ArnEquals["aws:SourceArn"]]
+    ] == [[data.aws_caller_identity.current.account_id, aws_cloudwatch_event_rule.ladder_run[0].arn]]
+    error_message = "eventbridge_ladder_run: the trust policy must be conditioned on aws:SourceAccount = this account and aws:SourceArn = the ladder_run rule."
+  }
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role.eventbridge_fire_scheduled_purchases[0].assume_role_policy).Statement :
+      [s.Condition.StringEquals["aws:SourceAccount"], s.Condition.ArnEquals["aws:SourceArn"]]
+    ] == [[data.aws_caller_identity.current.account_id, aws_cloudwatch_event_rule.fire_scheduled_purchases[0].arn]]
+    error_message = "eventbridge_fire_scheduled_purchases: the trust policy must be conditioned on aws:SourceAccount = this account and aws:SourceArn = the fire_scheduled_purchases rule."
+  }
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role.eventbridge_sweeps[0].assume_role_policy).Statement :
+      [s.Condition.StringEquals["aws:SourceAccount"], toset(s.Condition.ArnEquals["aws:SourceArn"])]
+    ] == [[data.aws_caller_identity.current.account_id, toset([for rule in aws_cloudwatch_event_rule.sweep : rule.arn])]]
+    error_message = "eventbridge_sweeps: the trust policy must be conditioned on aws:SourceAccount = this account and aws:SourceArn = every sweep rule."
+  }
+}

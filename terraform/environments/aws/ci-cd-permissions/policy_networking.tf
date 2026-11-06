@@ -33,6 +33,15 @@ resource "aws_iam_policy" "networking" {
           "ec2:CreateLaunchTemplateVersion",
           "ec2:DeleteLaunchTemplateVersions",
           "ec2:ModifyLaunchTemplate",
+          # The persistent fck-nat ENI the private routes target (#716):
+          # CreateNetworkInterface to create it, ModifyNetworkInterfaceAttribute
+          # because the provider turns source_dest_check off in a second call
+          # after the create, and DetachNetworkInterface because destroying or
+          # replacing it detaches it from the NAT instance first.
+          # DeleteNetworkInterface and DescribeNetworkInterfaces are below.
+          "ec2:CreateNetworkInterface",
+          "ec2:ModifyNetworkInterfaceAttribute",
+          "ec2:DetachNetworkInterface",
           "ec2:CreateRoute",
           "ec2:CreateRouteTable",
           "ec2:CreateSecurityGroup",
@@ -104,7 +113,7 @@ resource "aws_iam_policy" "networking" {
       },
       {
         # ec2:RunInstances is needed for the fck-nat AutoScaling group
-        # (one t4g.nano per AZ). Restricting allowed instance types prevents
+        # (one t4g.nano NAT instance in total). Restricting allowed instance types prevents
         # the deploy SA from launching arbitrary large instances and attaching
         # CUDly IAM roles to exfiltrate credentials or run compute at account
         # cost.
@@ -154,6 +163,7 @@ resource "aws_iam_policy" "networking" {
           "acm:DescribeCertificate",
           "acm:GetCertificate",
           "acm:ListTagsForCertificate",
+          "acm:RemoveTagsFromCertificate",
           "acm:RequestCertificate",
         ]
         Resource = "*"
@@ -163,6 +173,7 @@ resource "aws_iam_policy" "networking" {
         Effect = "Allow"
         Action = [
           "route53:ChangeResourceRecordSets",
+          "route53:CreateHostedZone",
           "route53:GetChange",
           "route53:GetHostedZone",
           "route53:ListHostedZones",
@@ -170,6 +181,19 @@ resource "aws_iam_policy" "networking" {
           "route53:ListTagsForResource",
         ]
         Resource = "*"
+      },
+      {
+        # create_subdomain_zone (environments/aws/route53.tf). The hostedzone
+        # id is opaque and the SAR defines no condition keys for it, so it can
+        # be scoped by neither name nor tag. The role already changes records
+        # on "*" above, a stronger capability than deleting an (empty) zone.
+        Sid    = "Route53HostedZoneLifecycle"
+        Effect = "Allow"
+        Action = [
+          "route53:ChangeTagsForResource",
+          "route53:DeleteHostedZone",
+        ]
+        Resource = "arn:aws:route53:::hostedzone/*"
       },
     ]
   })

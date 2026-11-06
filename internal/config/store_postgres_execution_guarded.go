@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -14,6 +15,36 @@ import (
 // two live purchases for one logical step, so the caller must fail loud and
 // flag a possible double buy instead of recovering.
 var ErrExecutionRetryLinked = errors.New("execution already has a retry successor")
+
+// ScheduleApprovedExecution implements StoreInterface. The CAS row lock holds
+// until commit, so the guarded save cannot lose; it stays as a fail-loud check.
+func (s *PostgresStore) ScheduleApprovedExecution(ctx context.Context, executionID string, fromStatuses []string, transitionedBy *string, rawToken string, scheduledAt time.Time, approvedBy *string) (*PurchaseExecution, error) {
+	var tokenHash *string
+	if rawToken != "" {
+		h := HashApprovalToken(rawToken)
+		tokenHash = &h
+	}
+	var updated *PurchaseExecution
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		rec, err := s.transitionExecutionStatus(ctx, tx, executionID, fromStatuses, "scheduled", transitionedBy, nil, tokenHash)
+		if err != nil {
+			return err
+		}
+		rec.ScheduledExecutionAt = &scheduledAt
+		if approvedBy != nil {
+			rec.ApprovedBy = approvedBy
+		}
+		if err := s.SaveExecutionIfStatusTx(ctx, tx, rec, []string{"scheduled"}); err != nil {
+			return err
+		}
+		updated = rec
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
 
 // lockExecutionRow takes a row lock on the execution and returns its current
 // status and whether a retry successor is linked. The lock is held until the
