@@ -780,6 +780,9 @@ type StoreInterface interface {
 	// TransitionRegistrationStatus atomically updates a registration's workflow fields.
 	// actor is the UUID of the reviewer (nil for system-initiated transitions).
 	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error
+	// ClearRegistrationCredentialPayload removes the encrypted credential kept
+	// with a registration. A missing id is not an error.
+	ClearRegistrationCredentialPayload(ctx context.Context, registrationID string) error
 	// ApproveAccountRegistration atomically approves a pending registration,
 	// creates its cloud account and links them. Returns ErrRegistrationConflict
 	// when the registration is no longer pending; on any error nothing is saved.

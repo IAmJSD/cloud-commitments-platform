@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 )
 
 const regCredRegID = "6f1c2a8e-3b4d-4e5f-8a9b-0c1d2e3f4a5b"
@@ -166,6 +167,7 @@ func approveWithCredential(t *testing.T, credType, payload, approvalBody string)
 	store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("TransitionRegistrationStatus", mock.Anything, mock.Anything, "pending", mock.Anything).Return(nil).Maybe()
 	store.On("UpdateAccountRegistration", mock.Anything, mock.Anything).Return(nil).Maybe()
+	store.On("ClearRegistrationCredentialPayload", mock.Anything, mock.Anything).Return(nil).Maybe()
 	// The router enforces the approve permission; called directly with no
 	// bearer token, approveRegistration resolves no session, so the auth mock
 	// carries no expectations (an unexpected auth call would panic).
@@ -226,4 +228,42 @@ func TestApproveRegistration_RefusesInvalidStoredCredential(t *testing.T) {
 			assert.Empty(t, creds.saved)
 		})
 	}
+}
+
+// failingCredStore fails every SaveCredential call.
+type failingCredStore struct{ MockCredentialStore }
+
+func (failingCredStore) SaveCredential(context.Context, string, string, []byte) error {
+	return assert.AnError
+}
+
+func approveWithCredStore(t *testing.T, creds credentials.CredentialStore, payload string) *MockConfigStore {
+	t.Helper()
+	store := new(MockConfigStore)
+	store.On("GetAccountRegistration", mock.Anything, regCredRegID).Return(&config.AccountRegistration{
+		ID: regCredRegID, Status: "pending", Provider: "gcp", ExternalID: "test-project",
+		RegCredentialType: "gcp_workload_identity_config", RegCredentialPayload: payload,
+	}, nil)
+	store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	store.On("ClearRegistrationCredentialPayload", mock.Anything, regCredRegID).Return(nil).Maybe()
+	h := &Handler{auth: new(MockAuthService), config: store, credStore: creds}
+	_, err := h.approveRegistration(context.Background(), &events.LambdaFunctionURLRequest{Body: gcpApprovalBody}, regCredRegID)
+	require.NoError(t, err)
+	return store
+}
+
+func TestApproveRegistration_ClearsPayloadAfterSave(t *testing.T) {
+	store := approveWithCredStore(t, &recordingCredStore{}, mustJSON(t, gcloudWIFConfig()))
+	store.AssertNumberOfCalls(t, "ClearRegistrationCredentialPayload", 1)
+	store.AssertCalled(t, "ClearRegistrationCredentialPayload", mock.Anything, regCredRegID)
+}
+
+func TestApproveRegistration_KeepsPayloadWhenSaveFails(t *testing.T) {
+	store := approveWithCredStore(t, &failingCredStore{}, mustJSON(t, gcloudWIFConfig()))
+	store.AssertNotCalled(t, "ClearRegistrationCredentialPayload", mock.Anything, mock.Anything)
+}
+
+func TestApproveRegistration_KeepsPayloadWhenNothingSaved(t *testing.T) {
+	store := approveWithCredStore(t, &recordingCredStore{}, "")
+	store.AssertNotCalled(t, "ClearRegistrationCredentialPayload", mock.Anything, mock.Anything)
 }

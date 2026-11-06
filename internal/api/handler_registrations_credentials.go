@@ -91,12 +91,14 @@ func (h *Handler) registrationCredential(reg *config.AccountRegistration, provid
 // storeRegistrationCredentials saves a registration credential that
 // registrationCredential has checked into the account_credentials table.
 // The account already exists at this point, so a store error is logged, not
-// returned.
-func (h *Handler) storeRegistrationCredentials(ctx context.Context, reg *config.AccountRegistration, accountID string, payload []byte) {
+// returned. It reports whether the credential was saved.
+func (h *Handler) storeRegistrationCredentials(ctx context.Context, reg *config.AccountRegistration, accountID string, payload []byte) bool {
 	if payload == nil || h.credStore == nil {
-		return
+		return false
 	}
 	if err := h.credStore.SaveCredential(ctx, accountID, reg.RegCredentialType, payload); err != nil {
-		logging.Warnf("registration %s: failed to store credential: %v", reg.ID, err)
+		logging.Errorf("registration %s: failed to store credential: %v", reg.ID, err)
+		return false
 	}
+	return true
 }

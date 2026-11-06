@@ -219,6 +219,7 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 			reviewed_by      = $5,
 			reviewed_at      = $6,
 			updated_at       = $7,
+			reg_credential_payload = CASE WHEN $10 THEN NULL ELSE reg_credential_payload END,
 			transitioned_by  = $9,
 			transitioned_at  = NOW()
 		WHERE id = $1 AND status = $8
@@ -239,12 +240,24 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 		reg.UpdatedAt,
 		fromStatus,
 		actor,
+		reg.Status == "rejected",
 	)
 	if err != nil {
 		return fmt.Errorf("failed to transition account registration status: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrRegistrationConflict
+	}
+	return nil
+}
+
+// ClearRegistrationCredentialPayload removes the encrypted credential kept with
+// a registration once it has been saved elsewhere. A missing id affects no rows
+// and is not an error.
+func (s *PostgresStore) ClearRegistrationCredentialPayload(ctx context.Context, registrationID string) error {
+	_, err := s.db.Exec(ctx, `UPDATE account_registrations SET reg_credential_payload = NULL WHERE id = $1`, registrationID)
+	if err != nil {
+		return fmt.Errorf("failed to clear registration credential payload: %w", err)
 	}
 	return nil
 }
